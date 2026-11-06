@@ -37,8 +37,6 @@ body,
 /* --- панели --------------------------------------------------------------- */
 
 .panel {
-  position: absolute;
-  z-index: 10;
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
@@ -48,21 +46,47 @@ body,
   padding: 16px 18px;
 }
 
-.info-panel {
+/* Левая колонка: информация о районе + участок. */
+.sidebar {
+  position: absolute;
+  z-index: 10;
   top: 16px;
   left: 16px;
   width: 320px;
   max-width: calc(100vw - 32px);
+  max-height: calc(100% - 56px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .building-card {
+  position: absolute;
+  z-index: 10;
   top: 16px;
   right: 16px;
   width: 300px;
   max-width: calc(100vw - 32px);
 }
 
+.building-card h2 {
+  padding-right: 24px;
+}
+
+/* Невысокие экраны: прячем второстепенное, чтобы панель участка была видна. */
+@media (max-height: 760px) {
+  .info-panel .hint,
+  .info-panel .footnote {
+    display: none;
+  }
+}
+
 @media (max-width: 720px) {
+  .sidebar {
+    max-height: 45%;
+  }
+
   .building-card {
     top: auto;
     bottom: 40px;
@@ -99,7 +123,6 @@ h2 {
 }
 
 h2 {
-  padding-right: 24px;
   font-size: 16px;
 }
 
@@ -189,6 +212,50 @@ p {
 .button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1d1400;
+  font-weight: 600;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #ffb94a;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.button-row .button {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
+}
+
+/* --- участок ---------------------------------------------------------------- */
+
+.stats-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.plot-status {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.plot-issues {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.plot-issues li + li {
+  margin-top: 2px;
 }
 
 .close {

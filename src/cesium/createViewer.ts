@@ -6,6 +6,7 @@ import {
   ImageryLayer,
   Math as CesiumMath,
   OpenStreetMapImageryProvider,
+  ScreenSpaceEventType,
   Viewer,
   type TerrainProvider,
 } from 'cesium';
@@ -39,6 +40,10 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
   });
 
   viewer.scene.globe.depthTestAgainstTerrain = true;
+  // Стандартные действия Viewer (выбор сущности, «слежение» по двойному клику)
+  // конфликтуют с нашими инструментами — клики обрабатываем сами.
+  viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
+  viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
   viewer.creditDisplay.addStaticCredit(new Credit('Здания: © участники OpenStreetMap, ODbL'));
 
   return viewer;

@@ -1,13 +1,15 @@
 import { ScreenSpaceEventHandler, ScreenSpaceEventType, type Viewer } from 'cesium';
 import { useEffect, useRef } from 'react';
+import { PlotDrawingTool } from '../cesium/PlotDrawingTool';
 import { createViewer, flyToTerritory } from '../cesium/createViewer';
 import { createTerrain } from '../cesium/terrain';
 import { territory } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
 import { BaseBuildingsLayer } from '../world/base/BaseBuildingsLayer';
 import { computeStats, loadBaseBuildings } from '../world/base/loadBaseBuildings';
+import { analyzePlot } from '../world/user/plot';
 
-/** 3D-сцена: создаёт Cesium Viewer, загружает Base World и обрабатывает клики. */
+/** 3D-сцена: создаёт Cesium Viewer, загружает Base World, связывает инструменты со стором. */
 export function CityViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -19,6 +21,7 @@ export function CityViewer() {
     let disposed = false;
     let viewer: Viewer | undefined;
     let layer: BaseBuildingsLayer | undefined;
+    let plotTool: PlotDrawingTool | undefined;
     let clickHandler: ScreenSpaceEventHandler | undefined;
     let unsubscribe: (() => void) | undefined;
 
@@ -49,11 +52,45 @@ export function CityViewer() {
       l.renderUntilReady();
       store.setStats(computeStats(collection));
 
-      // Клик → выбор здания в сторе; подсветка следует за стором (в т.ч. при закрытии карточки).
+      // Участок: инструмент рисует, проверка идёт против Base World, результат — в стор.
+      const tool = new PlotDrawingTool(v, {
+        onChange: (points) => store.setPlotDraft(points),
+        onFinish: (points) => {
+          const plot = analyzePlot(points, collection.features, territory.bbox);
+          l.setConflicts(plot.conflictingBuildingIds);
+          tool.showResult(plot.valid);
+          store.plotFinished(plot);
+        },
+        onCancel: () => store.plotDrawingCancelled(),
+      });
+      plotTool = tool;
+      store.setPlotControls({
+        start: () => {
+          l.setConflicts([]);
+          tool.start();
+          store.plotDrawingStarted();
+        },
+        finish: () => tool.finish(),
+        undo: () => tool.undo(),
+        cancel: () => tool.cancel(),
+        clear: () => {
+          tool.reset();
+          l.setConflicts([]);
+          store.plotCleared();
+        },
+      });
+
+      // Левый клик: во время рисования ставит вершину, иначе выбирает здание.
       clickHandler = new ScreenSpaceEventHandler(v.scene.canvas);
       clickHandler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-        useAppStore.getState().selectBuilding(l.buildingFromPick(v.scene.pick(event.position)));
+        if (tool.isDrawing) {
+          tool.handleClick(event.position);
+          return;
+        }
+        store.selectBuilding(l.buildingFromPick(v.scene.pick(event.position)));
       }, ScreenSpaceEventType.LEFT_CLICK);
+
+      // Подсветка следует за стором (в т.ч. при закрытии карточки).
       unsubscribe = useAppStore.subscribe((state, prev) => {
         if (state.selectedBuilding !== prev.selectedBuilding) l.select(state.selectedBuilding?.id);
       });
@@ -71,10 +108,14 @@ export function CityViewer() {
       disposed = true;
       unsubscribe?.();
       clickHandler?.destroy();
+      plotTool?.destroy();
       // Viewer уничтожает и добавленные в сцену примитивы (слой зданий).
       if (viewer && !viewer.isDestroyed()) viewer.destroy();
       else layer?.destroy();
       store.setFlyHome(undefined);
+      store.setPlotControls(undefined);
+      store.plotDrawingCancelled();
+      store.plotCleared();
       store.selectBuilding(undefined);
     };
   }, []);

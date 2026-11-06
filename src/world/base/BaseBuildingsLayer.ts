@@ -21,11 +21,14 @@ export const BUILDING_COLORS = {
   /** Высота — оценка по типу здания. */
   estimated: '#a8b8cc',
   selected: '#f5a524',
+  /** Здание пересекается с участком пользователя. */
+  conflict: '#ff6b6b',
 } as const;
 
 const known = Color.fromCssColorString(BUILDING_COLORS.known);
 const estimated = Color.fromCssColorString(BUILDING_COLORS.estimated);
 const selected = Color.fromCssColorString(BUILDING_COLORS.selected);
+const conflict = Color.fromCssColorString(BUILDING_COLORS.conflict);
 
 /**
  * Слой зданий Base World: все здания территории одним Primitive
@@ -36,6 +39,7 @@ export class BaseBuildingsLayer {
   private readonly buildings = new Map<string, BaseBuildingProperties>();
   private readonly instanceIds = new Map<string, string[]>();
   private selectedId: string | undefined;
+  private conflicts = new Set<string>();
 
   private constructor(
     private readonly scene: Scene,
@@ -108,9 +112,19 @@ export class BaseBuildingsLayer {
 
   select(buildingId: string | undefined): void {
     if (buildingId === this.selectedId) return;
-    if (this.selectedId) this.paint(this.selectedId, undefined);
+    const previous = this.selectedId;
     this.selectedId = buildingId && this.buildings.has(buildingId) ? buildingId : undefined;
-    if (this.selectedId) this.paint(this.selectedId, selected);
+    if (previous) this.paint(previous);
+    if (this.selectedId) this.paint(this.selectedId);
+    this.scene.requestRender();
+  }
+
+  /** Подсвечивает здания, которые задевает участок пользователя. */
+  setConflicts(buildingIds: readonly string[]): void {
+    const previous = this.conflicts;
+    this.conflicts = new Set(buildingIds);
+    for (const id of previous) this.paint(id);
+    for (const id of this.conflicts) this.paint(id);
     this.scene.requestRender();
   }
 
@@ -118,10 +132,17 @@ export class BaseBuildingsLayer {
     if (!this.primitive.isDestroyed()) this.primitive.destroy();
   }
 
-  private paint(buildingId: string, color: Color | undefined): void {
+  /** Приоритет цвета: выбранное → конфликт с участком → цвет по источнику высоты. */
+  private colorOf(buildingId: string, props: BaseBuildingProperties): Color {
+    if (buildingId === this.selectedId) return selected;
+    if (this.conflicts.has(buildingId)) return conflict;
+    return baseColor(props);
+  }
+
+  private paint(buildingId: string): void {
     const props = this.buildings.get(buildingId);
     if (!props || !this.primitive.ready) return;
-    const value = color ?? baseColor(props);
+    const value = this.colorOf(buildingId, props);
     for (const instanceId of this.instanceIds.get(buildingId) ?? []) {
       const attributes = this.primitive.getGeometryInstanceAttributes(instanceId);
       attributes.color = ColorGeometryInstanceAttribute.toValue(value, attributes.color);
