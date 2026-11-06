@@ -1,8 +1,17 @@
-import { Color, ScreenSpaceEventHandler, ScreenSpaceEventType, type Viewer } from 'cesium';
+import { Math as CesiumMath, Color, ScreenSpaceEventHandler, ScreenSpaceEventType, type Viewer } from 'cesium';
 import { useEffect, useRef } from 'react';
+import { Soundscape } from '../audio/Soundscape';
+import { SoundZones } from '../audio/soundZones';
 import { PlotDrawingTool } from '../cesium/PlotDrawingTool';
 import { WalkController } from '../cesium/WalkController';
-import { createViewer, flyToArea, flyToTerritory, territoryCenter } from '../cesium/createViewer';
+import {
+  createViewer,
+  flyToArea,
+  flyToTerritory,
+  setGraphicsQuality,
+  setIntroView,
+  territoryCenter,
+} from '../cesium/createViewer';
 import { pickGround, toLonLat } from '../cesium/pick';
 import { createTerrain } from '../cesium/terrain';
 import { territory } from '../config/territory';
@@ -50,7 +59,9 @@ export function CityViewer() {
       viewer = v;
       // Только в dev: доступ к сцене из консоли браузера для отладки.
       if (import.meta.env.DEV) (window as unknown as { __citiaViewer?: Viewer }).__citiaViewer = v;
-      flyToTerritory(v, territory, 0);
+      // Пока грузятся данные — вид издалека; когда всё готово, камера плавно прилетит к району.
+      setIntroView(v, territory);
+      setGraphicsQuality(v, useAppStore.getState().graphicsQuality);
       store.setFlyHome(() => flyToTerritory(v, territory));
 
       const [collection, environment] = await Promise.all([
@@ -147,6 +158,20 @@ export function CityViewer() {
         },
       });
 
+      // Звук: музыка и звуки города по месту, где сейчас камера или пешеход.
+      const soundscape = new Soundscape(new SoundZones(environment.ground, frame), () => {
+        if (v.isDestroyed()) return undefined;
+        const c = v.camera.positionCartographic;
+        const ground = terrain.kind === 'flat' ? 0 : (v.scene.globe.getHeight(c) ?? 0);
+        return {
+          point: frame.toLocal([CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)]),
+          altitude: c.height - ground,
+        };
+      });
+      soundscape.setEnabled(useAppStore.getState().soundOn);
+      owned.push(soundscape);
+      if (import.meta.env.DEV) (window as unknown as { __citiaSound?: Soundscape }).__citiaSound = soundscape;
+
       // Прогулка: столкновения со зданиями, памятниками и постройками пользователя, названия улиц.
       const collider = new Collider(obstacles, frame);
       const walk = new WalkController(
@@ -158,6 +183,7 @@ export function CityViewer() {
         {
           onExit: () => store.setMode('explore'),
           onStreet: (street) => store.setWalkStreet(street),
+          onMove: (distance, running, position) => soundscape.walked(distance, running, position),
         },
       );
       owned.push(walk);
@@ -215,10 +241,14 @@ export function CityViewer() {
           const sidebarShare = sidebar ? (sidebar.getBoundingClientRect().right + 16) / v.canvas.clientWidth : 0;
           flyToArea(v, state.plot.polygon, state.builder.result.building?.totalHeight ?? 30, Math.min(sidebarShare, 0.6));
         }
+        if (state.soundOn !== prev.soundOn) soundscape.setEnabled(state.soundOn);
+        if (state.graphicsQuality !== prev.graphicsQuality) setGraphicsQuality(v, state.graphicsQuality);
       });
       buildings.setColorMode(useAppStore.getState().buildingColorMode);
 
       store.setStatus('ready');
+      // Всё загружено — плавный пролёт к району.
+      flyToTerritory(v, territory, 3.2);
     }
 
     init().catch((error: unknown) => {

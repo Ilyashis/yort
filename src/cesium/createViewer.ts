@@ -8,14 +8,21 @@ import {
   JulianDate,
   Math as CesiumMath,
   OpenStreetMapImageryProvider,
+  PostProcessStageLibrary,
   ScreenSpaceEventType,
+  SunLight,
   Viewer,
   type TerrainProvider,
 } from 'cesium';
 import type { Territory } from '../config/territory';
 
-/** Время для положения солнца (UTC). */
-const SUN_TIME = '2026-07-15T10:30:00Z';
+/** Время для положения солнца (UTC): 17:30 по Уфе — мягкий предвечерний свет и длинные тени. */
+const SUN_TIME = '2026-07-15T12:30:00Z';
+/** Чуть тёплый оттенок солнечного света. */
+const SUN_COLOR = '#fff1dc';
+
+/** high — со сглаживанием и мягкими тенями в углах (ambient occlusion), normal — только сглаживание. */
+export type GraphicsQuality = 'high' | 'normal';
 
 export function territoryCenter(territory: Territory): Cartesian3 {
   const { south, west, north, east } = territory.bbox;
@@ -60,13 +67,16 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
   const { scene } = viewer;
   scene.globe.depthTestAgainstTerrain = true;
 
-  // Солнце: летний день, около 15:30 по Уфе — фасады освещены с юго-запада, тени длинные.
+  // Солнце: летний вечер, фасады освещены с запада тёплым светом, тени длинные.
   viewer.clock.currentTime = JulianDate.fromIso8601(SUN_TIME);
   viewer.clock.shouldAnimate = false;
+  scene.light = new SunLight({ color: Color.fromCssColorString(SUN_COLOR), intensity: 2.0 });
   scene.globe.enableLighting = true;
   configureShadows(viewer);
 
   scene.backgroundColor = Color.fromCssColorString('#bcd3e6');
+  // Сглаживание краёв («лесенки» у стен и столбов) — дёшево, включено всегда.
+  scene.postProcessStages.fxaa.enabled = true;
 
   // Стандартные действия Viewer (выбор сущности, «слежение» по двойному клику)
   // конфликтуют с нашими инструментами — клики обрабатываем сами.
@@ -104,6 +114,33 @@ function configureShadows(viewer: Viewer): void {
 // Подобрано на виде с 250–300 м: меньшие значения дают рябь на крышах, тени на земле при этом сохраняются.
 const SHADOW_NORMAL_OFFSET = 2.5;
 const SHADOW_DEPTH_BIAS = 0.001;
+
+/**
+ * Мягкие тени в углах (ambient occlusion): между домами, у стен, под деревьями.
+ * Заметно добавляет «уюта», но нагружает видеокарту — поэтому отдельный переключатель.
+ */
+export function setGraphicsQuality(viewer: Viewer, quality: GraphicsQuality): void {
+  const ao = viewer.scene.postProcessStages.ambientOcclusion;
+  const supported = PostProcessStageLibrary.isAmbientOcclusionSupported(viewer.scene);
+  ao.enabled = supported && quality === 'high';
+  if (ao.enabled) {
+    ao.uniforms.intensity = 2.2;
+    ao.uniforms.bias = 0.12;
+    ao.uniforms.lengthCap = 0.3;
+    ao.uniforms.stepSize = 1.6;
+    ao.uniforms.blurStepSize = 1.0;
+  }
+  viewer.scene.requestRender();
+}
+
+/** Стартовый вид издалека — потом камера плавно прилетает к району. */
+export function setIntroView(viewer: Viewer, territory: Territory): void {
+  const { south, west, east } = territory.bbox;
+  viewer.camera.setView({
+    destination: Cartesian3.fromDegrees((west + east) / 2 - 0.06, south - 0.11, 9000),
+    orientation: { heading: CesiumMath.toRadians(25), pitch: CesiumMath.toRadians(-38), roll: 0 },
+  });
+}
 
 /**
  * Наклонный вид на участок с запасом по высоте под будущее здание.

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import type { GraphicsQuality } from '../cesium/createViewer';
 import type { TerrainKind } from '../cesium/terrain';
+import { readPref, writePref } from '../utils/prefs';
 import type { BuildingColorMode } from '../world/base/BaseBuildingsLayer';
 import type { BaseBuildingProperties, BaseBuildingsStats } from '../world/base/types';
 import type { UserBuilding } from '../world/user/UserBuildingsLayer';
@@ -66,6 +68,10 @@ interface AppState {
   builder?: BuilderState;
   /** Размещённые здания пользователя (User World, пока — в памяти вкладки). */
   userBuildings: UserBuilding[];
+  /** Музыка и звуки города (запоминается в браузере). */
+  soundOn: boolean;
+  /** Качество графики (запоминается в браузере). */
+  graphicsQuality: GraphicsQuality;
 
   /** Регистрирует сцена; UI вызывает, чтобы вернуть камеру к территории. */
   flyHome?: () => void;
@@ -82,6 +88,8 @@ interface AppState {
   setWalkControls: (controls: WalkControls | undefined) => void;
   setMode: (mode: InteractionMode) => void;
   setWalkStreet: (street: string | undefined) => void;
+  setSoundOn: (on: boolean) => void;
+  setGraphicsQuality: (quality: GraphicsQuality) => void;
 
   plotDrawingStarted: () => void;
   setPlotDraft: (points: LonLat[]) => void;
@@ -104,6 +112,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   mode: 'explore',
   plotDraft: [],
   userBuildings: [],
+  soundOn: readPref('sound', ['on', 'off'], 'on') === 'on',
+  graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
 
   setStatus: (status, error) => set({ status, error }),
   setTerrain: (terrain) => set({ terrain }),
@@ -115,6 +125,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setWalkControls: (walkControls) => set({ walkControls }),
   setMode: (mode) => set({ mode }),
   setWalkStreet: (walkStreet) => set({ walkStreet }),
+  setSoundOn: (soundOn) => {
+    writePref('sound', soundOn ? 'on' : 'off');
+    set({ soundOn });
+  },
+  setGraphicsQuality: (graphicsQuality) => {
+    writePref('graphics', graphicsQuality);
+    set({ graphicsQuality });
+  },
 
   plotDrawingStarted: () =>
     set({ mode: 'draw-plot', plotDraft: [], plot: undefined, selectedBuilding: undefined, builder: undefined }),

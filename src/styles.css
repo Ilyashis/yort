@@ -490,6 +490,138 @@ kbd {
   text-align: center;
 }
 
+/* --- появление и анимации ------------------------------------------------------ */
+
+.intro-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, #1c2431 0%, #0b0e13 75%);
+  transition: opacity 1.4s ease 0.3s, visibility 0s linear 1.7s;
+}
+
+.intro-veil-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.intro-veil-hidden .intro-title {
+  animation: none;
+}
+
+.intro-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+.intro-title span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.panel {
+  animation: panel-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.sidebar .panel:nth-child(2) {
+  animation-delay: 0.06s;
+}
+
+.sidebar .panel:nth-child(3) {
+  animation-delay: 0.12s;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.button,
+.segmented button,
+.swatches button,
+.round-button {
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.button:active:not(:disabled),
+.round-button:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .intro-title {
+    animation: none;
+  }
+
+  .intro-veil {
+    transition: none;
+  }
+}
+
+/* --- звук и качество графики --------------------------------------------------- */
+
+.corner-controls {
+  position: absolute;
+  z-index: 15;
+  right: 16px;
+  bottom: 36px;
+  display: flex;
+  gap: 8px;
+}
+
+.round-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--panel-border);
+  border-radius: 50%;
+  background: var(--panel-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.round-button:hover {
+  color: var(--text);
+}
+
+.round-button.on {
+  color: var(--accent);
+  border-color: rgba(245, 165, 36, 0.45);
+}
+
 /* Подписи источников данных Cesium — компактнее и не под панелями. */
 .cesium-viewer-bottom {
   font-size: 11px;

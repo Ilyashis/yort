@@ -85,7 +85,10 @@ export class GroundLayer {
           ? new Primitive({
               geometryInstances,
               // Не flat: приёмнику теней Cesium нужны v_positionEC и v_normalEC в шейдере.
-              appearance: new PerInstanceColorAppearance({ flat: false, translucent: false }),
+              // closed: true — иначе Cesium включает FACE_FORWARD, который сверяет нормаль с осью
+              // экрана, а не с направлением взгляда: стоило пешеходу чуть поднять глаза, нормаль
+              // земли переворачивалась вниз и асфальт терял солнечный свет (темнел вдвое).
+              appearance: new PerInstanceColorAppearance({ flat: false, translucent: false, closed: true }),
               shadows: ShadowMode.RECEIVE_ONLY,
               allowPicking: false,
             })

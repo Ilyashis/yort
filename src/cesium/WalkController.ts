@@ -39,6 +39,8 @@ export interface WalkCallbacks {
   onExit: () => void;
   /** Сменилась улица под ногами. */
   onStreet: (name: string | undefined) => void;
+  /** Пешеход сдвинулся на distance метров (для шагов). */
+  onMove?: (distance: number, running: boolean, position: Vec2) => void;
 }
 
 interface SavedView {
@@ -205,7 +207,10 @@ export class WalkController {
       const f = forward / length;
       const r = right / length;
       const delta: Vec2 = [(f * sin + r * cos) * distance, (f * cos - r * sin) * distance];
+      const before = this.position;
       this.position = this.collider.move(this.position, delta);
+      const moved = Math.hypot(this.position[0] - before[0], this.position[1] - before[1]);
+      if (moved > 0) this.callbacks.onMove?.(moved, run, this.position);
     }
 
     const [lon, lat] = this.frame.toLonLat(this.position);
