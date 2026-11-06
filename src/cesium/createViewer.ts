@@ -51,9 +51,7 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
     maximumRenderTimeChange: Number.POSITIVE_INFINITY,
     // Только 3D: проще шейдеры и меньше данных на GPU.
     scene3DOnly: true,
-    // Тени пока выключены: на плоских слоях земли они не видны, а на крышах дают
-    // артефакты (shadow acne). Примитивы уже размечены ShadowMode — включим после настройки.
-    shadows: false,
+    shadows: true,
     // Небо без звёзд и диска луны: на уровне улицы они выглядят странно.
     // Освещение и тени от солнца при этом остаются (scene.light).
     skyBox: false,
@@ -62,10 +60,11 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
   const { scene } = viewer;
   scene.globe.depthTestAgainstTerrain = true;
 
-  // Солнце: летний день, около 15:30 по Уфе — фасады освещены с юго-запада.
+  // Солнце: летний день, около 15:30 по Уфе — фасады освещены с юго-запада, тени длинные.
   viewer.clock.currentTime = JulianDate.fromIso8601(SUN_TIME);
   viewer.clock.shouldAnimate = false;
   scene.globe.enableLighting = true;
+  configureShadows(viewer);
 
   scene.backgroundColor = Color.fromCssColorString('#bcd3e6');
 
@@ -77,6 +76,33 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
 
   return viewer;
 }
+
+interface ShadowBias {
+  normalOffsetScale: number;
+  depthBias: number;
+}
+
+/**
+ * Тени от солнца. Смещения по умолчанию у Cesium рассчитаны на 3D Tiles и дают
+ * «рябь» (shadow acne) на плоских крышах наших зданий; публичного API для смещений нет,
+ * поэтому аккуратно правим внутреннее поле, если оно есть.
+ */
+function configureShadows(viewer: Viewer): void {
+  const shadowMap = viewer.shadowMap;
+  shadowMap.softShadows = true;
+  shadowMap.darkness = 0.4;
+  shadowMap.size = 2048;
+  shadowMap.maximumDistance = 1200;
+
+  const bias = (shadowMap as unknown as { _primitiveBias?: ShadowBias })._primitiveBias;
+  if (bias) {
+    bias.normalOffsetScale = SHADOW_NORMAL_OFFSET;
+    bias.depthBias = SHADOW_DEPTH_BIAS;
+  }
+}
+
+const SHADOW_NORMAL_OFFSET = 0.6;
+const SHADOW_DEPTH_BIAS = 0.0002;
 
 /** Наклонный вид на территорию с юго-запада. */
 export function flyToTerritory(viewer: Viewer, territory: Territory, duration = 1.5): void {

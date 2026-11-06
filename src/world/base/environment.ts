@@ -1,4 +1,5 @@
 import { territoryDataUrl, type Territory } from '../../config/territory';
+import { EMPTY_STREETS, type StreetsData } from './streetFurniture';
 import type { Ring } from './types';
 
 /** Тип поверхности земли (порядок отрисовки задаёт GroundLayer). */
@@ -10,7 +11,9 @@ export type GroundKind =
   | 'paving'
   | 'sidewalk'
   | 'road'
-  | 'footway';
+  | 'footway'
+  /** Разметка и зебры — генерируются в браузере из осей дорог. */
+  | 'marking';
 
 export interface GroundFeature {
   type: 'Feature';
@@ -31,6 +34,7 @@ export type TreePoint = [number, number, number];
 export interface Environment {
   ground: GroundFeature[];
   trees: TreePoint[];
+  streets: StreetsData;
 }
 
 /**
@@ -38,14 +42,19 @@ export interface Environment {
  * возвращает пустое окружение: город откроется без дорог и деревьев.
  */
 export async function loadEnvironment(territory: Territory): Promise<Environment> {
-  const [ground, trees] = await Promise.all([
+  const [ground, trees, streets] = await Promise.all([
     fetchOptional<GroundCollection>(territoryDataUrl(territory, 'ground.geojson')),
     fetchOptional<{ trees: TreePoint[] }>(territoryDataUrl(territory, 'trees.json')),
+    fetchOptional<StreetsData>(territoryDataUrl(territory, 'streets.json')),
   ]);
-  if (!ground || !trees) {
-    console.warn('[environment] нет ground.geojson / trees.json — выполните npm run data:fetch:environment');
+  if (!ground || !trees || !streets) {
+    console.warn('[environment] нет части файлов окружения — выполните npm run data:fetch:environment');
   }
-  return { ground: ground?.features ?? [], trees: trees?.trees ?? [] };
+  return {
+    ground: ground?.features ?? [],
+    trees: trees?.trees ?? [],
+    streets: { ...EMPTY_STREETS, ...streets },
+  };
 }
 
 async function fetchOptional<T>(url: string): Promise<T | undefined> {

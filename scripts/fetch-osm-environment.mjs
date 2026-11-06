@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 // Base World, окружение: дороги и тротуары (линии OSM → полосы нужной ширины),
-// газоны, площади, парковки, вода и деревья. Результат:
+// газоны, площади, парковки, вода, деревья и уличные объекты. Результат:
 //   public/data/territories/<id>/ground.geojson — поверхности земли с типом (kind)
 //   public/data/territories/<id>/trees.json     — точки деревьев
+//   public/data/territories/<id>/streets.json   — оси дорог, переходы, дорожки, фонари, скамейки
 //
 //   npm run data:fetch:environment
 
-import { along, buffer, length as lineLength, lineString } from '@turf/turf';
+import {
+  along,
+  bbox,
+  bboxPolygon,
+  buffer,
+  featureCollection,
+  intersect,
+  length as lineLength,
+  lineString,
+} from '@turf/turf';
 import {
   baseMetadata,
   fetchOverpass,
@@ -44,35 +54,65 @@ const GREEN_LEISURE = new Set(['park', 'garden']);
 const GREEN_LANDUSE = new Set(['grass', 'recreation_ground', 'village_green', 'meadow', 'flowerbed', 'forest']);
 const GREEN_NATURAL = new Set(['wood', 'scrub', 'grassland']);
 
+/**
+ * Большие объекты (река Белая, лесные массивы) тянутся далеко за район —
+ * обрезаем их по границе с запасом, чтобы файл оставался маленьким.
+ */
+const CLIP_MARGIN_DEG = 0.002;
+const { south, west, north, east } = territory.bbox;
+const clipBox = [west - CLIP_MARGIN_DEG, south - CLIP_MARGIN_DEG, east + CLIP_MARGIN_DEG, north + CLIP_MARGIN_DEG];
+const insideClipBox = ([lon, lat]) => lon >= clipBox[0] && lon <= clipBox[2] && lat >= clipBox[1] && lat <= clipBox[3];
+
 /** Тип поверхности для площадного объекта (не дороги). */
 function areaKind(tags) {
   if (tags.natural === 'water') return 'water';
   if (tags.leisure === 'pitch') return 'pitch';
   if (tags.amenity === 'parking') return 'parking';
-  if (tags.place === 'square' || tags.leisure === 'playground') return 'paving';
+  if (tags.place === 'square' || tags.leisure === 'playground' || tags.man_made === 'pier') return 'paving';
   if (GREEN_LEISURE.has(tags.leisure) || GREEN_LANDUSE.has(tags.landuse) || GREEN_NATURAL.has(tags.natural)) {
     return 'green';
   }
   return undefined;
 }
 
-function bufferLine(coordinates, width) {
-  const result = buffer(lineString(coordinates), width / 2, { units: 'meters', steps: 4 });
-  return result ? roundGeometry(result.geometry) : undefined;
+const clipPolygon = bboxPolygon(clipBox);
+
+/**
+ * Обрезка по границе района честным пересечением полигонов. bboxClip (Сазерленд — Ходжмен)
+ * здесь не годится: у огромных вогнутых полигонов (река Белая на сотни км) внешние петли
+ * «проецируются» на края и углы рамки, и на суше появляются лишние куски воды.
+ */
+function clip(geometry) {
+  if (!geometry) return undefined;
+  const feature = { type: 'Feature', properties: {}, geometry };
+  const [minX, minY, maxX, maxY] = bbox(feature);
+  const insideBox = minX >= clipBox[0] && minY >= clipBox[1] && maxX <= clipBox[2] && maxY <= clipBox[3];
+  if (insideBox) return roundGeometry(geometry);
+  const clipped = intersect(featureCollection([feature, clipPolygon]));
+  return clipped ? roundGeometry(clipped.geometry) : undefined;
 }
 
-const query = `[out:json][timeout:150];
+function bufferLine(coordinates, width) {
+  const result = buffer(lineString(coordinates), width / 2, { units: 'meters', steps: 4 });
+  return result ? clip(result.geometry) : undefined;
+}
+
+const query = `[out:json][timeout:180];
 (
   way["highway"](${overpassBbox});
   way["area:highway"](${overpassBbox});
   way["leisure"~"^(park|garden|pitch|playground)$"](${overpassBbox});
   relation["leisure"~"^(park|garden)$"]["type"="multipolygon"](${overpassBbox});
   way["landuse"~"^(grass|recreation_ground|village_green|meadow|flowerbed|forest)$"](${overpassBbox});
+  relation["landuse"~"^(grass|forest|recreation_ground)$"]["type"="multipolygon"](${overpassBbox});
   way["natural"~"^(wood|scrub|grassland|water|tree_row)$"](${overpassBbox});
-  relation["natural"="water"]["type"="multipolygon"](${overpassBbox});
+  relation["natural"~"^(water|wood|scrub)$"]["type"="multipolygon"](${overpassBbox});
   way["amenity"="parking"](${overpassBbox});
   way["place"="square"](${overpassBbox});
+  way["man_made"="pier"](${overpassBbox});
   node["natural"="tree"](${overpassBbox});
+  node["highway"="street_lamp"](${overpassBbox});
+  node["amenity"="bench"](${overpassBbox});
 );
 out geom;`;
 
@@ -81,6 +121,7 @@ const { json, url } = await fetchOverpass(query);
 
 const features = [];
 const trees = [];
+const streets = { roads: [], paths: [], crossings: [], lamps: [], benches: [] };
 const add = (kind, geometry, name) => {
   if (!geometry) return;
   const properties = { kind };
@@ -92,7 +133,10 @@ for (const el of json.elements) {
   const tags = el.tags ?? {};
 
   if (el.type === 'node') {
-    if (tags.natural === 'tree') trees.push([...roundCoord([el.lon, el.lat]), round1(parseMeters(tags.height) ?? 0)]);
+    const point = roundCoord([el.lon, el.lat]);
+    if (tags.natural === 'tree') trees.push([...point, round1(parseMeters(tags.height) ?? 0)]);
+    else if (tags.highway === 'street_lamp') streets.lamps.push(point);
+    else if (tags.amenity === 'bench') streets.benches.push(point);
     continue;
   }
 
@@ -112,13 +156,13 @@ for (const el of json.elements) {
   // Дорожные площади (area:highway=* или highway=* + area=yes).
   const areaHighway = tags['area:highway'] ?? (tags.area === 'yes' ? tags.highway : undefined);
   if (areaHighway && el.type === 'way') {
-    add(ROAD_WIDTH[areaHighway] ? 'road' : 'paving', wayToPolygon(el), tags.name);
+    add(ROAD_WIDTH[areaHighway] ? 'road' : 'paving', clip(wayToPolygon(el)), tags.name);
     continue;
   }
 
   if (tags.highway && el.type === 'way') {
     const line = wayToLine(el);
-    if (!line) continue;
+    if (!line || !line.coordinates.some(insideClipBox)) continue;
     const explicitWidth = parseMeters(tags.width);
     const lanes = parseCount(tags.lanes);
 
@@ -129,9 +173,23 @@ for (const el of json.elements) {
         add('sidewalk', bufferLine(line.coordinates, width + 2 * SIDEWALK_WIDTH));
       }
       add('road', bufferLine(line.coordinates, width), tags.name);
+      const road = { highway: tags.highway, width: round1(width), coords: line.coordinates };
+      if (tags.name) road.name = tags.name;
+      if (tags.oneway === 'yes') road.oneway = true;
+      if (lanes) road.lanes = lanes;
+      streets.roads.push(road);
     } else if (PATH_WIDTH[tags.highway]) {
+      const width = explicitWidth ?? PATH_WIDTH[tags.highway];
+      if (tags.footway === 'crossing' || tags.cycleway === 'crossing') {
+        // Переход лежит на проезжей части — рисуем его зеброй, а не полосой дорожки.
+        streets.crossings.push(line.coordinates);
+        continue;
+      }
       const kind = tags.highway === 'pedestrian' ? 'paving' : 'footway';
-      add(kind, bufferLine(line.coordinates, explicitWidth ?? PATH_WIDTH[tags.highway]), tags.name);
+      add(kind, bufferLine(line.coordinates, width), tags.name);
+      if (tags.highway !== 'steps') {
+        streets.paths.push({ highway: tags.highway, width: round1(width), coords: line.coordinates });
+      }
     }
     continue;
   }
@@ -140,17 +198,22 @@ for (const el of json.elements) {
   if (!kind) continue;
   const geometry =
     el.type === 'way' ? wayToPolygon(el) : el.type === 'relation' ? relationToGeometry(el) : undefined;
-  add(kind, geometry, tags.name);
+  add(kind, clip(geometry), tags.name);
 }
 
 const metadata = baseMetadata(json, url);
 const groundFile = writeTerritoryFile('ground.geojson', { type: 'FeatureCollection', metadata, features });
 const treesFile = writeTerritoryFile('trees.json', { metadata, trees });
+const streetsFile = writeTerritoryFile('streets.json', { metadata, ...streets });
 
 const byKind = {};
 for (const f of features) byKind[f.properties.kind] = (byKind[f.properties.kind] ?? 0) + 1;
 console.log(`\n✓ Поверхностей: ${features.length}`);
 for (const [kind, count] of Object.entries(byKind)) console.log(`  ${kind.padEnd(9)} ${count}`);
 console.log(`✓ Деревьев: ${trees.length}`);
+console.log(
+  `✓ Улицы: осей дорог ${streets.roads.length}, дорожек ${streets.paths.length}, переходов ${streets.crossings.length}, ` +
+    `фонарей ${streets.lamps.length}, скамеек ${streets.benches.length}`,
+);
 console.log(`  данные OSM на: ${json.osm3s?.timestamp_osm_base ?? '—'}`);
-console.log(`  → ${groundFile}\n  → ${treesFile}`);
+console.log(`  → ${groundFile}\n  → ${treesFile}\n  → ${streetsFile}`);

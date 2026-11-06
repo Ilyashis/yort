@@ -7,15 +7,20 @@ import { pickGround, toLonLat } from '../cesium/pick';
 import { createTerrain } from '../cesium/terrain';
 import { territory } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
+import { LANDMARKS } from '../config/landmarks';
 import { BaseBuildingsLayer } from '../world/base/BaseBuildingsLayer';
 import { BARE_GROUND_COLOR, GroundLayer } from '../world/base/GroundLayer';
+import { LandmarksLayer, landmarkClearance, landmarkObstacle } from '../world/base/LandmarksLayer';
+import { StreetFurnitureLayer } from '../world/base/StreetFurnitureLayer';
+import { findStreetFrontBuildings } from '../world/base/facades';
+import { orientBenches, placeLamps, roadMarkings } from '../world/base/streetFurniture';
 import { TreesLayer } from '../world/base/TreesLayer';
-import { loadEnvironment } from '../world/base/environment';
+import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
 import { computeStats, loadBaseBuildings } from '../world/base/loadBaseBuildings';
 import { scatterTrees } from '../world/base/vegetation';
 import { analyzePlot } from '../world/user/plot';
 import { Collider } from '../world/walk/collider';
-import { createLocalFrame } from '../world/walk/localFrame';
+import { createLocalFrame, toLocalPolygon } from '../world/walk/localFrame';
 import { StreetIndex } from '../world/walk/streets';
 
 /** 3D-сцена: создаёт Cesium Viewer, загружает Base World, связывает инструменты со стором. */
@@ -53,31 +58,57 @@ export function CityViewer() {
       ]);
       if (disposed) return;
 
-      // Поверхности земли — первыми: они рисуются без записи глубины, порядок важен.
-      // Добавленные в сцену примитивы уничтожит сам Viewer.
-      GroundLayer.create(environment.ground, terrain.kind).addTo(v.scene);
-
+      // Локальные метры вокруг центра района: прогулка, витрины, фонари, разметка.
+      const { south, west, north, east } = territory.bbox;
+      const frame = createLocalFrame([(west + east) / 2, (south + north) / 2]);
       const buildingFootprints = collection.features.flatMap((f) =>
         f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates,
       );
+      const localBuildings = buildingFootprints.map((rings) => toLocalPolygon(rings, frame));
+      const roadSurfaces = environment.ground
+        .filter((f) => f.properties.kind === 'road')
+        .flatMap(polygonsOfGround)
+        .map((rings) => toLocalPolygon(rings, frame));
+
+      // Поверхности земли (с разметкой). Добавленные в сцену примитивы уничтожит сам Viewer.
+      const markings = roadMarkings(environment.streets, frame, roadSurfaces);
+      GroundLayer.create([...environment.ground, ...markings], terrain.kind).addTo(v.scene);
+
+      const landmarks = LANDMARKS.filter(
+        ({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north,
+      );
       const allTrees = [
         ...environment.trees,
-        ...scatterTrees(environment.ground, environment.trees, buildingFootprints),
+        ...scatterTrees(environment.ground, environment.trees, [
+          ...buildingFootprints,
+          ...landmarks.map((l) => landmarkClearance(l)),
+        ]),
       ];
+      const lamps = placeLamps(environment.streets, frame, roadSurfaces, localBuildings);
+      const benches = orientBenches(environment.streets, frame);
+      const streetFront = findStreetFrontBuildings(collection.features, environment.ground, frame);
 
-      const [buildings, trees] = await Promise.all([
-        BaseBuildingsLayer.create(v.scene, collection, terrain.provider, territoryCenter(territory)),
+      const [buildings, trees, furniture, monuments] = await Promise.all([
+        BaseBuildingsLayer.create(v.scene, collection, terrain.provider, territoryCenter(territory), streetFront),
         TreesLayer.create(allTrees, terrain.provider),
+        StreetFurnitureLayer.create(lamps, benches, terrain.provider),
+        LandmarksLayer.create(landmarks, terrain.provider),
       ]);
       if (disposed) {
         buildings.destroy();
         trees.destroy();
+        furniture.destroy();
+        monuments.destroy();
         return;
       }
       v.scene.primitives.add(trees.primitive);
+      v.scene.primitives.add(furniture.primitive);
       v.scene.primitives.add(buildings.primitive);
+      monuments.addTo(v.scene);
       buildings.renderUntilReady();
       store.setStats(computeStats(collection));
+      // Пьедесталы памятников мешают проходу и стройке так же, как здания.
+      const obstacles = [...collection.features, ...landmarks.map(landmarkObstacle)];
 
       // Участок: инструмент рисует, проверка идёт против Base World, результат — в стор.
       const plotTool = new PlotDrawingTool(
@@ -85,7 +116,7 @@ export function CityViewer() {
         {
           onChange: (points) => store.setPlotDraft(points),
           onFinish: (points) => {
-            const plot = analyzePlot(points, collection.features, territory.bbox);
+            const plot = analyzePlot(points, obstacles, territory.bbox);
             buildings.setConflicts(plot.conflictingBuildingIds);
             plotTool.showResult(plot.valid);
             store.plotFinished(plot);
@@ -111,13 +142,11 @@ export function CityViewer() {
         },
       });
 
-      // Прогулка: столкновения со зданиями и названия улиц — в локальных метрах.
-      const { south, west, north, east } = territory.bbox;
-      const frame = createLocalFrame([(west + east) / 2, (south + north) / 2]);
+      // Прогулка: столкновения со зданиями и памятниками, названия улиц.
       const walk = new WalkController(
         v,
         frame,
-        new Collider(collection.features, frame),
+        new Collider(obstacles, frame),
         new StreetIndex(environment.ground, frame),
         Color.fromCssColorString(BARE_GROUND_COLOR),
         {

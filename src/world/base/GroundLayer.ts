@@ -3,7 +3,6 @@ import {
   ClassificationType,
   Color,
   ColorGeometryInstanceAttribute,
-  DepthFunction,
   GeometryInstance,
   GroundPrimitive,
   PerInstanceColorAppearance,
@@ -18,7 +17,7 @@ import { polygonsOfGround, type GroundFeature, type GroundKind } from './environ
 import type { Ring } from './types';
 
 /** Порядок снизу вверх: дороги лежат поверх газонов, дорожки — поверх всего. */
-const ORDER: GroundKind[] = ['green', 'pitch', 'water', 'parking', 'paving', 'sidewalk', 'road', 'footway'];
+const ORDER: GroundKind[] = ['green', 'pitch', 'water', 'parking', 'paving', 'sidewalk', 'road', 'footway', 'marking'];
 
 export const GROUND_COLORS: Record<GroundKind, string> = {
   green: '#8cb06a',
@@ -27,19 +26,25 @@ export const GROUND_COLORS: Record<GroundKind, string> = {
   parking: '#8d9095',
   paving: '#cfc8ba',
   sidewalk: '#bfb8aa',
-  road: '#5f6268',
+  road: '#6e7177',
   footway: '#d6ccb8',
+  marking: '#ecebe4',
 };
 
 /** Цвет «пустой» земли (дворы, пустыри) — в режиме прогулки вместо карты. */
 export const BARE_GROUND_COLOR = '#c9c2b0';
 
-/** На плоском рельефе поверхности лежат чуть выше эллипсоида, чтобы не мерцать. */
-const FLAT_HEIGHT = 0.08;
+/**
+ * На плоском рельефе каждый слой лежит на своей высоте: газон ниже тротуара,
+ * тротуар ниже дороги, разметка выше всех. Порядок отрисовки у Cesium не гарантирован,
+ * поэтому слои разводим по высоте (2 см — на глаз незаметно, для буфера глубины достаточно).
+ */
+const FLAT_BASE_HEIGHT = 0.06;
+const FLAT_LAYER_STEP = 0.02;
 
 /**
- * Поверхности земли Base World. На плоском рельефе — обычные примитивы на одной высоте
- * без записи глубины (порядок отрисовки = порядок слоёв) и с приёмом теней.
+ * Поверхности земли Base World. На плоском рельефе — обычные примитивы,
+ * разнесённые по высоте, с освещением и приёмом теней.
  * С рельефом — GroundPrimitive, прижатые к земле.
  */
 export class GroundLayer {
@@ -54,17 +59,22 @@ export class GroundLayer {
     }
 
     const primitives: (Primitive | GroundPrimitive)[] = [];
-    for (const kind of ORDER) {
+    ORDER.forEach((kind, layer) => {
       const polygons = byKind.get(kind);
-      if (!polygons?.length) continue;
+      if (!polygons?.length) return;
       const color = ColorGeometryInstanceAttribute.fromColor(Color.fromCssColorString(GROUND_COLORS[kind]));
+      const height = FLAT_BASE_HEIGHT + layer * FLAT_LAYER_STEP;
       const geometryInstances = polygons.map(
         (rings) =>
           new GeometryInstance({
             geometry: new PolygonGeometry({
               polygonHierarchy: toHierarchy(rings),
-              height: terrain === 'flat' ? FLAT_HEIGHT : undefined,
-              vertexFormat: PerInstanceColorAppearance.FLAT_VERTEX_FORMAT,
+              height: terrain === 'flat' ? height : undefined,
+              // Нормали нужны, чтобы земля освещалась солнцем и принимала тени.
+              vertexFormat:
+                terrain === 'flat'
+                  ? PerInstanceColorAppearance.VERTEX_FORMAT
+                  : PerInstanceColorAppearance.FLAT_VERTEX_FORMAT,
             }),
             attributes: { color },
           }),
@@ -74,14 +84,8 @@ export class GroundLayer {
         terrain === 'flat'
           ? new Primitive({
               geometryInstances,
-              appearance: new PerInstanceColorAppearance({
-                flat: true,
-                translucent: false,
-                renderState: {
-                  depthTest: { enabled: true, func: DepthFunction.LESS_OR_EQUAL },
-                  depthMask: false,
-                },
-              }),
+              // Не flat: приёмнику теней Cesium нужны v_positionEC и v_normalEC в шейдере.
+              appearance: new PerInstanceColorAppearance({ flat: false, translucent: false }),
               shadows: ShadowMode.RECEIVE_ONLY,
               allowPicking: false,
             })
@@ -91,7 +95,7 @@ export class GroundLayer {
               allowPicking: false,
             }),
       );
-    }
+    });
     return new GroundLayer(primitives);
   }
 

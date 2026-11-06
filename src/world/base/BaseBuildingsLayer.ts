@@ -16,6 +16,7 @@ import {
 import { createBuildingAppearance } from '../../cesium/buildingAppearance';
 import { sampleMinHeights } from '../../cesium/terrainHeights';
 import { hashString } from '../../utils/hash';
+import { facadeStyle } from './facades';
 import type { BaseBuildingFeature, BaseBuildingProperties, BaseBuildingsCollection, Ring } from './types';
 
 /** city — правдоподобные фасады; data — раскраска по источнику высоты (качество данных). */
@@ -68,6 +69,7 @@ export class BaseBuildingsLayer {
     collection: BaseBuildingsCollection,
     groundHeights: number[],
     center: Cartesian3,
+    streetFront: ReadonlySet<string>,
   ) {
     const instances: GeometryInstance[] = [];
 
@@ -79,6 +81,12 @@ export class BaseBuildingsLayer {
         componentDatatype: ComponentDatatype.FLOAT,
         componentsPerAttribute: 4,
         value: [ground, props.minHeight, props.height, floorHeight(props)],
+      });
+      const style = facadeStyle(props, streetFront.has(props.id));
+      const facadeStyleAttribute = new GeometryInstanceAttribute({
+        componentDatatype: ComponentDatatype.FLOAT,
+        componentsPerAttribute: 4,
+        value: [style.shopfront ? 1 : 0, style.variant, style.seed, 0],
       });
 
       polygonsOf(feature).forEach((rings, index) => {
@@ -96,6 +104,7 @@ export class BaseBuildingsLayer {
             attributes: {
               color: ColorGeometryInstanceAttribute.fromColor(this.colorOf(props.id, props)),
               facade,
+              facadeStyle: facadeStyleAttribute,
             },
           }),
         );
@@ -118,10 +127,12 @@ export class BaseBuildingsLayer {
     collection: BaseBuildingsCollection,
     terrainProvider: TerrainProvider,
     center: Cartesian3,
+    /** Здания вдоль улиц — с витринами на первом этаже. */
+    streetFront: ReadonlySet<string> = new Set(),
   ): Promise<BaseBuildingsLayer> {
     const outlines = collection.features.map((f) => polygonsOf(f).flatMap(([outer]) => outer ?? []));
     const groundHeights = await sampleMinHeights(outlines, terrainProvider);
-    return new BaseBuildingsLayer(scene, collection, groundHeights, center);
+    return new BaseBuildingsLayer(scene, collection, groundHeights, center, streetFront);
   }
 
   /**
