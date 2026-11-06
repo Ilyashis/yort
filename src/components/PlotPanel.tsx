@@ -9,6 +9,7 @@ export function PlotPanel() {
   const draft = useAppStore((s) => s.plotDraft);
   const plot = useAppStore((s) => s.plot);
   const controls = useAppStore((s) => s.plotControls);
+  const builtCount = useAppStore((s) => s.userBuildings.length);
 
   const ready = status === 'ready' && !!controls && mode === 'explore';
 
@@ -95,6 +96,17 @@ export function PlotPanel() {
           </ul>
         )}
 
+        {plot.valid && (
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => useAppStore.getState().startBuilder()}
+            disabled={!ready}
+          >
+            Построить здание
+          </button>
+        )}
+
         <div className="button-row">
           <button type="button" className="button" onClick={() => controls?.start()} disabled={!ready}>
             Перерисовать
@@ -114,6 +126,11 @@ export function PlotPanel() {
         Нарисуйте на карте участок под будущее здание: от {PLOT_LIMITS.minAreaM2} м² до{' '}
         {formatArea(PLOT_LIMITS.maxAreaM2)}, без пересечений с существующими зданиями.
       </p>
+      {builtCount > 0 && (
+        <p className="built-note">
+          Построено ваших зданий: <b>{builtCount}</b> — к ним можно подойти на прогулке.
+        </p>
+      )}
       <button
         type="button"
         className="button button-primary"

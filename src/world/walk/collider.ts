@@ -22,20 +22,27 @@ const DEFAULTS: ColliderOptions = { radius: 0.35, walkUnderHeight: 2.2, maxStep:
 /** Столкновения пешехода со зданиями Base World (в плоскости, по контурам). */
 export class Collider {
   private readonly obstacles: LocalPolygon[];
+  /** Препятствия, которые меняются во время работы (здания пользователя). */
+  private extra: LocalPolygon[] = [];
   private readonly options: ColliderOptions;
 
-  constructor(buildings: readonly BaseBuildingFeature[], frame: LocalFrame, options: Partial<ColliderOptions> = {}) {
+  constructor(
+    buildings: readonly BaseBuildingFeature[],
+    private readonly frame: LocalFrame,
+    options: Partial<ColliderOptions> = {},
+  ) {
     this.options = { ...DEFAULTS, ...options };
-    this.obstacles = buildings
-      .filter((b) => b.properties.minHeight < this.options.walkUnderHeight)
-      .flatMap((b) => (b.geometry.type === 'Polygon' ? [b.geometry.coordinates] : b.geometry.coordinates))
-      .map((rings) => toLocalPolygon(rings, frame));
+    this.obstacles = this.toObstacles(buildings);
+  }
+
+  setExtraObstacles(buildings: readonly BaseBuildingFeature[]): void {
+    this.extra = this.toObstacles(buildings);
   }
 
   isBlocked(point: Vec2): boolean {
     const [x, y] = point;
     const r = this.options.radius;
-    for (const o of this.obstacles) {
+    for (const o of [...this.obstacles, ...this.extra]) {
       if (x < o.minX - r || x > o.maxX + r || y < o.minY - r || y > o.maxY + r) continue;
       if (insidePolygon(point, o)) return true;
       if (o.rings.some((ring) => distanceToRing(point, ring) < r)) return true;
@@ -54,6 +61,13 @@ export class Collider {
     let position = from;
     for (let i = 0; i < steps; i++) position = this.step(position, step);
     return position;
+  }
+
+  private toObstacles(buildings: readonly BaseBuildingFeature[]): LocalPolygon[] {
+    return buildings
+      .filter((b) => b.properties.minHeight < this.options.walkUnderHeight)
+      .flatMap((b) => (b.geometry.type === 'Polygon' ? [b.geometry.coordinates] : b.geometry.coordinates))
+      .map((rings) => toLocalPolygon(rings, this.frame));
   }
 
   private step([x, y]: Vec2, [dx, dy]: Vec2): Vec2 {

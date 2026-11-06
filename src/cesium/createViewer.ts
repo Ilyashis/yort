@@ -101,8 +101,36 @@ function configureShadows(viewer: Viewer): void {
   }
 }
 
-const SHADOW_NORMAL_OFFSET = 0.6;
-const SHADOW_DEPTH_BIAS = 0.0002;
+// Подобрано на виде с 250–300 м: меньшие значения дают рябь на крышах, тени на земле при этом сохраняются.
+const SHADOW_NORMAL_OFFSET = 2.5;
+const SHADOW_DEPTH_BIAS = 0.001;
+
+/**
+ * Наклонный вид на участок с запасом по высоте под будущее здание.
+ * sidebarShare — доля ширины экрана, закрытая панелью слева: участок сдвигаем в свободную часть.
+ */
+export function flyToArea(
+  viewer: Viewer,
+  points: readonly [number, number][],
+  expectedHeight = 30,
+  sidebarShare = 0,
+): void {
+  if (!points.length) return;
+  const sphere = BoundingSphere.fromPoints(points.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat)));
+  const radius = Math.max(sphere.radius, 25) + expectedHeight;
+  const range = radius * 2.6;
+  viewer.camera.flyToBoundingSphere(new BoundingSphere(sphere.center, radius), {
+    offset: new HeadingPitchRange(viewer.camera.heading, CesiumMath.toRadians(-28), range),
+    duration: 1.2,
+    complete: () => {
+      // Видимая ширина на расстоянии range ≈ 2·range·tg(fov/2); сдвигаем на половину ширины панели.
+      const frustum = viewer.camera.frustum as { fov?: number };
+      const visibleWidth = 2 * range * Math.tan((frustum.fov ?? Math.PI / 3) / 2);
+      viewer.camera.moveLeft((visibleWidth * sidebarShare) / 2);
+      viewer.scene.requestRender();
+    },
+  });
+}
 
 /** Наклонный вид на территорию с юго-запада. */
 export function flyToTerritory(viewer: Viewer, territory: Territory, duration = 1.5): void {

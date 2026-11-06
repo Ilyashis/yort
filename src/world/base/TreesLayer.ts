@@ -10,9 +10,11 @@ import {
   PerInstanceColorAppearance,
   Primitive,
   ShadowMode,
+  ShowGeometryInstanceAttribute,
   Transforms,
   type TerrainProvider,
 } from 'cesium';
+import { InstanceVisibility } from '../../cesium/instanceVisibility';
 import { sampleMinHeights } from '../../cesium/terrainHeights';
 import { random01 } from '../../utils/hash';
 import type { TreePoint } from './environment';
@@ -54,7 +56,11 @@ const CONIFER_TIERS: [number, number, number][] = [
 
 /** Стилизованные деревья: лиственные с кроной из нескольких «облаков» и ели из ярусов. */
 export class TreesLayer {
-  private constructor(readonly primitive: Primitive) {}
+  private constructor(
+    readonly primitive: Primitive,
+    /** Прячет деревья на пятне застройки зданий пользователя. */
+    readonly visibility: InstanceVisibility,
+  ) {}
 
   static async create(trees: readonly TreePoint[], terrainProvider: TerrainProvider): Promise<TreesLayer> {
     const grounds = await sampleMinHeights(
@@ -63,16 +69,26 @@ export class TreesLayer {
     );
 
     const instances: GeometryInstance[] = [];
-    const add = (geometry: CylinderGeometry | EllipsoidGeometry, modelMatrix: Matrix4, color: Color) =>
+    const instanceIds: string[][] = trees.map(() => []);
+    let tree = 0;
+    const add = (geometry: CylinderGeometry | EllipsoidGeometry, modelMatrix: Matrix4, color: Color) => {
+      const id = `tree/${tree}#${instanceIds[tree]!.length}`;
+      instanceIds[tree]!.push(id);
       instances.push(
         new GeometryInstance({
+          id,
           geometry,
           modelMatrix,
-          attributes: { color: ColorGeometryInstanceAttribute.fromColor(color) },
+          attributes: {
+            color: ColorGeometryInstanceAttribute.fromColor(color),
+            show: new ShowGeometryInstanceAttribute(true),
+          },
         }),
       );
+    };
 
     trees.forEach(([lon, lat, knownHeight], i) => {
+      tree = i;
       const seed = Math.round(lon * 1e7) ^ Math.round(lat * 1e7);
       const r = random01(seed);
       const conifer = random01(seed + 1) < CONIFER_SHARE;
@@ -110,13 +126,19 @@ export class TreesLayer {
       }
     });
 
+    const primitive = new Primitive({
+      geometryInstances: instances,
+      appearance: new PerInstanceColorAppearance({ closed: true, translucent: false }),
+      shadows: ShadowMode.ENABLED,
+      allowPicking: false,
+    });
     return new TreesLayer(
-      new Primitive({
-        geometryInstances: instances,
-        appearance: new PerInstanceColorAppearance({ closed: true, translucent: false }),
-        shadows: ShadowMode.ENABLED,
-        allowPicking: false,
-      }),
+      primitive,
+      new InstanceVisibility(
+        primitive,
+        instanceIds,
+        trees.map(([lon, lat]) => [lon, lat]),
+      ),
     );
   }
 

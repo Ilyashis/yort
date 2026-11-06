@@ -10,9 +10,11 @@ import {
   PerInstanceColorAppearance,
   Primitive,
   ShadowMode,
+  ShowGeometryInstanceAttribute,
   Transforms,
   type TerrainProvider,
 } from 'cesium';
+import { InstanceVisibility } from '../../cesium/instanceVisibility';
 import { sampleMinHeights } from '../../cesium/terrainHeights';
 import type { Placed } from './streetFurniture';
 
@@ -35,7 +37,11 @@ const BENCH_LEG = box(0.45, 0.06, 0.45);
 
 /** Фонари и скамейки одним Primitive. */
 export class StreetFurnitureLayer {
-  private constructor(readonly primitive: Primitive) {}
+  private constructor(
+    readonly primitive: Primitive,
+    /** Прячет фонари и скамейки на пятне застройки зданий пользователя. */
+    readonly visibility: InstanceVisibility,
+  ) {}
 
   static async create(
     lamps: readonly Placed[],
@@ -49,14 +55,23 @@ export class StreetFurnitureLayer {
     );
 
     const instances: GeometryInstance[] = [];
-    const add = (geometry: BoxGeometry | CylinderGeometry, modelMatrix: Matrix4, color: Color) =>
+    const instanceIds: string[][] = all.map(() => []);
+    let item = 0;
+    const add = (geometry: BoxGeometry | CylinderGeometry, modelMatrix: Matrix4, color: Color) => {
+      const id = `furniture/${item}#${instanceIds[item]!.length}`;
+      instanceIds[item]!.push(id);
       instances.push(
         new GeometryInstance({
+          id,
           geometry,
           modelMatrix,
-          attributes: { color: ColorGeometryInstanceAttribute.fromColor(color) },
+          attributes: {
+            color: ColorGeometryInstanceAttribute.fromColor(color),
+            show: new ShowGeometryInstanceAttribute(true),
+          },
         }),
       );
+    };
     /** Система координат объекта: y — по heading, z — вверх. */
     const frameAt = ({ position, heading }: Placed, ground: number) =>
       Matrix4.multiply(
@@ -68,6 +83,7 @@ export class StreetFurnitureLayer {
       Matrix4.multiplyByTranslation(base, new Cartesian3(x, y, z), new Matrix4());
 
     lamps.forEach((lamp, i) => {
+      item = i;
       const base = frameAt(lamp, grounds[i] ?? 0);
       add(LAMP_POLE, offset(base, 0, 0, 3.5), METAL);
       add(LAMP_ARM, offset(base, 0, 0.65, 6.9), METAL);
@@ -75,20 +91,27 @@ export class StreetFurnitureLayer {
     });
 
     benches.forEach((bench, j) => {
-      const base = frameAt(bench, grounds[lamps.length + j] ?? 0);
+      item = lamps.length + j;
+      const base = frameAt(bench, grounds[item] ?? 0);
       add(BENCH_SEAT, offset(base, 0, 0, 0.45), WOOD);
       add(BENCH_BACK, offset(base, -0.22, 0, 0.72), WOOD);
       add(BENCH_LEG, offset(base, 0, 0.7, 0.22), METAL);
       add(BENCH_LEG, offset(base, 0, -0.7, 0.22), METAL);
     });
 
+    const primitive = new Primitive({
+      geometryInstances: instances,
+      appearance: new PerInstanceColorAppearance({ closed: true, translucent: false }),
+      shadows: ShadowMode.ENABLED,
+      allowPicking: false,
+    });
     return new StreetFurnitureLayer(
-      new Primitive({
-        geometryInstances: instances,
-        appearance: new PerInstanceColorAppearance({ closed: true, translucent: false }),
-        shadows: ShadowMode.ENABLED,
-        allowPicking: false,
-      }),
+      primitive,
+      new InstanceVisibility(
+        primitive,
+        instanceIds,
+        all.map(({ position }) => position),
+      ),
     );
   }
 

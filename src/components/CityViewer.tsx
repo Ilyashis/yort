@@ -2,7 +2,7 @@ import { Color, ScreenSpaceEventHandler, ScreenSpaceEventType, type Viewer } fro
 import { useEffect, useRef } from 'react';
 import { PlotDrawingTool } from '../cesium/PlotDrawingTool';
 import { WalkController } from '../cesium/WalkController';
-import { createViewer, flyToTerritory, territoryCenter } from '../cesium/createViewer';
+import { createViewer, flyToArea, flyToTerritory, territoryCenter } from '../cesium/createViewer';
 import { pickGround, toLonLat } from '../cesium/pick';
 import { createTerrain } from '../cesium/terrain';
 import { territory } from '../config/territory';
@@ -19,6 +19,7 @@ import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
 import { computeStats, loadBaseBuildings } from '../world/base/loadBaseBuildings';
 import { scatterTrees } from '../world/base/vegetation';
 import { analyzePlot } from '../world/user/plot';
+import { UserBuildingsLayer, toObstacle, toProperties, userBuildingId } from '../world/user/UserBuildingsLayer';
 import { Collider } from '../world/walk/collider';
 import { createLocalFrame, toLocalPolygon } from '../world/walk/localFrame';
 import { StreetIndex } from '../world/walk/streets';
@@ -109,14 +110,18 @@ export function CityViewer() {
       store.setStats(computeStats(collection));
       // Пьедесталы памятников мешают проходу и стройке так же, как здания.
       const obstacles = [...collection.features, ...landmarks.map(landmarkObstacle)];
+      // Здания пользователя (User World) — отдельным слоем поверх Base World.
+      const userLayer = new UserBuildingsLayer(v.scene, territoryCenter(territory));
+      owned.push(userLayer);
+      const userObstacles = () => useAppStore.getState().userBuildings.map(toObstacle);
 
-      // Участок: инструмент рисует, проверка идёт против Base World, результат — в стор.
+      // Участок: инструмент рисует, проверка идёт против Base World и уже построенного, результат — в стор.
       const plotTool = new PlotDrawingTool(
         v,
         {
           onChange: (points) => store.setPlotDraft(points),
           onFinish: (points) => {
-            const plot = analyzePlot(points, obstacles, territory.bbox);
+            const plot = analyzePlot(points, [...obstacles, ...userObstacles()], territory.bbox);
             buildings.setConflicts(plot.conflictingBuildingIds);
             plotTool.showResult(plot.valid);
             store.plotFinished(plot);
@@ -142,11 +147,12 @@ export function CityViewer() {
         },
       });
 
-      // Прогулка: столкновения со зданиями и памятниками, названия улиц.
+      // Прогулка: столкновения со зданиями, памятниками и постройками пользователя, названия улиц.
+      const collider = new Collider(obstacles, frame);
       const walk = new WalkController(
         v,
         frame,
-        new Collider(obstacles, frame),
+        collider,
         new StreetIndex(environment.ground, frame),
         Color.fromCssColorString(BARE_GROUND_COLOR),
         {
@@ -180,14 +186,35 @@ export function CityViewer() {
           store.setMode('walk');
           walk.enter(toLonLat(point), v.camera.heading);
         } else if (mode === 'explore') {
-          store.selectBuilding(buildings.buildingFromPick(v.scene.pick(event.position)));
+          const picked = v.scene.pick(event.position);
+          const ownId = userLayer.idFromPick(picked);
+          const own = ownId && useAppStore.getState().userBuildings.find((b) => userBuildingId(b.id) === ownId);
+          store.selectBuilding(own ? toProperties(own) : buildings.buildingFromPick(picked));
         }
       }, ScreenSpaceEventType.LEFT_CLICK);
 
-      // Подсветка и раскраска следуют за стором (в т.ч. при закрытии карточки).
+      // Сцена следует за стором: подсветка, раскраска, здания пользователя и предпросмотр.
       unsubscribe = useAppStore.subscribe((state, prev) => {
         if (state.selectedBuilding !== prev.selectedBuilding) buildings.select(state.selectedBuilding?.id);
         if (state.buildingColorMode !== prev.buildingColorMode) buildings.setColorMode(state.buildingColorMode);
+        if (state.builder !== prev.builder || state.userBuildings !== prev.userBuildings) {
+          const preview = state.builder?.result.building;
+          userLayer.render(
+            state.userBuildings,
+            preview && state.builder ? { id: 'preview', spec: state.builder.spec, building: preview } : undefined,
+          );
+          collider.setExtraObstacles(state.userBuildings.map(toObstacle));
+          // Деревья, фонари и скамейки на пятне застройки убираем (и возвращаем, если здание снесли).
+          const footprints = [...state.userBuildings.map((b) => b.building.footprint), ...(preview ? [preview.footprint] : [])];
+          trees.visibility.hideWithin(v.scene, footprints, 2);
+          furniture.visibility.hideWithin(v.scene, footprints, 0.5);
+        }
+        // Открыли конструктор — показываем участок крупно в свободной от панели части экрана.
+        if (state.builder && !prev.builder && state.plot) {
+          const sidebar = document.querySelector('.sidebar');
+          const sidebarShare = sidebar ? (sidebar.getBoundingClientRect().right + 16) / v.canvas.clientWidth : 0;
+          flyToArea(v, state.plot.polygon, state.builder.result.building?.totalHeight ?? 30, Math.min(sidebarShare, 0.6));
+        }
       });
       buildings.setColorMode(useAppStore.getState().buildingColorMode);
 

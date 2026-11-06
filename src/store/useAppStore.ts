@@ -2,9 +2,31 @@ import { create } from 'zustand';
 import type { TerrainKind } from '../cesium/terrain';
 import type { BuildingColorMode } from '../world/base/BaseBuildingsLayer';
 import type { BaseBuildingProperties, BaseBuildingsStats } from '../world/base/types';
+import type { UserBuilding } from '../world/user/UserBuildingsLayer';
+import {
+  defaultSpec,
+  generateBuilding,
+  type BuildingSpec,
+  type BuildingType,
+  type BuildResult,
+} from '../world/user/building';
 import type { LonLat, PlotAnalysis } from '../world/user/plot';
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
+
+/** Конструктор здания на участке: текущая спецификация и результат генерации. */
+export interface BuilderState {
+  spec: BuildingSpec;
+  result: BuildResult;
+}
+
+const builderFor = (spec: BuildingSpec, plot: readonly LonLat[]): BuilderState => ({
+  spec,
+  result: generateBuilding(spec, plot),
+});
+
+let buildingCounter = 0;
+const newBuildingId = () => `${Date.now().toString(36)}-${(buildingCounter++).toString(36)}`;
 
 /** Что сейчас делает левый клик по сцене. */
 export type InteractionMode = 'explore' | 'draw-plot' | 'pick-walk-start' | 'walk';
@@ -40,6 +62,10 @@ interface AppState {
   plot?: PlotAnalysis;
   /** Улица под ногами во время прогулки. */
   walkStreet?: string;
+  /** Открыт конструктор здания на текущем участке. */
+  builder?: BuilderState;
+  /** Размещённые здания пользователя (User World, пока — в памяти вкладки). */
+  userBuildings: UserBuilding[];
 
   /** Регистрирует сцена; UI вызывает, чтобы вернуть камеру к территории. */
   flyHome?: () => void;
@@ -62,13 +88,22 @@ interface AppState {
   plotFinished: (plot: PlotAnalysis) => void;
   plotDrawingCancelled: () => void;
   plotCleared: () => void;
+
+  startBuilder: () => void;
+  setBuildingType: (type: BuildingType) => void;
+  updateSpec: (patch: Partial<BuildingSpec>) => void;
+  cancelBuilder: () => void;
+  /** Переносит здание из конструктора в User World; true — если разместили. */
+  placeBuilding: () => boolean;
+  removeUserBuilding: (id: string) => void;
 }
 
-export const useAppStore = create<AppState>()((set) => ({
+export const useAppStore = create<AppState>()((set, get) => ({
   status: 'loading',
   buildingColorMode: 'city',
   mode: 'explore',
   plotDraft: [],
+  userBuildings: [],
 
   setStatus: (status, error) => set({ status, error }),
   setTerrain: (terrain) => set({ terrain }),
@@ -82,9 +117,41 @@ export const useAppStore = create<AppState>()((set) => ({
   setWalkStreet: (walkStreet) => set({ walkStreet }),
 
   plotDrawingStarted: () =>
-    set({ mode: 'draw-plot', plotDraft: [], plot: undefined, selectedBuilding: undefined }),
+    set({ mode: 'draw-plot', plotDraft: [], plot: undefined, selectedBuilding: undefined, builder: undefined }),
   setPlotDraft: (plotDraft) => set({ plotDraft }),
   plotFinished: (plot) => set({ mode: 'explore', plotDraft: [], plot }),
   plotDrawingCancelled: () => set({ mode: 'explore', plotDraft: [] }),
-  plotCleared: () => set({ plot: undefined }),
+  plotCleared: () => set({ plot: undefined, builder: undefined }),
+
+  startBuilder: () => {
+    const { plot } = get();
+    if (!plot?.valid) return;
+    set({ builder: builderFor(defaultSpec('residential'), plot.polygon), selectedBuilding: undefined });
+  },
+  setBuildingType: (type) => {
+    const { plot, builder } = get();
+    if (!plot || !builder) return;
+    set({ builder: builderFor(defaultSpec(type, builder.spec.setback), plot.polygon) });
+  },
+  updateSpec: (patch) => {
+    const { plot, builder } = get();
+    if (!plot || !builder) return;
+    set({ builder: builderFor({ ...builder.spec, ...patch }, plot.polygon) });
+  },
+  cancelBuilder: () => set({ builder: undefined }),
+  placeBuilding: () => {
+    const { builder, userBuildings } = get();
+    const building = builder?.result.building;
+    if (!builder || !building || builder.result.issues.length > 0) return false;
+    set({
+      userBuildings: [...userBuildings, { id: newBuildingId(), spec: builder.spec, building }],
+      builder: undefined,
+    });
+    return true;
+  },
+  removeUserBuilding: (id) =>
+    set((state) => ({
+      userBuildings: state.userBuildings.filter((b) => b.id !== id),
+      selectedBuilding: undefined,
+    })),
 }));

@@ -306,6 +306,127 @@ p {
   accent-color: var(--accent);
 }
 
+/* --- конструктор здания -------------------------------------------------------- */
+
+.builder-panel {
+  border-color: rgba(245, 165, 36, 0.35);
+}
+
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 10px 0 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.segmented button {
+  flex: 1 1 auto;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: #1d1400;
+  font-weight: 600;
+}
+
+.segmented-small {
+  margin: 4px 0 0;
+}
+
+.field {
+  display: block;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.field > span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.field > span b {
+  color: var(--text);
+}
+
+.field input[type='range'] {
+  width: 100%;
+  margin: 6px 0 0;
+  accent-color: var(--accent);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.swatches button {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.swatches button.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(245, 165, 36, 0.35);
+}
+
+.builder-issues {
+  color: var(--error);
+}
+
+.builder-warnings {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #f0c36b;
+  font-size: 13px;
+}
+
+.spec-json {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.spec-json summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.spec-json pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #cfe3c2;
+  font: 12px/1.45 ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.built-note {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
 /* --- прогулка ---------------------------------------------------------------- */
 
 .walk-panel-active {
