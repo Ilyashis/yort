@@ -1,19 +1,25 @@
 import {
   Cartesian3,
-  Cartographic,
   Color,
   ColorGeometryInstanceAttribute,
-  EllipsoidTerrainProvider,
+  ComponentDatatype,
   GeometryInstance,
+  GeometryInstanceAttribute,
   PerInstanceColorAppearance,
   PolygonGeometry,
   PolygonHierarchy,
   Primitive,
-  sampleTerrainMostDetailed,
+  ShadowMode,
   type Scene,
   type TerrainProvider,
 } from 'cesium';
+import { createBuildingAppearance } from '../../cesium/buildingAppearance';
+import { sampleMinHeights } from '../../cesium/terrainHeights';
+import { hashString } from '../../utils/hash';
 import type { BaseBuildingFeature, BaseBuildingProperties, BaseBuildingsCollection, Ring } from './types';
+
+/** city — правдоподобные фасады; data — раскраска по источнику высоты (качество данных). */
+export type BuildingColorMode = 'city' | 'data';
 
 export const BUILDING_COLORS = {
   /** Высота известна из OSM (height или этажность). */
@@ -25,6 +31,21 @@ export const BUILDING_COLORS = {
   conflict: '#ff6b6b',
 } as const;
 
+/** Типичные цвета фасадов центра: штукатурка, кирпич, светлый камень. */
+const FACADE_PALETTE = [
+  '#e9dcc3', '#f1e7d3', '#dcc6a6', '#e6d2b5', '#d5dadb',
+  '#ece6da', '#d9b99f', '#c99f84', '#f3f0e9', '#e3d7c0',
+].map((c) => Color.fromCssColorString(c));
+const UTILITY_PALETTE = ['#b9bcbf', '#a9adb1', '#c4c2bd'].map((c) => Color.fromCssColorString(c));
+const TEMPLE_COLOR = Color.fromCssColorString('#f4f2ec');
+
+const UTILITY_TYPES = new Set(['garage', 'garages', 'shed', 'service', 'industrial', 'warehouse', 'transformer_tower', 'roof', 'construction']);
+const TEMPLE_TYPES = new Set(['church', 'cathedral', 'chapel', 'mosque', 'synagogue', 'temple']);
+/** Здания без окон на фасаде. */
+const BLANK_TYPES = new Set(['garage', 'garages', 'shed', 'service', 'transformer_tower', 'roof', 'construction', 'hut']);
+
+const LEVEL_HEIGHT = 3.2;
+
 const known = Color.fromCssColorString(BUILDING_COLORS.known);
 const estimated = Color.fromCssColorString(BUILDING_COLORS.estimated);
 const selected = Color.fromCssColorString(BUILDING_COLORS.selected);
@@ -32,7 +53,7 @@ const conflict = Color.fromCssColorString(BUILDING_COLORS.conflict);
 
 /**
  * Слой зданий Base World: все здания территории одним Primitive
- * (один draw call вместо тысяч Entity), с выбором и подсветкой по клику.
+ * (один draw call вместо тысяч Entity), с окнами, тенями, выбором и подсветкой.
  */
 export class BaseBuildingsLayer {
   readonly primitive: Primitive;
@@ -40,18 +61,25 @@ export class BaseBuildingsLayer {
   private readonly instanceIds = new Map<string, string[]>();
   private selectedId: string | undefined;
   private conflicts = new Set<string>();
+  private colorMode: BuildingColorMode = 'city';
 
   private constructor(
     private readonly scene: Scene,
     collection: BaseBuildingsCollection,
-    groundHeights: Map<string, number>,
+    groundHeights: number[],
+    center: Cartesian3,
   ) {
     const instances: GeometryInstance[] = [];
 
-    for (const feature of collection.features) {
+    collection.features.forEach((feature, featureIndex) => {
       const props = feature.properties;
-      const ground = groundHeights.get(props.id) ?? 0;
+      const ground = groundHeights[featureIndex] ?? 0;
       const ids: string[] = [];
+      const facade = new GeometryInstanceAttribute({
+        componentDatatype: ComponentDatatype.FLOAT,
+        componentsPerAttribute: 4,
+        value: [ground, props.minHeight, props.height, floorHeight(props)],
+      });
 
       polygonsOf(feature).forEach((rings, index) => {
         const instanceId = `${props.id}#${index}`;
@@ -65,19 +93,35 @@ export class BaseBuildingsLayer {
               extrudedHeight: ground + props.height,
               vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT,
             }),
-            attributes: { color: ColorGeometryInstanceAttribute.fromColor(baseColor(props)) },
+            attributes: {
+              color: ColorGeometryInstanceAttribute.fromColor(this.colorOf(props.id, props)),
+              facade,
+            },
           }),
         );
       });
 
       this.buildings.set(props.id, props);
       this.instanceIds.set(props.id, ids);
-    }
+    });
 
     this.primitive = new Primitive({
       geometryInstances: instances,
-      appearance: new PerInstanceColorAppearance({ closed: true, translucent: false }),
+      appearance: createBuildingAppearance(center),
+      shadows: ShadowMode.ENABLED,
     });
+  }
+
+  /** Создаёт слой; при наличии рельефа ставит каждое здание на землю. */
+  static async create(
+    scene: Scene,
+    collection: BaseBuildingsCollection,
+    terrainProvider: TerrainProvider,
+    center: Cartesian3,
+  ): Promise<BaseBuildingsLayer> {
+    const outlines = collection.features.map((f) => polygonsOf(f).flatMap(([outer]) => outer ?? []));
+    const groundHeights = await sampleMinHeights(outlines, terrainProvider);
+    return new BaseBuildingsLayer(scene, collection, groundHeights, center);
   }
 
   /**
@@ -90,16 +134,6 @@ export class BaseBuildingsLayer {
       this.scene.requestRender();
     });
     this.scene.requestRender();
-  }
-
-  /** Создаёт слой; при наличии рельефа ставит каждое здание на землю. */
-  static async create(
-    scene: Scene,
-    collection: BaseBuildingsCollection,
-    terrainProvider: TerrainProvider,
-  ): Promise<BaseBuildingsLayer> {
-    const groundHeights = await sampleGroundHeights(collection.features, terrainProvider);
-    return new BaseBuildingsLayer(scene, collection, groundHeights);
   }
 
   /** Определяет здание по результату scene.pick(). */
@@ -128,15 +162,23 @@ export class BaseBuildingsLayer {
     this.scene.requestRender();
   }
 
+  setColorMode(mode: BuildingColorMode): void {
+    if (mode === this.colorMode) return;
+    this.colorMode = mode;
+    for (const id of this.buildings.keys()) this.paint(id);
+    this.scene.requestRender();
+  }
+
   destroy(): void {
     if (!this.primitive.isDestroyed()) this.primitive.destroy();
   }
 
-  /** Приоритет цвета: выбранное → конфликт с участком → цвет по источнику высоты. */
+  /** Приоритет цвета: выбранное → конфликт с участком → цвет режима раскраски. */
   private colorOf(buildingId: string, props: BaseBuildingProperties): Color {
     if (buildingId === this.selectedId) return selected;
     if (this.conflicts.has(buildingId)) return conflict;
-    return baseColor(props);
+    if (this.colorMode === 'data') return props.heightSource === 'default' ? estimated : known;
+    return facadeColor(props);
   }
 
   private paint(buildingId: string): void {
@@ -150,8 +192,18 @@ export class BaseBuildingsLayer {
   }
 }
 
-function baseColor(props: BaseBuildingProperties): Color {
-  return props.heightSource === 'default' ? estimated : known;
+/** Цвет фасада: стабильный для здания (по хешу id), с учётом типа. */
+function facadeColor(props: BaseBuildingProperties): Color {
+  if (TEMPLE_TYPES.has(props.building)) return TEMPLE_COLOR;
+  const palette = UTILITY_TYPES.has(props.building) ? UTILITY_PALETTE : FACADE_PALETTE;
+  return palette[hashString(props.id) % palette.length]!;
+}
+
+/** Высота этажа для рисования окон; 0 — без окон. */
+function floorHeight(props: BaseBuildingProperties): number {
+  if (BLANK_TYPES.has(props.building) || props.height < 3) return 0;
+  if (!props.levels) return LEVEL_HEIGHT;
+  return Math.min(Math.max((props.height - props.minHeight) / props.levels, 2.8), 4.5);
 }
 
 function polygonsOf(feature: BaseBuildingFeature): Ring[][] {
@@ -169,41 +221,4 @@ function toHierarchy([outer, ...holes]: Ring[]): PolygonHierarchy {
     ringToPositions(outer ?? []),
     holes.map((hole) => new PolygonHierarchy(ringToPositions(hole))),
   );
-}
-
-/**
- * Высота земли под каждым зданием = минимум по вершинам внешнего контура,
- * чтобы на склонах (а в центре Уфы они есть) здания не висели в воздухе.
- */
-async function sampleGroundHeights(
-  features: BaseBuildingFeature[],
-  terrainProvider: TerrainProvider,
-): Promise<Map<string, number>> {
-  const result = new Map<string, number>();
-  if (terrainProvider instanceof EllipsoidTerrainProvider) return result;
-
-  const owners: string[] = [];
-  const points: Cartographic[] = [];
-  for (const feature of features) {
-    for (const [outer] of polygonsOf(feature)) {
-      for (const [lon, lat] of outer ?? []) {
-        owners.push(feature.properties.id);
-        points.push(Cartographic.fromDegrees(lon, lat));
-      }
-    }
-  }
-
-  try {
-    await sampleTerrainMostDetailed(terrainProvider, points);
-  } catch (error) {
-    console.warn('[terrain] не удалось получить высоты рельефа, здания стоят на нуле', error);
-    return result;
-  }
-
-  points.forEach((point, i) => {
-    const id = owners[i]!;
-    const current = result.get(id);
-    if (current === undefined || point.height < current) result.set(id, point.height);
-  });
-  return result;
 }

@@ -11,6 +11,10 @@ export interface Territory {
 /** Текущая территория MVP. Чтобы сменить район — правьте territory.json и запускайте npm run data:fetch. */
 export const territory: Territory = territoryJson;
 
+export function territoryDataUrl(t: Territory, fileName: string): string {
+  return `${import.meta.env.BASE_URL}data/territories/${t.id}/${fileName}`;
+}
+
 export function baseBuildingsUrl(t: Territory): string {
-  return `${import.meta.env.BASE_URL}data/territories/${t.id}/buildings.geojson`;
+  return territoryDataUrl(t, 'buildings.geojson');
 }

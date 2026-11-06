@@ -10,6 +10,8 @@ export function InfoPanel() {
   const stats = useAppStore((s) => s.stats);
   const terrain = useAppStore((s) => s.terrain);
   const flyHome = useAppStore((s) => s.flyHome);
+  const colorMode = useAppStore((s) => s.buildingColorMode);
+  const setColorMode = useAppStore((s) => s.setBuildingColorMode);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
 
@@ -43,17 +45,24 @@ export function InfoPanel() {
         </dl>
       )}
 
-      <ul className="legend">
-        <li>
-          <i style={{ background: BUILDING_COLORS.known }} /> высота из OSM (height или этажность)
-        </li>
-        <li>
-          <i style={{ background: BUILDING_COLORS.estimated }} /> высота — оценка по типу здания
-        </li>
-        <li>
-          <i style={{ background: BUILDING_COLORS.selected }} /> выбранное здание
-        </li>
-      </ul>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={colorMode === 'data'}
+          onChange={(event) => setColorMode(event.target.checked ? 'data' : 'city')}
+        />
+        Раскрасить по качеству данных о высоте
+      </label>
+      {colorMode === 'data' && (
+        <ul className="legend">
+          <li>
+            <i style={{ background: BUILDING_COLORS.known }} /> высота из OSM (height или этажность)
+          </li>
+          <li>
+            <i style={{ background: BUILDING_COLORS.estimated }} /> высота — оценка по типу здания
+          </li>
+        </ul>
+      )}
 
       <p className="hint muted">
         Перетаскивание — сдвиг, колесо — масштаб, Ctrl + перетаскивание — наклон и поворот. Клик по

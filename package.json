@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "data:fetch": "node scripts/fetch-osm-buildings.mjs"
+    "data:fetch": "npm run data:fetch:buildings && npm run data:fetch:environment",
+    "data:fetch:buildings": "node scripts/fetch-osm-buildings.mjs",
+    "data:fetch:environment": "node scripts/fetch-osm-environment.mjs"
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",

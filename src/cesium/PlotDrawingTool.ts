@@ -6,7 +6,6 @@ import {
   Color,
   ColorMaterialProperty,
   ConstantProperty,
-  Math as CesiumMath,
   PolygonHierarchy,
   SceneTransforms,
   ScreenSpaceEventHandler,
@@ -15,6 +14,8 @@ import {
   type Viewer,
 } from 'cesium';
 import type { LonLat } from '../world/user/plot';
+import { isTypingTarget } from './keyboard';
+import { pickGround, toLonLat } from './pick';
 
 export interface PlotDrawingCallbacks {
   /** Изменился набор поставленных вершин. */
@@ -34,6 +35,11 @@ type PlotLook = keyof typeof PLOT_COLORS;
 
 /** Клик ближе этого расстояния (в пикселях) к первой вершине замыкает контур. */
 const CLOSE_RING_PX = 12;
+/**
+ * На плоском рельефе поверхности земли (дороги, газоны) — обычные примитивы,
+ * и прижатый к земле участок оказался бы под ними. Поэтому рисуем его чуть выше.
+ */
+const FLAT_PLOT_HEIGHT = 0.3;
 /** Вершины ближе этого расстояния (м) считаются одной точкой (двойной клик и т. п.). */
 const MIN_VERTEX_DISTANCE_M = 0.5;
 
@@ -56,14 +62,18 @@ export class PlotDrawingTool {
   constructor(
     private readonly viewer: Viewer,
     private readonly callbacks: PlotDrawingCallbacks,
+    private readonly clampToGround: boolean,
   ) {
     this.polygon = viewer.entities.add({
       show: false,
-      polygon: { hierarchy: new PolygonHierarchy([]) },
+      polygon: {
+        hierarchy: new PolygonHierarchy([]),
+        height: clampToGround ? undefined : FLAT_PLOT_HEIGHT,
+      },
     });
     this.outline = viewer.entities.add({
       show: false,
-      polyline: { positions: [], width: 3, clampToGround: true },
+      polyline: { positions: [], width: 3, clampToGround },
     });
     this.setLook('draft');
 
@@ -100,7 +110,7 @@ export class PlotDrawingTool {
       return;
     }
 
-    const point = this.pickGround(position);
+    const point = this.pick(position);
     if (!point) return;
     const last = this.points[this.points.length - 1];
     if (last && Cartesian3.distance(last, point) < MIN_VERTEX_DISTANCE_M) return;
@@ -166,9 +176,7 @@ export class PlotDrawingTool {
   // --- внутреннее -----------------------------------------------------------
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (!this.drawing) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (!this.drawing || isTypingTarget(event.target)) return;
 
     if (event.key === 'Enter') this.finish();
     else if (event.key === 'Escape') this.cancel();
@@ -179,7 +187,7 @@ export class PlotDrawingTool {
 
   private onMouseMove(position: Cartesian2): void {
     if (!this.drawing) return;
-    this.cursor = this.pickGround(position);
+    this.cursor = this.pick(position);
     this.viewer.scene.requestRender();
   }
 
@@ -188,10 +196,12 @@ export class PlotDrawingTool {
     this.callbacks.onChange(this.lonLats());
   }
 
-  /** Точка на поверхности земли (сквозь здания — они не мешают ставить вершины). */
-  private pickGround(position: Cartesian2): Cartesian3 | undefined {
-    const ray = this.viewer.camera.getPickRay(position);
-    return ray ? this.viewer.scene.globe.pick(ray, this.viewer.scene) : undefined;
+  /** Точка на земле (сквозь здания), на плоском рельефе — приподнятая над слоями земли. */
+  private pick(position: Cartesian2): Cartesian3 | undefined {
+    const ground = pickGround(this.viewer, position);
+    if (!ground || this.clampToGround) return ground;
+    const c = Cartographic.fromCartesian(ground);
+    return Cartesian3.fromRadians(c.longitude, c.latitude, FLAT_PLOT_HEIGHT);
   }
 
   private isNearFirstVertex(position: Cartesian2): boolean {
@@ -243,9 +253,6 @@ export class PlotDrawingTool {
   }
 
   private lonLats(): LonLat[] {
-    return this.points.map((p) => {
-      const c = Cartographic.fromCartesian(p);
-      return [CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)];
-    });
+    return this.points.map(toLonLat);
   }
 }

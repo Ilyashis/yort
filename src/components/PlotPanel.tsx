@@ -10,7 +10,7 @@ export function PlotPanel() {
   const plot = useAppStore((s) => s.plot);
   const controls = useAppStore((s) => s.plotControls);
 
-  const ready = status === 'ready' && !!controls;
+  const ready = status === 'ready' && !!controls && mode === 'explore';
 
   if (mode === 'draw-plot') {
     const area = plotArea(draft);
