@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Копируется из node_modules/cesium скриптом scripts/copy-cesium-assets.mjs
+public/cesium/
+
+# Локальные переменные окружения (токены)
+.env
+.env.local
+.env.*.local
+
+# Личные настройки Claude Code
+.claude/settings.local.json
+
+.DS_Store
+*.log

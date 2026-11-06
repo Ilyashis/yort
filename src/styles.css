@@ -1,0 +1,232 @@
+:root {
+  --panel-bg: rgba(18, 22, 30, 0.86);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --text: #eef1f5;
+  --muted: #9aa4b2;
+  --accent: #f5a524;
+  --error: #ff7a7a;
+  --radius: 12px;
+
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root,
+.app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0e13;
+}
+
+.city-viewer {
+  position: absolute;
+  inset: 0;
+}
+
+/* --- панели --------------------------------------------------------------- */
+
+.panel {
+  position: absolute;
+  z-index: 10;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  padding: 16px 18px;
+}
+
+.info-panel {
+  top: 16px;
+  left: 16px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+}
+
+.building-card {
+  top: 16px;
+  right: 16px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+}
+
+@media (max-width: 720px) {
+  .building-card {
+    top: auto;
+    bottom: 40px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(245, 165, 36, 0.15);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+h1,
+h2 {
+  margin: 6px 0 2px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h2 {
+  padding-right: 24px;
+  font-size: 16px;
+}
+
+p {
+  margin: 4px 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.status {
+  margin-top: 12px;
+}
+
+.status-error {
+  color: var(--error);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+
+.stats div {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.stats dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stats dd {
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.legend {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.legend i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.hint {
+  font-size: 12px;
+}
+
+.footnote {
+  margin-top: 10px;
+  font-size: 11px;
+}
+
+.button {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(245, 165, 36, 0.4);
+  border-radius: 8px;
+  background: rgba(245, 165, 36, 0.12);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: rgba(245, 165, 36, 0.22);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--text);
+}
+
+.props {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 12px 0 0;
+}
+
+.props dt {
+  color: var(--muted);
+}
+
+.props dd {
+  margin: 0;
+}
+
+.props a {
+  color: var(--accent);
+}
+
+/* Подписи источников данных Cesium — компактнее и не под панелями. */
+.cesium-viewer-bottom {
+  font-size: 11px;
+}
