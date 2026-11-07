@@ -1,7 +1,16 @@
-import { Math as CesiumMath, Color, ScreenSpaceEventHandler, ScreenSpaceEventType, type Viewer } from 'cesium';
+import {
+  Cartographic,
+  Math as CesiumMath,
+  Color,
+  Credit,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
+  type Viewer,
+} from 'cesium';
 import { useEffect, useRef } from 'react';
 import { Soundscape } from '../audio/Soundscape';
 import { SoundZones } from '../audio/soundZones';
+import { OverviewControls } from '../cesium/OverviewControls';
 import { PlotDrawingTool } from '../cesium/PlotDrawingTool';
 import { WalkController } from '../cesium/WalkController';
 import {
@@ -13,7 +22,7 @@ import {
   territoryCenter,
 } from '../cesium/createViewer';
 import { pickGround, toLonLat } from '../cesium/pick';
-import { createTerrain } from '../cesium/terrain';
+import { createTerrain, heightSampler } from '../cesium/terrain';
 import { territory } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
 import { LANDMARKS } from '../config/landmarks';
@@ -21,11 +30,13 @@ import { BaseBuildingsLayer } from '../world/base/BaseBuildingsLayer';
 import { BARE_GROUND_COLOR, GroundLayer } from '../world/base/GroundLayer';
 import { LandmarksLayer, landmarkClearance, landmarkObstacle } from '../world/base/LandmarksLayer';
 import { StreetFurnitureLayer } from '../world/base/StreetFurnitureLayer';
-import { findStreetFrontBuildings } from '../world/base/facades';
+import { BuildingDetailsLayer } from '../world/base/BuildingDetailsLayer';
+import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
+import { assignParts } from '../world/base/parts';
 import { orientBenches, placeLamps, roadMarkings } from '../world/base/streetFurniture';
 import { TreesLayer } from '../world/base/TreesLayer';
 import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
-import { computeStats, loadBaseBuildings } from '../world/base/loadBaseBuildings';
+import { computeStats, loadBaseBuildings, loadBuildingParts } from '../world/base/loadBaseBuildings';
 import { scatterTrees } from '../world/base/vegetation';
 import { analyzePlot } from '../world/user/plot';
 import { UserBuildingsLayer, toObstacle, toProperties, userBuildingId } from '../world/user/UserBuildingsLayer';
@@ -51,7 +62,7 @@ export function CityViewer() {
     async function init() {
       store.setStatus('loading');
 
-      const terrain = await createTerrain();
+      const terrain = await createTerrain(territory);
       if (disposed) return;
       store.setTerrain(terrain.kind);
 
@@ -59,13 +70,23 @@ export function CityViewer() {
       viewer = v;
       // Только в dev: доступ к сцене из консоли браузера для отладки.
       if (import.meta.env.DEV) (window as unknown as { __citiaViewer?: Viewer }).__citiaViewer = v;
+      if (terrain.credit) v.creditDisplay.addStaticCredit(new Credit(terrain.credit));
+
+      // Высота земли в любой точке — для камеры, прогулки, своих зданий и звука.
+      const heightAt = heightSampler(terrain, (lon, lat) =>
+        v.isDestroyed() ? undefined : v.scene.globe.getHeight(Cartographic.fromDegrees(lon, lat)),
+      );
+      const { south: s, west: w, north: n, east: e } = territory.bbox;
+      const centerGround = heightAt((w + e) / 2, (s + n) / 2);
+
       // Пока грузятся данные — вид издалека; когда всё готово, камера плавно прилетит к району.
       setIntroView(v, territory);
       setGraphicsQuality(v, useAppStore.getState().graphicsQuality);
-      store.setFlyHome(() => flyToTerritory(v, territory));
+      store.setFlyHome(() => flyToTerritory(v, territory, 1.5, centerGround));
 
-      const [collection, environment] = await Promise.all([
+      const [collection, buildingParts, environment] = await Promise.all([
         loadBaseBuildings(territory),
+        loadBuildingParts(territory),
         loadEnvironment(territory),
       ]);
       if (disposed) return;
@@ -84,7 +105,7 @@ export function CityViewer() {
 
       // Поверхности земли (с разметкой). Добавленные в сцену примитивы уничтожит сам Viewer.
       const markings = roadMarkings(environment.streets, frame, roadSurfaces);
-      GroundLayer.create([...environment.ground, ...markings], terrain.kind).addTo(v.scene);
+      GroundLayer.create([...environment.ground, ...markings], terrain.kind).addTo(v);
 
       const landmarks = LANDMARKS.filter(
         ({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north,
@@ -99,9 +120,19 @@ export function CityViewer() {
       const lamps = placeLamps(environment.streets, frame, roadSurfaces, localBuildings);
       const benches = orientBenches(environment.streets, frame);
       const streetFront = findStreetFrontBuildings(collection.features, environment.ground, frame);
+      // Части зданий (building:part) рисуются вместо общего контура: башни, купола, ступени этажности.
+      const parts = assignParts(collection.features, buildingParts);
 
       const [buildings, trees, furniture, monuments] = await Promise.all([
-        BaseBuildingsLayer.create(v.scene, collection, terrain.provider, territoryCenter(territory), streetFront),
+        BaseBuildingsLayer.create(
+          v.scene,
+          collection,
+          terrain.provider,
+          territoryCenter(territory),
+          frame,
+          streetFront,
+          parts,
+        ),
         TreesLayer.create(allTrees, terrain.provider),
         StreetFurnitureLayer.create(lamps, benches, terrain.provider),
         LandmarksLayer.create(landmarks, terrain.provider),
@@ -115,14 +146,22 @@ export function CityViewer() {
       }
       v.scene.primitives.add(trees.primitive);
       v.scene.primitives.add(furniture.primitive);
-      v.scene.primitives.add(buildings.primitive);
+      for (const primitive of buildings.primitives) v.scene.primitives.add(primitive);
+      // Балконы, подъезды и карнизы; подъезды — со двора, не на улицу.
+      const details = BuildingDetailsLayer.create(buildings.shapes(), {
+        frame,
+        center: territoryCenter(territory),
+        isStreetSide: nearNamedStreet(environment.ground, frame, 15),
+        heightAt,
+      });
+      if (details.primitive) v.scene.primitives.add(details.primitive);
       monuments.addTo(v.scene);
       buildings.renderUntilReady();
       store.setStats(computeStats(collection));
       // Пьедесталы памятников мешают проходу и стройке так же, как здания.
       const obstacles = [...collection.features, ...landmarks.map(landmarkObstacle)];
       // Здания пользователя (User World) — отдельным слоем поверх Base World.
-      const userLayer = new UserBuildingsLayer(v.scene, territoryCenter(territory));
+      const userLayer = new UserBuildingsLayer(v.scene, territoryCenter(territory), heightAt);
       owned.push(userLayer);
       const userObstacles = () => useAppStore.getState().userBuildings.map(toObstacle);
 
@@ -162,11 +201,8 @@ export function CityViewer() {
       const soundscape = new Soundscape(new SoundZones(environment.ground, frame), () => {
         if (v.isDestroyed()) return undefined;
         const c = v.camera.positionCartographic;
-        const ground = terrain.kind === 'flat' ? 0 : (v.scene.globe.getHeight(c) ?? 0);
-        return {
-          point: frame.toLocal([CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)]),
-          altitude: c.height - ground,
-        };
+        const lonLat: [number, number] = [CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)];
+        return { point: frame.toLocal(lonLat), altitude: c.height - heightAt(...lonLat) };
       });
       soundscape.setEnabled(useAppStore.getState().soundOn);
       owned.push(soundscape);
@@ -180,13 +216,24 @@ export function CityViewer() {
         collider,
         new StreetIndex(environment.ground, frame),
         Color.fromCssColorString(BARE_GROUND_COLOR),
+        heightAt,
         {
           onExit: () => store.setMode('explore'),
           onStreet: (street) => store.setWalkStreet(street),
           onMove: (distance, running, position) => soundscape.walked(distance, running, position),
+          onMouseLock: (locked) => store.setWalkMouseLocked(locked),
         },
       );
       owned.push(walk);
+
+      // Камера над городом: мышь как в стройках, WASD/QE/RF, двойной клик — подлёт. На прогулке выключено.
+      const overview = new OverviewControls(v, {
+        heightAt,
+        isActive: () => useAppStore.getState().mode !== 'walk',
+      });
+      owned.push(overview);
+      if (import.meta.env.DEV) (window as unknown as { __citiaOverview?: OverviewControls }).__citiaOverview = overview;
+
       store.setWalkControls({
         pickStart: () => {
           store.selectBuilding(undefined);
@@ -239,7 +286,14 @@ export function CityViewer() {
         if (state.builder && !prev.builder && state.plot) {
           const sidebar = document.querySelector('.sidebar');
           const sidebarShare = sidebar ? (sidebar.getBoundingClientRect().right + 16) / v.canvas.clientWidth : 0;
-          flyToArea(v, state.plot.polygon, state.builder.result.building?.totalHeight ?? 30, Math.min(sidebarShare, 0.6));
+          const [plotLon, plotLat] = state.plot.polygon[0] ?? [0, 0];
+          flyToArea(
+            v,
+            state.plot.polygon,
+            state.builder.result.building?.totalHeight ?? 30,
+            Math.min(sidebarShare, 0.6),
+            heightAt(plotLon, plotLat),
+          );
         }
         if (state.soundOn !== prev.soundOn) soundscape.setEnabled(state.soundOn);
         if (state.graphicsQuality !== prev.graphicsQuality) setGraphicsQuality(v, state.graphicsQuality);
@@ -248,7 +302,7 @@ export function CityViewer() {
 
       store.setStatus('ready');
       // Всё загружено — плавный пролёт к району.
-      flyToTerritory(v, territory, 3.2);
+      flyToTerritory(v, territory, 3.2, centerGround);
     }
 
     init().catch((error: unknown) => {

@@ -36,6 +36,8 @@ const BRONZE = Color.fromCssColorString('#4d4335');
 /** Масштаб фигуры: при 1.5 высота от пьедестала до кнута ≈ 9,8 м, как у настоящей статуи. */
 const STATUE_SCALE = 1.5;
 const PLATFORM = { radius: 7, height: 0.5 };
+/** «Юбка» площадки вниз, м: на склоне (памятник — на краю обрыва) под ней не будет щели. */
+const PLATFORM_SKIRT = 3;
 const PEDESTAL = { width: 4.2, length: 6.5, height: 3.5 };
 const PEDESTAL_TOP = PLATFORM.height + PEDESTAL.height;
 
@@ -90,8 +92,9 @@ export class LandmarksLayer {
   ) {}
 
   static async create(landmarks: readonly Landmark[], terrainProvider: TerrainProvider): Promise<LandmarksLayer> {
+    // Земля — самая низкая точка под площадкой: на склоне площадка не повиснет в воздухе.
     const grounds = await sampleMinHeights(
-      landmarks.map((l) => [l.position]),
+      landmarks.map((l) => [l.position, ...(landmarkClearance(l, PLATFORM.radius)[0] ?? [])]),
       terrainProvider,
     );
     const instances: GeometryInstance[] = [];
@@ -127,13 +130,13 @@ export class LandmarksLayer {
 
       add(
         new CylinderGeometry({
-          length: PLATFORM.height,
+          length: PLATFORM.height + PLATFORM_SKIRT,
           topRadius: PLATFORM.radius,
           bottomRadius: PLATFORM.radius,
           slices: 32,
           vertexFormat: VERTEX_FORMAT,
         }),
-        place([0, 0, PLATFORM.height / 2]),
+        place([0, 0, (PLATFORM.height - PLATFORM_SKIRT) / 2]),
         GRANITE_LIGHT,
       );
       add(

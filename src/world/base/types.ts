@@ -12,11 +12,21 @@ export interface BaseBuildingProperties {
   name?: string;
   address?: string;
   levels?: number;
-  /** Высота верха здания над землёй, м. */
+  /** Высота верха здания над землёй (вместе с крышей), м. */
   height: number;
   /** Высота низа (для навесов и частей на опорах), м. */
   minHeight: number;
   heightSource: HeightSource;
+  /** Форма крыши из OSM (roof:shape); нет — плоская или по правилу для старой застройки. */
+  roofShape?: 'gabled' | 'hipped' | 'pyramidal' | 'skillion' | 'dome' | 'onion';
+  /** Высота крыши, м (входит в height). */
+  roofHeight?: number;
+  /** Конёк поперёк длинной стороны (roof:orientation=across). */
+  roofOrientation?: 'across';
+  roofColour?: string;
+  /** Цвет фасада (building:colour) и материал стен (building:material) из OSM. */
+  colour?: string;
+  material?: string;
 }
 
 export type Ring = [number, number][];

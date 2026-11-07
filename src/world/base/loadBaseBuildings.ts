@@ -1,4 +1,4 @@
-import { baseBuildingsUrl, type Territory } from '../../config/territory';
+import { baseBuildingsUrl, territoryDataUrl, type Territory } from '../../config/territory';
 import type { BaseBuildingsCollection, BaseBuildingsStats } from './types';
 
 export async function loadBaseBuildings(territory: Territory): Promise<BaseBuildingsCollection> {
@@ -10,6 +10,17 @@ export async function loadBaseBuildings(territory: Territory): Promise<BaseBuild
     );
   }
   return (await response.json()) as BaseBuildingsCollection;
+}
+
+/** Части зданий (building:part); файла может не быть — тогда частей нет. */
+export async function loadBuildingParts(territory: Territory): Promise<BaseBuildingsCollection['features']> {
+  try {
+    const response = await fetch(territoryDataUrl(territory, 'building-parts.geojson'));
+    if (!response.ok) return [];
+    return ((await response.json()) as BaseBuildingsCollection).features;
+  } catch {
+    return [];
+  }
 }
 
 export function computeStats(collection: BaseBuildingsCollection): BaseBuildingsStats {

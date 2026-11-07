@@ -1,11 +1,9 @@
 import {
   BoundingSphere,
   Cartesian3,
-  Cartographic,
   Color,
   ColorGeometryInstanceAttribute,
   ComponentDatatype,
-  EllipsoidTerrainProvider,
   Geometry,
   GeometryAttribute,
   GeometryAttributes,
@@ -17,7 +15,6 @@ import {
   Primitive,
   PrimitiveType,
   ShadowMode,
-  type Globe,
   type Scene,
 } from 'cesium';
 import { createBuildingAppearance } from '../../cesium/buildingAppearance';
@@ -47,6 +44,8 @@ export class UserBuildingsLayer {
   constructor(
     private readonly scene: Scene,
     private readonly center: Cartesian3,
+    /** Высота земли (рельеф) в точке. */
+    private readonly heightAt: (lon: number, lat: number) => number = () => 0,
   ) {}
 
   render(placed: readonly UserBuilding[], preview?: UserBuilding): void {
@@ -92,7 +91,7 @@ export class UserBuildingsLayer {
   }
 
   private instancesFor({ id, spec, building }: UserBuilding): GeometryInstance[] {
-    const ground = groundHeight(this.scene.globe, building.footprint);
+    const ground = groundHeight(this.heightAt, building.footprint);
     const attributes = () => ({
       color: ColorGeometryInstanceAttribute.fromColor(Color.fromCssColorString(spec.facadeColor)),
       facade: new GeometryInstanceAttribute({
@@ -132,12 +131,9 @@ export class UserBuildingsLayer {
   }
 }
 
-/** Земля под зданием: минимум по вершинам (на плоском рельефе — 0). */
-function groundHeight(globe: Globe, footprint: readonly LonLat[]): number {
-  if (globe.terrainProvider instanceof EllipsoidTerrainProvider) return 0;
-  const heights = footprint
-    .map(([lon, lat]) => globe.getHeight(Cartographic.fromDegrees(lon, lat)))
-    .filter((h): h is number => h !== undefined);
+/** Земля под зданием: минимум по вершинам, чтобы на склоне дом не висел в воздухе. */
+function groundHeight(heightAt: (lon: number, lat: number) => number, footprint: readonly LonLat[]): number {
+  const heights = footprint.map(([lon, lat]) => heightAt(lon, lat)).filter(Number.isFinite);
   return heights.length ? Math.min(...heights) : 0;
 }
 

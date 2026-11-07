@@ -64,6 +64,10 @@ interface AppState {
   plot?: PlotAnalysis;
   /** Улица под ногами во время прогулки. */
   walkStreet?: string;
+  /** На прогулке курсор захвачен для обзора мышью. */
+  walkMouseLocked: boolean;
+  /** Открыта подсказка по управлению (при первом визите — сама). */
+  helpOpen: boolean;
   /** Открыт конструктор здания на текущем участке. */
   builder?: BuilderState;
   /** Размещённые здания пользователя (User World, пока — в памяти вкладки). */
@@ -90,6 +94,8 @@ interface AppState {
   setWalkStreet: (street: string | undefined) => void;
   setSoundOn: (on: boolean) => void;
   setGraphicsQuality: (quality: GraphicsQuality) => void;
+  setWalkMouseLocked: (locked: boolean) => void;
+  setHelpOpen: (open: boolean) => void;
 
   plotDrawingStarted: () => void;
   setPlotDraft: (points: LonLat[]) => void;
@@ -114,6 +120,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   userBuildings: [],
   soundOn: readPref('sound', ['on', 'off'], 'on') === 'on',
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
+  walkMouseLocked: false,
+  helpOpen: readPref('help', ['seen', 'new'] as const, 'new') !== 'seen',
 
   setStatus: (status, error) => set({ status, error }),
   setTerrain: (terrain) => set({ terrain }),
@@ -132,6 +140,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setGraphicsQuality: (graphicsQuality) => {
     writePref('graphics', graphicsQuality);
     set({ graphicsQuality });
+  },
+  setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),
+  setHelpOpen: (helpOpen) => {
+    if (!helpOpen) writePref('help', 'seen');
+    set({ helpOpen });
   },
 
   plotDrawingStarted: () =>

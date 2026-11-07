@@ -151,9 +151,13 @@ export function flyToArea(
   points: readonly [number, number][],
   expectedHeight = 30,
   sidebarShare = 0,
+  /** Высота земли под участком (рельеф), м. */
+  groundHeight = 0,
 ): void {
   if (!points.length) return;
-  const sphere = BoundingSphere.fromPoints(points.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat)));
+  const sphere = BoundingSphere.fromPoints(
+    points.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, groundHeight + expectedHeight / 2)),
+  );
   const radius = Math.max(sphere.radius, 25) + expectedHeight;
   const range = radius * 2.6;
   viewer.camera.flyToBoundingSphere(new BoundingSphere(sphere.center, radius), {
@@ -169,11 +173,11 @@ export function flyToArea(
   });
 }
 
-/** Наклонный вид на территорию с юго-запада. */
-export function flyToTerritory(viewer: Viewer, territory: Territory, duration = 1.5): void {
+/** Наклонный вид на территорию с юго-запада; groundHeight — высота земли в центре (рельеф). */
+export function flyToTerritory(viewer: Viewer, territory: Territory, duration = 1.5, groundHeight = 0): void {
   const { south, west, north, east } = territory.bbox;
-  const center = Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2);
-  const corner = Cartesian3.fromDegrees(west, south);
+  const center = Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2, groundHeight);
+  const corner = Cartesian3.fromDegrees(west, south, groundHeight);
   const radius = Cartesian3.distance(center, corner);
 
   viewer.camera.flyToBoundingSphere(new BoundingSphere(center, radius), {

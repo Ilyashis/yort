@@ -1,8 +1,6 @@
 import {
   Cartesian3,
-  Cartographic,
   Color,
-  EllipsoidTerrainProvider,
   Math as CesiumMath,
   PerspectiveFrustum,
   type Viewer,
@@ -11,6 +9,7 @@ import type { LonLat } from '../world/user/plot';
 import type { Collider } from '../world/walk/collider';
 import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { StreetIndex } from '../world/walk/streets';
+import { WALK_KEYS, approach, axesFrom, isShift } from './controlsMath';
 import { isTypingTarget } from './keyboard';
 
 /** Высота глаз над землёй, м. */
@@ -18,21 +17,17 @@ const EYE_HEIGHT = 1.7;
 /** Скорость шага и бега, м/с (быстрее реальной — район большой). */
 const WALK_SPEED = 4;
 const RUN_SPEED = 12;
-/** Чувствительность обзора мышью, рад/пиксель. */
-const LOOK_SENSITIVITY = 0.004;
+/** Разгон и торможение: чем больше, тем резче, 1/с. */
+const ACCELERATION = 9;
+/** Поворот клавишами (Q/E, ←/→), рад/с. */
+const TURN_SPEED = 1.9;
+/** Чувствительность обзора: с захваченным курсором и при перетаскивании, рад/пиксель. */
+const LOOK_SENSITIVITY_LOCKED = 0.0022;
+const LOOK_SENSITIVITY_DRAG = 0.004;
 const MAX_PITCH = CesiumMath.toRadians(80);
 const STREET_UPDATE_MS = 300;
-
-const MOVE_KEYS: Record<string, [forward: number, right: number]> = {
-  KeyW: [1, 0],
-  ArrowUp: [1, 0],
-  KeyS: [-1, 0],
-  ArrowDown: [-1, 0],
-  KeyA: [0, -1],
-  ArrowLeft: [0, -1],
-  KeyD: [0, 1],
-  ArrowRight: [0, 1],
-};
+/** Esc, отпустивший курсор, не должен сразу завершать прогулку. */
+const ESC_AFTER_UNLOCK_MS = 400;
 
 export interface WalkCallbacks {
   /** Прогулка закончилась (Esc или exit()). */
@@ -41,6 +36,8 @@ export interface WalkCallbacks {
   onStreet: (name: string | undefined) => void;
   /** Пешеход сдвинулся на distance метров (для шагов). */
   onMove?: (distance: number, running: boolean, position: Vec2) => void;
+  /** Курсор захвачен для обзора мышью (или отпущен). */
+  onMouseLock?: (locked: boolean) => void;
 }
 
 interface SavedView {
@@ -55,18 +52,25 @@ interface SavedView {
 }
 
 /**
- * Прогулка от первого лица: WASD/стрелки — идти, Shift — бежать,
- * зажатая левая кнопка мыши — осмотреться, Esc — выйти.
+ * Прогулка от первого лица, управление как в играх:
+ *  - клик по сцене захватывает курсор — дальше просто ведите мышью/пальцем, кнопку держать не нужно;
+ *    Esc отпускает курсор, второй Esc — выход из прогулки;
+ *  - W/S — вперёд/назад, A/D — шаг вбок, Q/E или ←/→ — поворот (удобно с тачпадом), Shift — бег;
+ *  - плавный разгон и торможение.
+ * Если браузер не даёт захватить курсор — обзор перетаскиванием, как раньше.
  * Клавиши читаются по физическому коду (event.code), поэтому работают и в русской раскладке.
  */
 export class WalkController {
   private walking = false;
   private position: Vec2 = [0, 0];
+  private velocity: Vec2 = [0, 0];
   private heading = 0;
   private pitch = 0;
   private groundHeight = 0;
   private readonly pressed = new Set<string>();
   private dragging = false;
+  private locked = false;
+  private unlockedAt = 0;
   private lastPointer: [number, number] = [0, 0];
   private lastTick = 0;
   private lastStreetCheck = 0;
@@ -80,6 +84,8 @@ export class WalkController {
     private readonly collider: Collider,
     private readonly streets: StreetIndex,
     private readonly bareGroundColor: Color,
+    /** Высота земли в точке (рельеф); глаза — на EYE_HEIGHT выше. */
+    private readonly heightAt: (lon: number, lat: number) => number,
     private readonly callbacks: WalkCallbacks,
   ) {}
 
@@ -112,6 +118,7 @@ export class WalkController {
 
     this.walking = true;
     this.position = this.frame.toLocal(start);
+    this.velocity = [0, 0];
     this.heading = heading;
     this.pitch = CesiumMath.toRadians(-3);
     this.groundHeight = 0;
@@ -125,7 +132,9 @@ export class WalkController {
     this.viewer.canvas.addEventListener('pointerdown', this.onPointerDown);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
-    this.viewer.canvas.style.cursor = 'grab';
+    document.addEventListener('mousemove', this.onMouseMove);
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
+    this.viewer.canvas.style.cursor = 'crosshair';
     this.removeTick = scene.preUpdate.addEventListener(this.tick);
     this.tick();
   }
@@ -172,15 +181,20 @@ export class WalkController {
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    document.removeEventListener('mousemove', this.onMouseMove);
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    if (this.isLocked()) document.exitPointerLock();
+    this.setLocked(false);
     if (!this.viewer.isDestroyed()) {
       this.viewer.canvas.removeEventListener('pointerdown', this.onPointerDown);
       this.viewer.canvas.style.cursor = '';
     }
   }
 
+  /** Только базовая подложка-карта (слой 0): текстура покрытий района на рельефе остаётся. */
   private imageryLayers() {
     const layers = this.viewer.imageryLayers;
-    return Array.from({ length: layers.length }, (_, i) => layers.get(i));
+    return layers.length ? [layers.get(0)] : [];
   }
 
   private readonly tick = () => {
@@ -188,28 +202,31 @@ export class WalkController {
     const dt = Math.min((now - this.lastTick) / 1000, 0.1);
     this.lastTick = now;
 
-    let forward = 0;
-    let right = 0;
-    for (const code of this.pressed) {
-      const move = MOVE_KEYS[code];
-      if (move) {
-        forward += move[0];
-        right += move[1];
-      }
-    }
-    const length = Math.hypot(forward, right);
-    if (length > 0) {
-      const run = this.pressed.has('ShiftLeft') || this.pressed.has('ShiftRight');
-      const distance = (run ? RUN_SPEED : WALK_SPEED) * dt;
-      // heading Cesium: 0 — север, по часовой стрелке; x — восток, y — север.
-      const sin = Math.sin(this.heading);
-      const cos = Math.cos(this.heading);
-      const f = forward / length;
-      const r = right / length;
-      const delta: Vec2 = [(f * sin + r * cos) * distance, (f * cos - r * sin) * distance];
+    const axes = axesFrom(this.pressed, WALK_KEYS);
+    const run = isShift(this.pressed);
+    if (axes.turn) this.heading = CesiumMath.zeroToTwoPi(this.heading + axes.turn * TURN_SPEED * dt);
+
+    // Желаемая скорость в локальных метрах (x — восток, y — север); heading: 0 — север, по часовой.
+    const length = Math.hypot(axes.forward, axes.right);
+    const speed = length > 0 ? (run ? RUN_SPEED : WALK_SPEED) / length : 0;
+    const sin = Math.sin(this.heading);
+    const cos = Math.cos(this.heading);
+    const target: Vec2 = [
+      (axes.forward * sin + axes.right * cos) * speed,
+      (axes.forward * cos - axes.right * sin) * speed,
+    ];
+    this.velocity = [
+      approach(this.velocity[0], target[0], dt, ACCELERATION),
+      approach(this.velocity[1], target[1], dt, ACCELERATION),
+    ];
+    if (Math.hypot(...this.velocity) < 0.02) this.velocity = [0, 0];
+
+    if (this.velocity[0] || this.velocity[1]) {
       const before = this.position;
-      this.position = this.collider.move(this.position, delta);
+      this.position = this.collider.move(this.position, [this.velocity[0] * dt, this.velocity[1] * dt]);
       const moved = Math.hypot(this.position[0] - before[0], this.position[1] - before[1]);
+      // Упёрлись в стену — гасим скорость, чтобы не «прилипать» с разгоном.
+      if (moved < Math.hypot(...this.velocity) * dt * 0.2) this.velocity = [0, 0];
       if (moved > 0) this.callbacks.onMove?.(moved, run, this.position);
     }
 
@@ -231,19 +248,37 @@ export class WalkController {
   };
 
   private sampleGround(lon: number, lat: number): number {
-    const { globe } = this.viewer.scene;
-    if (globe.terrainProvider instanceof EllipsoidTerrainProvider) return 0;
-    return globe.getHeight(Cartographic.fromDegrees(lon, lat)) ?? this.groundHeight;
+    const height = this.heightAt(lon, lat);
+    return Number.isFinite(height) ? height : this.groundHeight;
+  }
+
+  private look(dx: number, dy: number, sensitivity: number): void {
+    this.heading = CesiumMath.zeroToTwoPi(this.heading + dx * sensitivity);
+    this.pitch = CesiumMath.clamp(this.pitch - dy * sensitivity, -MAX_PITCH, MAX_PITCH);
+  }
+
+  private isLocked(): boolean {
+    return !this.viewer.isDestroyed() && document.pointerLockElement === this.viewer.canvas;
+  }
+
+  private setLocked(locked: boolean): void {
+    if (locked === this.locked) return;
+    this.locked = locked;
+    if (!locked) this.unlockedAt = performance.now();
+    if (!this.viewer.isDestroyed()) this.viewer.canvas.style.cursor = locked ? 'none' : 'crosshair';
+    this.callbacks.onMouseLock?.(locked);
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (isTypingTarget(event.target)) return;
     if (event.code === 'Escape') {
       event.preventDefault();
-      this.exit();
+      // Первый Esc отпускает курсор (браузер делает это сам), второй — выход из прогулки.
+      if (this.isLocked()) document.exitPointerLock();
+      else if (performance.now() - this.unlockedAt > ESC_AFTER_UNLOCK_MS) this.exit();
       return;
     }
-    if (MOVE_KEYS[event.code] || event.code.startsWith('Shift')) {
+    if (WALK_KEYS[event.code] || event.code.startsWith('Shift')) {
       event.preventDefault();
       this.pressed.add(event.code);
     }
@@ -259,23 +294,37 @@ export class WalkController {
   };
 
   private readonly onPointerDown = (event: PointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || this.isLocked()) return;
+    // Пытаемся захватить курсор; не вышло — работает обзор перетаскиванием.
+    const canvas = this.viewer.canvas;
+    try {
+      const request = canvas.requestPointerLock() as unknown as Promise<void> | undefined;
+      request?.catch?.(() => undefined);
+    } catch {
+      // браузер не поддерживает захват курсора
+    }
     this.dragging = true;
     this.lastPointer = [event.clientX, event.clientY];
-    this.viewer.canvas.style.cursor = 'grabbing';
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    if (!this.dragging) return;
+    if (!this.dragging || this.isLocked()) return;
     const [x, y] = this.lastPointer;
     this.lastPointer = [event.clientX, event.clientY];
-    this.heading = CesiumMath.zeroToTwoPi(this.heading + (event.clientX - x) * LOOK_SENSITIVITY);
-    this.pitch = CesiumMath.clamp(this.pitch - (event.clientY - y) * LOOK_SENSITIVITY, -MAX_PITCH, MAX_PITCH);
+    this.look(event.clientX - x, event.clientY - y, LOOK_SENSITIVITY_DRAG);
   };
 
   private readonly onPointerUp = () => {
-    if (!this.dragging) return;
     this.dragging = false;
-    this.viewer.canvas.style.cursor = 'grab';
+  };
+
+  private readonly onMouseMove = (event: MouseEvent) => {
+    if (this.isLocked()) this.look(event.movementX, event.movementY, LOOK_SENSITIVITY_LOCKED);
+  };
+
+  private readonly onPointerLockChange = () => {
+    const locked = this.isLocked();
+    if (locked) this.dragging = false;
+    this.setLocked(locked);
   };
 }

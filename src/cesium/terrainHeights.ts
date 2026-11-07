@@ -1,9 +1,11 @@
 import { Cartographic, EllipsoidTerrainProvider, sampleTerrainMostDetailed, type TerrainProvider } from 'cesium';
 import type { LonLat } from '../world/user/plot';
+import { gridFor } from './terrain';
 
 /**
  * Высоты рельефа для групп точек: для каждой группы — минимум по её точкам
- * (чтобы объекты на склонах не висели в воздухе). На плоском рельефе — нули.
+ * (чтобы объекты на склонах не висели в воздухе). На плоском рельефе — нули,
+ * на своём рельефе — мгновенно по сетке высот, на Cesium World Terrain — запросом тайлов.
  */
 export async function sampleMinHeights(
   groups: readonly (readonly LonLat[])[],
@@ -11,6 +13,13 @@ export async function sampleMinHeights(
 ): Promise<number[]> {
   const result = groups.map(() => 0);
   if (terrainProvider instanceof EllipsoidTerrainProvider) return result;
+
+  const grid = gridFor(terrainProvider);
+  if (grid) {
+    return groups.map((group) =>
+      group.length ? Math.min(...group.map(([lon, lat]) => grid.heightAt(lon, lat))) : 0,
+    );
+  }
 
   const owners: number[] = [];
   const points: Cartographic[] = [];

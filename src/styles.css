@@ -599,6 +599,67 @@ kbd {
   gap: 8px;
 }
 
+.round-button-text {
+  font: 700 17px/1 inherit;
+}
+
+/* --- подсказка по управлению ---------------------------------------------------- */
+
+.help-panel {
+  position: absolute;
+  z-index: 16;
+  right: 16px;
+  bottom: 88px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+}
+
+.walk-hud ~ .help-panel {
+  bottom: 162px;
+}
+
+.help-panel h2 {
+  padding-right: 24px;
+}
+
+.help-keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 12px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.help-keys dt {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.help-keys dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Прицел в центре экрана, пока курсор захвачен на прогулке. */
+.crosshair {
+  position: absolute;
+  z-index: 10;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* На прогулке подсказка внизу по центру — кнопки поднимаем над ней. */
+.walk-hud ~ .corner-controls {
+  bottom: 110px;
+}
+
 .round-button {
   display: grid;
   place-items: center;

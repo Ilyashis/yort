@@ -4,10 +4,12 @@ import { useAppStore } from '../store/useAppStore';
 export function WalkHud() {
   const street = useAppStore((s) => s.walkStreet);
   const controls = useAppStore((s) => s.walkControls);
+  const locked = useAppStore((s) => s.walkMouseLocked);
 
   return (
     <>
       {street && <div className="walk-street">{street}</div>}
+      {locked && <div className="crosshair" aria-hidden="true" />}
       <div className="panel walk-hud">
         <div className="walk-keys">
           <span>
@@ -17,12 +19,16 @@ export function WalkHud() {
             <kbd>D</kbd> идти
           </span>
           <span>
-            <kbd>Shift</kbd> бежать
+            <kbd>Q</kbd>
+            <kbd>E</kbd> поворот
           </span>
-          <span>зажмите мышь — осмотреться</span>
+          <span>
+            <kbd>Shift</kbd> бег
+          </span>
+          <span>{locked ? 'Esc — отпустить курсор' : 'клик по сцене — смотреть мышью'}</span>
         </div>
         <button type="button" className="button" onClick={() => controls?.exit()}>
-          Выйти <kbd>Esc</kbd>
+          Выйти {locked ? '' : <kbd>Esc</kbd>}
         </button>
       </div>
     </>

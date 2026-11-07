@@ -125,8 +125,9 @@ void main()
     float seed = v_style.z;
 
     if (abs(n.z) > 0.5) {
-        // Крыша и днище: темнее и холоднее фасада.
-        diffuse = mix(diffuse, vec3(0.38, 0.40, 0.43), 0.65);
+        // Плоская крыша и днище: темнее и холоднее фасада. Скатные крыши и купола
+        // приходят уже со своим цветом (facadeStyle.w = 1) — их не трогаем.
+        if (v_style.w < 0.5) diffuse = mix(diffuse, vec3(0.38, 0.40, 0.43), 0.65);
     } else {
         float h = v_local.z - ground;
 
@@ -141,6 +142,7 @@ void main()
             bool shopFloor = hasShops && h < floorHeight;
 
             // Тип окон: шаг по горизонтали и границы стекла (низ, верх, лево, право) в долях ячейки.
+            // Шаги и ширины продублированы в windowGrid (facades.ts) — по ним стоят двери и балконы.
             float bay = 3.0;
             vec4 win = vec4(0.30, 0.76, 0.22, 0.78);
             if (variant > 1.5) { bay = 3.4; win = vec4(0.36, 0.72, 0.10, 0.90); }      // ленточные

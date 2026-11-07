@@ -40,7 +40,7 @@ export function InfoPanel() {
           </div>
           <div>
             <dt>Рельеф</dt>
-            <dd>{terrain === 'world' ? 'есть' : 'плоский'}</dd>
+            <dd>{terrain === 'flat' || !terrain ? 'плоский' : 'есть'}</dd>
           </div>
         </dl>
       )}
@@ -65,8 +65,8 @@ export function InfoPanel() {
       )}
 
       <p className="hint muted">
-        Перетаскивание — сдвиг, колесо — масштаб, Ctrl + перетаскивание — наклон и поворот. Клик по
-        зданию — подробности.
+        Левая кнопка — двигать, правая — повернуть и наклонить, колесо — масштаб, WASD — лететь над
+        городом. Клик по зданию — подробности. Все клавиши — кнопка «?» справа внизу.
       </p>
 
       <button type="button" className="button" onClick={() => flyHome?.()} disabled={!flyHome}>
@@ -76,7 +76,8 @@ export function InfoPanel() {
       {stats?.osmTimestamp && (
         <p className="footnote muted">
           Данные OSM на {new Date(stats.osmTimestamp).toLocaleDateString('ru-RU')}
-          {terrain === 'flat' && ' · рельеф включается токеном Cesium ion'}
+          {terrain === 'flat' && ' · рельеф: npm run data:fetch:terrain'}
+          {terrain === 'dem' && ' · рельеф Copernicus DEM'}
         </p>
       )}
     </aside>

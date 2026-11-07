@@ -2,6 +2,7 @@ import { BuilderPanel } from './components/BuilderPanel';
 import { BuildingCard } from './components/BuildingCard';
 import { CityViewer } from './components/CityViewer';
 import { CornerControls } from './components/CornerControls';
+import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
 import { PlotPanel } from './components/PlotPanel';
 import { WalkHud } from './components/WalkHud';
@@ -41,6 +42,7 @@ export function App() {
           <BuildingCard />
         </>
       )}
+      <HelpPanel />
       <CornerControls />
     </main>
   );

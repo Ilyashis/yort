@@ -27,9 +27,20 @@ export function CornerControls() {
   const quality = useAppStore((s) => s.graphicsQuality);
   const setSoundOn = useAppStore((s) => s.setSoundOn);
   const setQuality = useAppStore((s) => s.setGraphicsQuality);
+  const helpOpen = useAppStore((s) => s.helpOpen);
+  const setHelpOpen = useAppStore((s) => s.setHelpOpen);
 
   return (
     <div className="corner-controls">
+      <button
+        type="button"
+        className={`round-button round-button-text ${helpOpen ? 'on' : ''}`}
+        onClick={() => setHelpOpen(!helpOpen)}
+        aria-pressed={helpOpen}
+        title="Управление"
+      >
+        ?
+      </button>
       <button
         type="button"
         className={`round-button ${soundOn ? 'on' : ''}`}

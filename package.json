@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "data:fetch": "npm run data:fetch:buildings && npm run data:fetch:environment",
+    "data:fetch": "npm run data:fetch:buildings && npm run data:fetch:environment && npm run data:fetch:terrain",
+    "data:fetch:terrain": "node scripts/fetch-dem.mjs",
     "data:fetch:buildings": "node scripts/fetch-osm-buildings.mjs",
     "data:fetch:environment": "node scripts/fetch-osm-environment.mjs"
   },
@@ -29,6 +30,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.2.1",
+    "geotiff": "^3.0.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",
     "vitest": "^4.1.12"
