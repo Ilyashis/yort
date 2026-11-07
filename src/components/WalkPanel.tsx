@@ -23,7 +23,7 @@ export function WalkPanel() {
   return (
     <section className="panel walk-panel">
       <h2>Прогулка</h2>
-      <p className="muted">Опуститесь на улицу и пройдитесь по центру Уфы пешком.</p>
+      <p className="muted">Опуститесь на улицу и пройдитесь пешком.</p>
       <button
         type="button"
         className="button button-primary"

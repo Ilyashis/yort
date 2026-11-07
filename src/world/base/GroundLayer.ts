@@ -36,6 +36,8 @@ export const GROUND_COLORS: Record<GroundKind, string> = {
 
 /** Цвет «пустой» земли (дворы, пустыри) — в режиме прогулки вместо карты. */
 export const BARE_GROUND_COLOR = '#c9c2b0';
+/** В деревне между домами — не пустыри, а трава: выгоревшая, светлее леса. */
+export const VILLAGE_GROUND_COLOR = '#b2b27c';
 
 /**
  * На плоском рельефе каждый слой лежит на своей высоте: газон ниже тротуара,
@@ -64,7 +66,12 @@ export class GroundLayer {
     private readonly bounds: Bounds | undefined,
   ) {}
 
-  static create(features: readonly GroundFeature[], terrain: TerrainKind): GroundLayer {
+  static create(
+    features: readonly GroundFeature[],
+    terrain: TerrainKind,
+    /** Цвет земли там, где в OSM ничего нет. */
+    bareColor = BARE_GROUND_COLOR,
+  ): GroundLayer {
     const byKind = new Map<GroundKind, Ring[][]>();
     for (const feature of features) {
       const list = byKind.get(feature.properties.kind) ?? [];
@@ -84,8 +91,9 @@ export class GroundLayer {
           }),
         ]
       : [];
-    const bounds = boundsOf(features);
-    return new GroundLayer(primitives, bounds ? drawLandUse(byKind, bounds) : undefined, bounds);
+    // Разметка — отдельные примитивы, в текстуру не входит; по ней границы не считаем.
+    const bounds = boundsOf(features.filter((f) => f.properties.kind !== 'marking'));
+    return new GroundLayer(primitives, bounds ? drawLandUse(byKind, bounds, bareColor) : undefined, bounds);
   }
 
   addTo(viewer: Viewer): void {
@@ -173,7 +181,7 @@ function boundsOf(features: readonly GroundFeature[]): Bounds | undefined {
 }
 
 /** Покрытия района в текстуру (равнопромежуточная проекция — как у тайлов Cesium). */
-function drawLandUse(byKind: Map<GroundKind, Ring[][]>, bounds: Bounds): HTMLCanvasElement {
+function drawLandUse(byKind: Map<GroundKind, Ring[][]>, bounds: Bounds, bareColor: string): HTMLCanvasElement {
   const { west, south, east, north } = bounds;
   const mPerDegLat = 111_320;
   const mPerDegLon = mPerDegLat * Math.cos((((south + north) / 2) * Math.PI) / 180);
@@ -190,7 +198,7 @@ function drawLandUse(byKind: Map<GroundKind, Ring[][]>, bounds: Bounds): HTMLCan
   const x = (lon: number) => ((lon - west) / (east - west)) * canvas.width;
   const y = (lat: number) => ((north - lat) / (north - south)) * canvas.height;
 
-  ctx.fillStyle = BARE_GROUND_COLOR;
+  ctx.fillStyle = bareColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   for (const kind of ORDER) {
     if (kind === 'marking') continue;

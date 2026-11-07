@@ -38,6 +38,16 @@ const BLOB = new EllipsoidGeometry({
   vertexFormat: VERTEX_FORMAT,
 });
 const CONE = new CylinderGeometry({ length: 1, topRadius: 0, bottomRadius: 1, slices: 9, vertexFormat: VERTEX_FORMAT });
+// Деревья леса — по одной грубой кроне без ствола: их десятки тысяч, вблизи их почти не разглядывают.
+const FOREST_CROWN = new EllipsoidGeometry({
+  radii: new Cartesian3(1, 1, 1),
+  stackPartitions: 5,
+  slicePartitions: 7,
+  vertexFormat: VERTEX_FORMAT,
+});
+const FOREST_CONE = new CylinderGeometry({ length: 1, topRadius: 0, bottomRadius: 1, slices: 7, vertexFormat: VERTEX_FORMAT });
+/** В лесах Южного Урала хвойных больше, чем в городских парках. */
+const FOREST_CONIFER_SHARE = 0.3;
 
 /** Лиственная крона: главное «облако» и несколько боковых (x, y, z, радиус) в долях высоты. */
 const LEAF_BLOBS: [number, number, number, number][] = [
@@ -62,7 +72,13 @@ export class TreesLayer {
     readonly visibility: InstanceVisibility,
   ) {}
 
-  static async create(trees: readonly TreePoint[], terrainProvider: TerrainProvider): Promise<TreesLayer> {
+  static async create(
+    parkTrees: readonly TreePoint[],
+    terrainProvider: TerrainProvider,
+    /** Деревья лесных массивов — упрощённые. */
+    forest: readonly TreePoint[] = [],
+  ): Promise<TreesLayer> {
+    const trees = [...parkTrees, ...forest];
     const grounds = await sampleMinHeights(
       trees.map(([lon, lat]) => [[lon, lat]]),
       terrainProvider,
@@ -109,6 +125,18 @@ export class TreesLayer {
           scale,
           new Matrix4(),
         );
+
+      if (i >= parkTrees.length) {
+        const forestConifer = random01(seed + 3) < FOREST_CONIFER_SHARE;
+        if (forestConifer) {
+          const color = NEEDLE_COLORS[Math.floor(r * NEEDLE_COLORS.length)] ?? NEEDLE_COLORS[0]!;
+          add(FOREST_CONE, at(0, 0, 0.55, new Cartesian3(0.2, 0.2, 0.9)), color);
+        } else {
+          const color = LEAF_COLORS[Math.floor(random01(seed + 20) * LEAF_COLORS.length)] ?? LEAF_COLORS[0]!;
+          add(FOREST_CROWN, at(0, 0, 0.52, new Cartesian3(0.3, 0.3, 0.44)), color);
+        }
+        return;
+      }
 
       add(TRUNK, at(0, 0, 0.21, new Cartesian3(1, 1, 1)), TRUNK_COLOR);
 

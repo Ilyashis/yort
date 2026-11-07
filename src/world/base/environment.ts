@@ -17,7 +17,8 @@ export type GroundKind =
 
 export interface GroundFeature {
   type: 'Feature';
-  properties: { kind: GroundKind; name?: string };
+  /** cover у зелёного: лес или луг (нет — газон, парк). */
+  properties: { kind: GroundKind; name?: string; cover?: 'wood' | 'meadow' };
   geometry:
     | { type: 'Polygon'; coordinates: Ring[] }
     | { type: 'MultiPolygon'; coordinates: Ring[][] };

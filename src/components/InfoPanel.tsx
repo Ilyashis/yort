@@ -1,10 +1,13 @@
-import { territory } from '../config/territory';
+import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
 import { BUILDING_COLORS } from '../world/base/BaseBuildingsLayer';
 
 const percent = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
 
 export function InfoPanel() {
+  const territoryId = useAppStore((s) => s.territoryId);
+  const setTerritory = useAppStore((s) => s.setTerritory);
+  const territory = findTerritory(territoryId) ?? defaultTerritory;
   const status = useAppStore((s) => s.status);
   const error = useAppStore((s) => s.error);
   const stats = useAppStore((s) => s.stats);
@@ -15,13 +18,31 @@ export function InfoPanel() {
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
 
+  const choosePlace = (id: string) => {
+    const own = useAppStore.getState().userBuildings.length;
+    const target = findTerritory(id);
+    if (!target) return;
+    // Постройки пока живут только в памяти вкладки — предупреждаем, прежде чем их потерять.
+    if (own && !window.confirm(`Ваши постройки (${own}) пропадут. Перейти в «${target.shortName}»?`)) return;
+    setTerritory(id);
+  };
+
   return (
     <aside className="panel info-panel">
       <header>
         <div className="brand">
           AI UFA <span className="badge">прототип</span>
         </div>
-        <h1>{territory.name}</h1>
+        <label className="place-picker">
+          <span className="place-picker-label">Населённый пункт</span>
+          <select value={territory.id} onChange={(event) => choosePlace(event.target.value)}>
+            {territories.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <p className="muted">{territory.description}</p>
       </header>
 

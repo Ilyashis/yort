@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { GraphicsQuality } from '../cesium/createViewer';
+import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../cesium/terrain';
 import { readPref, writePref } from '../utils/prefs';
 import type { BuildingColorMode } from '../world/base/BaseBuildingsLayer';
@@ -50,7 +51,32 @@ export interface WalkControls {
   exit: () => void;
 }
 
+/** Населённый пункт при открытии: из ссылки (?place=…), иначе последний выбранный. */
+function initialTerritoryId(): string {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('place');
+    if (findTerritory(fromUrl)) return fromUrl!;
+  } catch {
+    // Нет адресной строки (тесты) — берём из настроек.
+  }
+  return readPref('place', territories.map((t) => t.id), defaultTerritory.id);
+}
+
+/** Ссылка на текущий населённый пункт — её можно отправить. */
+function writeTerritoryToUrl(id: string): void {
+  try {
+    const url = new URL(window.location.href);
+    if (id === defaultTerritory.id) url.searchParams.delete('place');
+    else url.searchParams.set('place', id);
+    window.history.replaceState(null, '', url);
+  } catch {
+    // Не критично: просто не будет ссылки.
+  }
+}
+
 interface AppState {
+  /** Выбранный населённый пункт (id из territories.json). */
+  territoryId: string;
   status: LoadStatus;
   error?: string;
   terrain?: TerrainKind;
@@ -82,6 +108,8 @@ interface AppState {
   plotControls?: PlotControls;
   walkControls?: WalkControls;
 
+  /** Переключает населённый пункт: сцена пересоздаётся, постройки пользователя сбрасываются. */
+  setTerritory: (id: string) => void;
   setStatus: (status: LoadStatus, error?: string) => void;
   setTerrain: (terrain: TerrainKind) => void;
   setStats: (stats: BaseBuildingsStats) => void;
@@ -113,6 +141,7 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
+  territoryId: initialTerritoryId(),
   status: 'loading',
   buildingColorMode: 'city',
   mode: 'explore',
@@ -123,6 +152,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
   walkMouseLocked: false,
   helpOpen: readPref('help', ['seen', 'new'] as const, 'new') !== 'seen',
 
+  setTerritory: (territoryId) => {
+    if (territoryId === get().territoryId || !findTerritory(territoryId)) return;
+    writePref('place', territoryId);
+    writeTerritoryToUrl(territoryId);
+    set({
+      territoryId,
+      status: 'loading',
+      error: undefined,
+      stats: undefined,
+      terrain: undefined,
+      selectedBuilding: undefined,
+      mode: 'explore',
+      plotDraft: [],
+      plot: undefined,
+      builder: undefined,
+      userBuildings: [],
+      walkStreet: undefined,
+    });
+  },
   setStatus: (status, error) => set({ status, error }),
   setTerrain: (terrain) => set({ terrain }),
   setStats: (stats) => set({ stats }),

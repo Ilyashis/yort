@@ -10,6 +10,7 @@
 import {
   along,
   bbox,
+  bboxClip,
   bboxPolygon,
   buffer,
   featureCollection,
@@ -55,6 +56,16 @@ const GREEN_LANDUSE = new Set(['grass', 'recreation_ground', 'village_green', 'm
 const GREEN_NATURAL = new Set(['wood', 'scrub', 'grassland']);
 
 /**
+ * Что растёт на «зелёном»: лес (в браузере засаживается лесом) или луг (деревьев нет).
+ * Без отметки — газоны и парки.
+ */
+function coverOf(tags) {
+  if (tags.landuse === 'forest' || tags.natural === 'wood' || tags.natural === 'scrub') return 'wood';
+  if (tags.landuse === 'meadow' || tags.natural === 'grassland') return 'meadow';
+  return undefined;
+}
+
+/**
  * Большие объекты (река Белая, лесные массивы) тянутся далеко за район —
  * обрезаем их по границе с запасом, чтобы файл оставался маленьким.
  */
@@ -92,6 +103,17 @@ function clip(geometry) {
   return clipped ? roundGeometry(clipped.geometry) : undefined;
 }
 
+/**
+ * Оси дорог — тоже по границе района: трасса через деревню тянется на десятки километров,
+ * и без обрезки по ней встали бы фонари и разметка далеко за пределами района.
+ * Для линий bboxClip годится (беда с «петлями» — только у полигонов).
+ */
+function clipLine(coordinates) {
+  const clipped = bboxClip(lineString(coordinates), clipBox).geometry;
+  const parts = clipped.type === 'LineString' ? [clipped.coordinates] : clipped.coordinates;
+  return parts.filter((part) => part.length >= 2).map((part) => part.map(roundCoord));
+}
+
 function bufferLine(coordinates, width) {
   const result = buffer(lineString(coordinates), width / 2, { units: 'meters', steps: 4 });
   return result ? clip(result.geometry) : undefined;
@@ -122,10 +144,11 @@ const { json, url } = await fetchOverpass(query);
 const features = [];
 const trees = [];
 const streets = { roads: [], paths: [], crossings: [], lamps: [], benches: [] };
-const add = (kind, geometry, name) => {
+const add = (kind, geometry, name, cover) => {
   if (!geometry) return;
   const properties = { kind };
   if (name) properties.name = name;
+  if (cover) properties.cover = cover;
   features.push({ type: 'Feature', properties, geometry });
 };
 
@@ -169,26 +192,32 @@ for (const el of json.elements) {
     if (ROAD_WIDTH[tags.highway]) {
       const width = explicitWidth ?? (lanes ? lanes * LANE_WIDTH : ROAD_WIDTH[tags.highway]);
       const sidewalk = tags.sidewalk ?? '';
-      if (WITH_SIDEWALK.has(tags.highway) && !['no', 'none', 'separate'].includes(sidewalk)) {
+      // В деревне тротуаров вдоль улиц нет — дорисовываем их только в городе.
+      const city = territory.kind !== 'village';
+      if (city && WITH_SIDEWALK.has(tags.highway) && !['no', 'none', 'separate'].includes(sidewalk)) {
         add('sidewalk', bufferLine(line.coordinates, width + 2 * SIDEWALK_WIDTH));
       }
       add('road', bufferLine(line.coordinates, width), tags.name);
-      const road = { highway: tags.highway, width: round1(width), coords: line.coordinates };
-      if (tags.name) road.name = tags.name;
-      if (tags.oneway === 'yes') road.oneway = true;
-      if (lanes) road.lanes = lanes;
-      streets.roads.push(road);
+      for (const coords of clipLine(line.coordinates)) {
+        const road = { highway: tags.highway, width: round1(width), coords };
+        if (tags.name) road.name = tags.name;
+        if (tags.oneway === 'yes') road.oneway = true;
+        if (lanes) road.lanes = lanes;
+        streets.roads.push(road);
+      }
     } else if (PATH_WIDTH[tags.highway]) {
       const width = explicitWidth ?? PATH_WIDTH[tags.highway];
       if (tags.footway === 'crossing' || tags.cycleway === 'crossing') {
         // Переход лежит на проезжей части — рисуем его зеброй, а не полосой дорожки.
-        streets.crossings.push(line.coordinates);
+        streets.crossings.push(...clipLine(line.coordinates));
         continue;
       }
       const kind = tags.highway === 'pedestrian' ? 'paving' : 'footway';
       add(kind, bufferLine(line.coordinates, width), tags.name);
       if (tags.highway !== 'steps') {
-        streets.paths.push({ highway: tags.highway, width: round1(width), coords: line.coordinates });
+        for (const coords of clipLine(line.coordinates)) {
+          streets.paths.push({ highway: tags.highway, width: round1(width), coords });
+        }
       }
     }
     continue;
@@ -198,7 +227,7 @@ for (const el of json.elements) {
   if (!kind) continue;
   const geometry =
     el.type === 'way' ? wayToPolygon(el) : el.type === 'relation' ? relationToGeometry(el) : undefined;
-  add(kind, clip(geometry), tags.name);
+  add(kind, clip(geometry), tags.name, kind === 'green' ? coverOf(tags) : undefined);
 }
 
 const metadata = baseMetadata(json, url);
@@ -207,9 +236,12 @@ const treesFile = writeTerritoryFile('trees.json', { metadata, trees });
 const streetsFile = writeTerritoryFile('streets.json', { metadata, ...streets });
 
 const byKind = {};
-for (const f of features) byKind[f.properties.kind] = (byKind[f.properties.kind] ?? 0) + 1;
+for (const f of features) {
+  const key = f.properties.cover ? `${f.properties.kind}/${f.properties.cover}` : f.properties.kind;
+  byKind[key] = (byKind[key] ?? 0) + 1;
+}
 console.log(`\n✓ Поверхностей: ${features.length}`);
-for (const [kind, count] of Object.entries(byKind)) console.log(`  ${kind.padEnd(9)} ${count}`);
+for (const [kind, count] of Object.entries(byKind)) console.log(`  ${kind.padEnd(13)} ${count}`);
 console.log(`✓ Деревьев: ${trees.length}`);
 console.log(
   `✓ Улицы: осей дорог ${streets.roads.length}, дорожек ${streets.paths.length}, переходов ${streets.crossings.length}, ` +

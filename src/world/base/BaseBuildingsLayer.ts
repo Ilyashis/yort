@@ -68,6 +68,12 @@ const MATERIAL_PALETTES: Record<string, Color[]> = {
 /** Цвета скатных крыш (крашеный металл) и куполов. */
 const ROOF_PALETTE = palette(['#7c4a3a', '#4f6b5a', '#6d7378', '#8a5a44', '#5d6f7a', '#5b5f63']);
 const DOME_PALETTE = palette(['#c9a14a', '#4f8a72', '#5f7f99']);
+/** Деревня: бревенчатые и обшитые доской дома, крашеная обшивка, белый силикатный и красный кирпич. */
+const VILLAGE_FACADE_PALETTE = palette([
+  '#8a6a4a', '#a07a52', '#c4ad86', '#7fa2b6', '#9fb48e', '#e6dcc4', '#dcd7cb', '#b0644b', '#cdb874', '#6f8ea4',
+]);
+/** Деревня: профнастил и железо — зелёный, синий, вишнёвый, серый, коричневый. */
+const VILLAGE_ROOF_PALETTE = palette(['#3f6b4f', '#3d5f7f', '#843a2f', '#6b7176', '#5b4636', '#7d8a8e']);
 
 const UTILITY_TYPES = new Set(['garage', 'garages', 'shed', 'service', 'industrial', 'warehouse', 'transformer_tower', 'roof', 'construction']);
 const TEMPLE_TYPES = new Set(['church', 'cathedral', 'chapel', 'mosque', 'synagogue', 'temple']);
@@ -130,6 +136,8 @@ export class BaseBuildingsLayer {
     streetFront: ReadonlySet<string>,
     parts: PartsAssignment,
     frame: LocalFrame,
+    /** Деревня: почти все дома под скатной крышей, деревенские цвета стен и кровли. */
+    private readonly village: boolean,
   ) {
     const walls: GeometryInstance[] = [];
     const roofs: GeometryInstance[] = [];
@@ -138,8 +146,8 @@ export class BaseBuildingsLayer {
     const addBuilding = (owner: BaseBuildingProperties, elements: BaseBuildingFeature[], ground: number, simple: boolean) => {
       this.buildings.set(owner.id, owner);
       const refs: InstanceRef[] = [];
-      const style = facadeStyle(owner, streetFront.has(owner.id));
-      const color = facadeColor(owner);
+      const style = facadeStyle(owner, streetFront.has(owner.id), village);
+      const color = facadeColor(owner, village);
       let n = 0;
 
       for (const element of elements) {
@@ -147,7 +155,7 @@ export class BaseBuildingsLayer {
         for (const rings of polygonsOf(element)) {
           const outer = rings[0] ?? [];
           const localRing = openRing(outer.map(frame.toLocal));
-          const roof = planRoof(props, localRing, rings.length > 1);
+          const roof = planRoof(props, localRing, rings.length > 1, village);
           const wallTop = roof.osm ? props.height - roof.height : props.height;
           const floorH = floorHeight(props, wallTop);
 
@@ -172,7 +180,7 @@ export class BaseBuildingsLayer {
           );
 
           if (roof.triangles) {
-            const roofColor = roofColorFor(props, roof.shape);
+            const roofColor = roofColorFor(props, roof.shape, village);
             const base = ground + wallTop;
             const triangles = roof.triangles.map(
               (t) => t.map(([x, y, z]) => Cartesian3.fromDegrees(...frame.toLonLat([x, y]), base + z)) as [Cartesian3, Cartesian3, Cartesian3],
@@ -243,12 +251,13 @@ export class BaseBuildingsLayer {
     /** Здания вдоль улиц — с витринами на первом этаже. */
     streetFront: ReadonlySet<string> = new Set(),
     parts: PartsAssignment = { byBuilding: new Map(), orphans: [] },
+    village = false,
   ): Promise<BaseBuildingsLayer> {
     const outlines = [...collection.features, ...parts.orphans].map((f) =>
       polygonsOf(f).flatMap(([outer]) => outer ?? []),
     );
     const groundHeights = await sampleMinHeights(outlines, terrainProvider);
-    return new BaseBuildingsLayer(scene, collection, groundHeights, center, streetFront, parts, frame);
+    return new BaseBuildingsLayer(scene, collection, groundHeights, center, streetFront, parts, frame, village);
   }
 
   /** Формы зданий для слоя деталей. */
@@ -315,7 +324,7 @@ export class BaseBuildingsLayer {
     if (buildingId === this.selectedId) return selected;
     if (this.conflicts.has(buildingId)) return conflict;
     if (this.colorMode === 'data') return props.heightSource === 'default' ? estimated : known;
-    return facadeColor(props);
+    return facadeColor(props, this.village);
   }
 
   private paint(buildingId: string): void {
@@ -353,7 +362,7 @@ interface RoofPlan {
  * Крыша здания: форма из OSM, а для невысоких почти прямоугольных домов старой застройки —
  * скатная по умолчанию (вальмовая или двускатная). Не строится — плоская.
  */
-function planRoof(props: BaseBuildingProperties, localRing: Vec2[], hasHoles: boolean): RoofPlan {
+function planRoof(props: BaseBuildingProperties, localRing: Vec2[], hasHoles: boolean, village: boolean): RoofPlan {
   const flat: RoofPlan = { shape: 'flat', height: 0, osm: false, triangles: undefined };
   if (hasHoles || localRing.length < 3) return flat;
   const box = orientedBox(localRing);
@@ -368,11 +377,12 @@ function planRoof(props: BaseBuildingProperties, localRing: Vec2[], hasHoles: bo
       PITCHED_BY_DEFAULT.has(props.building) &&
       levels <= 3 &&
       props.minHeight === 0 &&
-      area >= 40 &&
+      area >= (village ? 8 : 40) &&
       area <= 1500 &&
       rectangularity(localRing, box) >= 0.6;
-    if (!eligible || pick < 3) return flat;
-    shape = pick < 7 ? 'hipped' : 'gabled';
+    // В городе плоская крыша у трети малоэтажных домов, в деревне — почти ни у кого.
+    if (!eligible || pick < (village ? 1 : 3)) return flat;
+    shape = pick < (village ? 5 : 7) ? 'hipped' : 'gabled';
   }
 
   const height = props.roofHeight ?? defaultRoofHeight(shape, box, area);
@@ -385,20 +395,21 @@ function planRoof(props: BaseBuildingProperties, localRing: Vec2[], hasHoles: bo
   return triangles ? { shape, height, osm, triangles } : flat;
 }
 
-function roofColorFor(props: BaseBuildingProperties, shape: RoofShape): Color {
+function roofColorFor(props: BaseBuildingProperties, shape: RoofShape, village: boolean): Color {
   const own = props.roofColour ? Color.fromCssColorString(props.roofColour) : undefined;
   if (own) return own;
-  const options = shape === 'dome' || shape === 'onion' ? DOME_PALETTE : ROOF_PALETTE;
+  const options = shape === 'dome' || shape === 'onion' ? DOME_PALETTE : village ? VILLAGE_ROOF_PALETTE : ROOF_PALETTE;
   return options[hashString(`${props.id}:roof`) % options.length]!;
 }
 
 /** Цвет фасада: из OSM (building:colour), по материалу или стабильный по хешу id с учётом типа. */
-export function facadeColor(props: BaseBuildingProperties): Color {
+export function facadeColor(props: BaseBuildingProperties, village = false): Color {
   const own = props.colour ? Color.fromCssColorString(props.colour) : undefined;
   if (own) return own;
   if (TEMPLE_TYPES.has(props.building)) return TEMPLE_COLOR;
   const byMaterial = props.material ? MATERIAL_PALETTES[props.material.toLowerCase()] : undefined;
-  const options = byMaterial ?? (UTILITY_TYPES.has(props.building) ? UTILITY_PALETTE : FACADE_PALETTE);
+  const options =
+    byMaterial ?? (UTILITY_TYPES.has(props.building) ? UTILITY_PALETTE : village ? VILLAGE_FACADE_PALETTE : FACADE_PALETTE);
   return options[hashString(props.id) % options.length]!;
 }
 

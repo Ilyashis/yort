@@ -75,6 +75,8 @@ const inBox = ([x, y]: Vec2, p: LocalPolygon, margin = 0) =>
 
 export interface LampOptions {
   spacing: number;
+  /** С обеих сторон улицы (город) или с одной (деревня). */
+  bothSides: boolean;
   /** Отступ от края проезжей части, м. */
   curbOffset: number;
   /**
@@ -84,7 +86,7 @@ export interface LampOptions {
   minGap: number;
 }
 
-const LAMP_DEFAULTS: LampOptions = { spacing: 32, curbOffset: 0.8, minGap: 8 };
+const LAMP_DEFAULTS: LampOptions = { spacing: 32, bothSides: true, curbOffset: 0.8, minGap: 8 };
 
 /**
  * Фонари по обеим сторонам улиц: не на проезжей части других дорог (перекрёстки),
@@ -107,7 +109,7 @@ export function placeLamps(
     const line = road.coords.map(frame.toLocal);
     for (const { point, dir } of sampleAlong(line, opts.spacing, opts.spacing / 2)) {
       const left: Vec2 = [-dir[1], dir[0]];
-      for (const side of [1, -1]) {
+      for (const side of opts.bothSides ? [1, -1] : [1]) {
         const normal = scale(left, side);
         const lamp = add(point, scale(normal, road.width / 2 + opts.curbOffset));
         if (roadSurfaces.some((p) => inBox(lamp, p) && insidePolygon(lamp, p))) continue;

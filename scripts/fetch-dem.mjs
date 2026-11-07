@@ -24,31 +24,61 @@ const CREDIT =
 const { south, west, north, east } = territory.bbox;
 const area = { south: south - MARGIN_DEG, west: west - MARGIN_DEG, north: north + MARGIN_DEG, east: east + MARGIN_DEG };
 
-const tileLat = Math.floor(area.south);
-const tileLon = Math.floor(area.west);
-if (Math.floor(area.north) !== tileLat || Math.floor(area.east) !== tileLon) {
-  throw new Error('Район с запасом пересекает границу тайлов Copernicus 1°×1° — нужна склейка нескольких тайлов.');
+/** Имя тайла Copernicus 1°×1° по его юго-западному углу. */
+function tileName(lat, lon) {
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  return `Copernicus_DSM_COG_10_${ns}${String(Math.abs(lat)).padStart(2, '0')}_00_${ew}${String(Math.abs(lon)).padStart(3, '0')}_00_DEM`;
 }
-const ns = tileLat >= 0 ? 'N' : 'S';
-const ew = tileLon >= 0 ? 'E' : 'W';
-const name = `Copernicus_DSM_COG_10_${ns}${String(Math.abs(tileLat)).padStart(2, '0')}_00_${ew}${String(Math.abs(tileLon)).padStart(3, '0')}_00_DEM`;
-const url = `https://copernicus-dem-30m.s3.amazonaws.com/${name}/${name}.tif`;
+const tileUrl = (name) => `https://copernicus-dem-30m.s3.amazonaws.com/${name}/${name}.tif`;
+
+// Район с запасом может задевать несколько тайлов — читаем из каждого своё окно и склеиваем.
+const tiles = [];
+for (let lat = Math.floor(area.north); lat >= Math.floor(area.south); lat--) {
+  for (let lon = Math.floor(area.west); lon <= Math.floor(area.east); lon++) tiles.push(tileName(lat, lon));
+}
 
 console.log(`Рельеф: ${territory.name} (${territory.id})`);
-console.log(`→ ${url}`);
-const tiff = await fromUrl(url);
-const image = await tiff.getImage();
-const [originLon, originLat] = image.getOrigin();
-const [resLon, resLat] = image.getResolution(); // resLat < 0
+// Сетку задаёт северо-западный тайл; у соседних тот же шаг, их пиксели продолжают её без зазоров.
+const reference = await (await fromUrl(tileUrl(tiles[0]))).getImage();
+const [originLon, originLat] = reference.getOrigin();
+const [resLon, resLat] = reference.getResolution(); // resLat < 0
 
 const x0 = Math.floor((area.west - originLon) / resLon);
 const x1 = Math.ceil((area.east - originLon) / resLon) + 1;
 const y0 = Math.floor((area.north - originLat) / resLat);
 const y1 = Math.ceil((area.south - originLat) / resLat) + 1;
-const [raster] = await image.readRasters({ window: [x0, y0, x1, y1], samples: [0] });
 const width = x1 - x0;
 const height = y1 - y0;
-const values = Float32Array.from(raster);
+const values = new Float32Array(width * height).fill(Number.NaN);
+
+for (const name of tiles) {
+  console.log(`→ ${tileUrl(name)}`);
+  const image = name === tiles[0] ? reference : await (await fromUrl(tileUrl(name))).getImage();
+  const [tileLon, tileLat] = image.getOrigin();
+  const [tileResLon, tileResLat] = image.getResolution();
+  if (Math.abs(tileResLon - resLon) > 1e-12 || Math.abs(tileResLat - resLat) > 1e-12) {
+    throw new Error(`У тайла ${name} другой шаг сетки — склейка таких тайлов не поддерживается.`);
+  }
+  // Сдвиг тайла в пикселях общей сетки.
+  const dx = Math.round((tileLon - originLon) / resLon);
+  const dy = Math.round((tileLat - originLat) / resLat);
+  const tx0 = Math.max(0, x0 - dx);
+  const tx1 = Math.min(image.getWidth(), x1 - dx);
+  const ty0 = Math.max(0, y0 - dy);
+  const ty1 = Math.min(image.getHeight(), y1 - dy);
+  if (tx0 >= tx1 || ty0 >= ty1) continue;
+  const [raster] = await image.readRasters({ window: [tx0, ty0, tx1, ty1], samples: [0] });
+  const windowWidth = tx1 - tx0;
+  for (let ty = ty0; ty < ty1; ty++) {
+    for (let tx = tx0; tx < tx1; tx++) {
+      values[(dy + ty - y0) * width + (dx + tx - x0)] = raster[(ty - ty0) * windowWidth + (tx - tx0)];
+    }
+  }
+}
+if (values.some((v) => Number.isNaN(v))) {
+  throw new Error('Часть района не покрыта тайлами Copernicus (нет тайла над водой?) — рельеф не собрать.');
+}
 
 // Узлы сетки — центры пикселей.
 const lonAt = (x) => originLon + (x0 + x + 0.5) * resLon;
@@ -145,7 +175,7 @@ for (let i = 0; i < smoothed.length; i++) {
 
 const file = writeTerritoryFile('terrain.json', {
   metadata: {
-    source: `Copernicus DEM GLO-30 (${name})`,
+    source: `Copernicus DEM GLO-30 (${tiles.join(', ')})`,
     license: 'Copernicus DEM — свободная лицензия с указанием источника',
     credit: CREDIT,
     fetchedAt: new Date().toISOString(),

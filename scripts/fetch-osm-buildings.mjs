@@ -36,6 +36,23 @@ const DEFAULT_HEIGHT_BY_TYPE = {
   theatre: 18,
 };
 const FALLBACK_HEIGHT = 9;
+/**
+ * В деревне здания без тегов — одноэтажные дома, а маленькие — дворовые постройки (сараи, бани),
+ * а не городские дома в три этажа. Тип территории — поле kind в territories.json.
+ */
+const VILLAGE = territory.kind === 'village';
+const VILLAGE_HOUSE_TYPES = new Set(['yes', 'house', 'detached', 'residential']);
+const VILLAGE_HOUSE_HEIGHT = 3.6;
+const VILLAGE_OUTBUILDING_HEIGHT = 2.7;
+/** Меньше этой площади (м²) — дворовая постройка. */
+const VILLAGE_OUTBUILDING_AREA = 45;
+
+function defaultHeight(type, geometry) {
+  if (VILLAGE && VILLAGE_HOUSE_TYPES.has(type)) {
+    return area(geometry) < VILLAGE_OUTBUILDING_AREA ? VILLAGE_OUTBUILDING_HEIGHT : VILLAGE_HOUSE_HEIGHT;
+  }
+  return DEFAULT_HEIGHT_BY_TYPE[type] ?? FALLBACK_HEIGHT;
+}
 
 /** Формы крыш, которые умеем рисовать (остальные → flat). */
 const ROOF_ALIASES = {
@@ -95,7 +112,7 @@ function computeHeights(tags, geometry) {
     height = levels * LEVEL_HEIGHT + roofHeight;
     heightSource = 'levels';
   } else {
-    height = (DEFAULT_HEIGHT_BY_TYPE[tags.building] ?? FALLBACK_HEIGHT) + roofHeight;
+    height = defaultHeight(tags.building, geometry) + roofHeight;
     heightSource = 'default';
   }
 

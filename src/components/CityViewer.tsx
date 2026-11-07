@@ -23,11 +23,11 @@ import {
 } from '../cesium/createViewer';
 import { pickGround, toLonLat } from '../cesium/pick';
 import { createTerrain, heightSampler } from '../cesium/terrain';
-import { territory } from '../config/territory';
+import type { Territory } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
 import { LANDMARKS } from '../config/landmarks';
 import { BaseBuildingsLayer } from '../world/base/BaseBuildingsLayer';
-import { BARE_GROUND_COLOR, GroundLayer } from '../world/base/GroundLayer';
+import { BARE_GROUND_COLOR, GroundLayer, VILLAGE_GROUND_COLOR } from '../world/base/GroundLayer';
 import { LandmarksLayer, landmarkClearance, landmarkObstacle } from '../world/base/LandmarksLayer';
 import { StreetFurnitureLayer } from '../world/base/StreetFurnitureLayer';
 import { BuildingDetailsLayer } from '../world/base/BuildingDetailsLayer';
@@ -37,7 +37,7 @@ import { orientBenches, placeLamps, roadMarkings } from '../world/base/streetFur
 import { TreesLayer } from '../world/base/TreesLayer';
 import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
 import { computeStats, loadBaseBuildings, loadBuildingParts } from '../world/base/loadBaseBuildings';
-import { scatterTrees } from '../world/base/vegetation';
+import { scatterForest, scatterTrees, scatterYardTrees } from '../world/base/vegetation';
 import { analyzePlot } from '../world/user/plot';
 import { UserBuildingsLayer, toObstacle, toProperties, userBuildingId } from '../world/user/UserBuildingsLayer';
 import { Collider } from '../world/walk/collider';
@@ -45,7 +45,7 @@ import { createLocalFrame, toLocalPolygon } from '../world/walk/localFrame';
 import { StreetIndex } from '../world/walk/streets';
 
 /** 3D-сцена: создаёт Cesium Viewer, загружает Base World, связывает инструменты со стором. */
-export function CityViewer() {
+export function CityViewer({ territory }: { territory: Territory }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -105,21 +105,45 @@ export function CityViewer() {
 
       // Поверхности земли (с разметкой). Добавленные в сцену примитивы уничтожит сам Viewer.
       const markings = roadMarkings(environment.streets, frame, roadSurfaces);
-      GroundLayer.create([...environment.ground, ...markings], terrain.kind).addTo(v);
+      const bareGround = territory.kind === 'village' ? VILLAGE_GROUND_COLOR : BARE_GROUND_COLOR;
+      GroundLayer.create([...environment.ground, ...markings], terrain.kind, bareGround).addTo(v);
 
       const landmarks = LANDMARKS.filter(
         ({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north,
       );
+      const village = territory.kind === 'village';
       const allTrees = [
         ...environment.trees,
         ...scatterTrees(environment.ground, environment.trees, [
           ...buildingFootprints,
           ...landmarks.map((l) => landmarkClearance(l)),
         ]),
+        // В деревне деревья растут во дворах, а в OSM их там почти не отмечают.
+        ...(village
+          ? scatterYardTrees(
+              collection.features.flatMap((f) =>
+                (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings, i) => ({
+                  id: `${f.properties.id}:${i}`,
+                  rings,
+                })),
+              ),
+              environment.ground,
+            )
+          : []),
       ];
-      const lamps = placeLamps(environment.streets, frame, roadSurfaces, localBuildings);
+      // Лесные массивы: упрощённые деревья, число ограничено.
+      const forestTrees = scatterForest(environment.ground, buildingFootprints);
+      // В деревне фонари реже и по одной стороне улицы.
+      const lamps = placeLamps(
+        environment.streets,
+        frame,
+        roadSurfaces,
+        localBuildings,
+        village ? { spacing: 45, bothSides: false } : {},
+      );
       const benches = orientBenches(environment.streets, frame);
-      const streetFront = findStreetFrontBuildings(collection.features, environment.ground, frame);
+      // Витрины и вывески — только в городе; в деревне у домов вдоль улицы их нет.
+      const streetFront = village ? new Set<string>() : findStreetFrontBuildings(collection.features, environment.ground, frame);
       // Части зданий (building:part) рисуются вместо общего контура: башни, купола, ступени этажности.
       const parts = assignParts(collection.features, buildingParts);
 
@@ -132,8 +156,9 @@ export function CityViewer() {
           frame,
           streetFront,
           parts,
+          village,
         ),
-        TreesLayer.create(allTrees, terrain.provider),
+        TreesLayer.create(allTrees, terrain.provider, forestTrees),
         StreetFurnitureLayer.create(lamps, benches, terrain.provider),
         LandmarksLayer.create(landmarks, terrain.provider),
       ]);
@@ -198,7 +223,7 @@ export function CityViewer() {
       });
 
       // Звук: музыка и звуки города по месту, где сейчас камера или пешеход.
-      const soundscape = new Soundscape(new SoundZones(environment.ground, frame), () => {
+      const soundscape = new Soundscape(new SoundZones(environment.ground, frame, village), () => {
         if (v.isDestroyed()) return undefined;
         const c = v.camera.positionCartographic;
         const lonLat: [number, number] = [CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)];
@@ -215,7 +240,7 @@ export function CityViewer() {
         frame,
         collider,
         new StreetIndex(environment.ground, frame),
-        Color.fromCssColorString(BARE_GROUND_COLOR),
+        Color.fromCssColorString(bareGround),
         heightAt,
         {
           onExit: () => store.setMode('explore'),
@@ -336,7 +361,7 @@ export function CityViewer() {
       store.plotCleared();
       store.selectBuilding(undefined);
     };
-  }, []);
+  }, [territory]);
 
   return <div ref={containerRef} className="city-viewer" />;
 }

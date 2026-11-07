@@ -47,3 +47,18 @@ describe('SoundZones', () => {
     expect(zones.surfaceAt([0, 6])).toBe('pavement');
   });
 });
+
+describe('SoundZones в деревне', () => {
+  const village = new SoundZones([area('road', -200, 0, 400, 12), area('green', -100, 40, 200, 100)], frame, true);
+
+  it('машин мало, далёкого городского гула нет, птиц слышно и вдали от газонов', () => {
+    expect(village.levelsAt([0, 6], 1.7).traffic).toBeLessThan(0.35);
+    expect(village.levelsAt([0, 6], 1000)).toEqual({ traffic: 0, park: 0, water: 0 });
+    expect(village.levelsAt([0, -150], 1.7).park).toBeGreaterThan(0.5);
+  });
+
+  it('шаги вне дороги — по траве', () => {
+    expect(village.surfaceAt([0, -150])).toBe('grass');
+    expect(village.surfaceAt([0, 6])).toBe('pavement');
+  });
+});

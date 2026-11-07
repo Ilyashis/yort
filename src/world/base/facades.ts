@@ -79,11 +79,12 @@ export function windowGrid(style: FacadeStyle, groundFloor: boolean): WindowGrid
   return { bay: 3, width: 3 * 0.56 };
 }
 
-export function facadeStyle(props: BaseBuildingProperties, streetFront: boolean): FacadeStyle {
+export function facadeStyle(props: BaseBuildingProperties, streetFront: boolean, village = false): FacadeStyle {
   const hash = hashString(props.id);
   const levels = props.levels ?? Math.round(props.height / 3.2);
+  // Ленточные окна — у панельных высоток; у деревенских домов окна обычные или высокие.
   const variant: WindowVariant =
-    levels >= PANEL_MIN_LEVELS ? 2 : ((hash % 3) as WindowVariant);
+    levels >= PANEL_MIN_LEVELS ? 2 : ((hash % (village ? 2 : 3)) as WindowVariant);
   return {
     shopfront: streetFront && SHOP_TYPES.has(props.building) && props.minHeight === 0,
     variant,

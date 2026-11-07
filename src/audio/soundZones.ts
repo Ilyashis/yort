@@ -14,6 +14,8 @@ const RANGE = { traffic: 60, park: 35, water: 150 } as const;
 /** Выше этой высоты (м) над землёй слышен только далёкий гул города. */
 const STREET_LEVEL_FADE = 250;
 const DISTANT_CITY_TRAFFIC = 0.25;
+/** В деревне машин мало, а птиц слышно везде — не только у газонов. */
+const VILLAGE = { traffic: 0.3, birds: 0.6 } as const;
 
 const HARD: GroundKind[] = ['road', 'sidewalk', 'footway', 'paving', 'parking', 'marking'];
 
@@ -26,7 +28,11 @@ export class SoundZones {
   private readonly waters: LocalPolygon[];
   private readonly hard: LocalPolygon[];
 
-  constructor(ground: readonly GroundFeature[], frame: LocalFrame) {
+  constructor(
+    ground: readonly GroundFeature[],
+    frame: LocalFrame,
+    private readonly village = false,
+  ) {
     const of = (kinds: GroundKind[]) =>
       ground
         .filter((f) => kinds.includes(f.properties.kind))
@@ -41,11 +47,15 @@ export class SoundZones {
   /** Громкость слоёв в точке; altitude — высота слушателя над землёй, м. */
   levelsAt(point: Vec2, altitude: number): AmbienceLevels {
     const street = clamp01(1 - (altitude - 3) / STREET_LEVEL_FADE);
-    if (street === 0) return { traffic: DISTANT_CITY_TRAFFIC, park: 0, water: 0 };
+    const distant = this.village ? 0 : DISTANT_CITY_TRAFFIC;
+    if (street === 0) return { traffic: distant, park: 0, water: 0 };
 
     const traffic = clamp01(1 - nearest(point, this.roads, RANGE.traffic) / RANGE.traffic);
     const park = clamp01(1 - nearest(point, this.greens, RANGE.park) / RANGE.park);
     const water = clamp01(1 - nearest(point, this.waters, RANGE.water) / RANGE.water);
+    if (this.village) {
+      return { traffic: traffic * VILLAGE.traffic * street, park: Math.max(park, VILLAGE.birds) * street, water: water * street };
+    }
     return {
       traffic: DISTANT_CITY_TRAFFIC + (traffic - DISTANT_CITY_TRAFFIC) * street,
       park: park * street,
@@ -56,7 +66,8 @@ export class SoundZones {
   /** По чему идёт пешеход: дорожки, тротуары и площади — «плитка», газон — «трава». */
   surfaceAt(point: Vec2): Surface {
     if (containedIn(point, this.hard)) return 'pavement';
-    return containedIn(point, this.greens) ? 'grass' : 'pavement';
+    // В деревне вне дорог — дворы и улицы без асфальта: под ногами трава и земля.
+    return this.village || containedIn(point, this.greens) ? 'grass' : 'pavement';
   }
 }
 

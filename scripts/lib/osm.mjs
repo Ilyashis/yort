@@ -6,7 +6,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const territory = JSON.parse(readFileSync(join(root, 'src/config/territory.json'), 'utf8'));
+const territories = JSON.parse(readFileSync(join(root, 'src/config/territories.json'), 'utf8'));
+/**
+ * Какую территорию выгружать: аргумент --territory=<id>, переменная TERRITORY или первая в списке.
+ *   TERRITORY=itkulovo-1 npm run data:fetch
+ */
+const requested =
+  process.argv.find((arg) => arg.startsWith('--territory='))?.slice('--territory='.length) ?? process.env.TERRITORY;
+export const territory = requested ? territories.find((t) => t.id === requested) : territories[0];
+if (!territory) {
+  console.error(`Нет территории «${requested}». Есть: ${territories.map((t) => t.id).join(', ')}`);
+  process.exit(1);
+}
 
 const { south, west, north, east } = territory.bbox;
 /** bbox в формате Overpass: south,west,north,east. */
