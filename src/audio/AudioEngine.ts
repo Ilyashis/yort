@@ -5,6 +5,19 @@
  * Браузеры запрещают звук без действия пользователя, поэтому AudioContext создаётся
  * и запускается при первом клике или нажатии клавиши (unlock).
  */
+/** Громкость по группам, 0..1: общая, музыка, звуки города, шаги и щелчки. */
+export interface Volumes {
+  master: number;
+  music: number;
+  ambience: number;
+  sfx: number;
+}
+
+export const DEFAULT_VOLUMES: Volumes = { master: 1, music: 0.7, ambience: 0.8, sfx: 0.8 };
+
+/** Базовый уровень шин (при громкости 1): музыка тише города, чтобы не забивать его. */
+const BUS_LEVELS = { music: 0.55 / 0.7, ambience: 0.9 / 0.8, sfx: 0.8 / 0.8 };
+
 export class AudioEngine {
   ctx: AudioContext | undefined;
   master!: GainNode;
@@ -17,6 +30,7 @@ export class AudioEngine {
   noise!: AudioBuffer;
 
   private enabled = false;
+  private volumes: Volumes = DEFAULT_VOLUMES;
   private readonly readyCallbacks: (() => void)[] = [];
 
   get isRunning(): boolean {
@@ -34,8 +48,23 @@ export class AudioEngine {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     this.master.gain.cancelScheduledValues(now);
-    this.master.gain.setTargetAtTime(enabled ? 1 : 0, now, 0.25);
+    this.master.gain.setTargetAtTime(enabled ? this.volumes.master : 0, now, 0.25);
     if (enabled && this.ctx.state !== 'running') void this.ctx.resume();
+  }
+
+  /** Громкость по группам; меняется плавно, без щелчков. */
+  setVolumes(volumes: Volumes): void {
+    this.volumes = volumes;
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const glide = (node: GainNode, value: number) => {
+      node.gain.cancelScheduledValues(now);
+      node.gain.setTargetAtTime(value, now, 0.08);
+    };
+    glide(this.master, this.enabled ? volumes.master : 0);
+    glide(this.music, volumes.music * BUS_LEVELS.music);
+    glide(this.ambience, volumes.ambience * BUS_LEVELS.ambience);
+    glide(this.sfx, volumes.sfx * BUS_LEVELS.sfx);
   }
 
   /** Колбэк сразу, если движок уже создан, иначе — после первого unlock. */
@@ -57,16 +86,16 @@ export class AudioEngine {
     this.ctx = ctx;
 
     this.master = ctx.createGain();
-    this.master.gain.value = this.enabled ? 1 : 0;
+    this.master.gain.value = this.enabled ? this.volumes.master : 0;
     // Мягкий лимитер: ни один слой не «выстрелит» по ушам.
     const limiter = ctx.createDynamicsCompressor();
     limiter.threshold.value = -14;
     limiter.ratio.value = 6;
     this.master.connect(limiter).connect(ctx.destination);
 
-    this.music = this.bus(0.55);
-    this.ambience = this.bus(0.9);
-    this.sfx = this.bus(0.8);
+    this.music = this.bus(this.volumes.music * BUS_LEVELS.music);
+    this.ambience = this.bus(this.volumes.ambience * BUS_LEVELS.ambience);
+    this.sfx = this.bus(this.volumes.sfx * BUS_LEVELS.sfx);
 
     const convolver = ctx.createConvolver();
     convolver.buffer = impulseResponse(ctx, 3.2);

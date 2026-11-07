@@ -13,13 +13,25 @@ import {
   PolygonHierarchy,
   Primitive,
   ShadowMode,
+  ShowGeometryInstanceAttribute,
   Transforms,
 } from 'cesium';
 import { hashString } from '../../utils/hash';
 import type { LocalFrame, Vec2 } from '../walk/localFrame';
 import type { BuildingShape } from './BaseBuildingsLayer';
-import { balconies, entrances, type DetailBox } from './buildingDetails';
+import {
+  FENCE,
+  balconies,
+  chimneys,
+  dormers,
+  entrances,
+  fenceBoxes,
+  rooftopBoxes,
+  type DetailBox,
+} from './buildingDetails';
 import { windowGrid } from './facades';
+import { signedArea } from './roofGeometry';
+import type { Yard } from './yards';
 
 const VERTEX_FORMAT = PerInstanceColorAppearance.VERTEX_FORMAT;
 /** Типы жилых домов, у которых бывают балконы и подъезды. */
@@ -38,6 +50,15 @@ const DOOR_COLOR = Color.fromCssColorString('#4f3f33');
 const GLASS_DOOR_COLOR = Color.fromCssColorString('#2c343d');
 const CANOPY_COLOR = Color.fromCssColorString('#8d9298');
 const WHITE = Color.fromCssColorString('#f4f1ea');
+const BRICK = Color.fromCssColorString('#9b4a35');
+const WHITEWASH = Color.fromCssColorString('#ddd6c8');
+const SOOT = Color.fromCssColorString('#5f5953');
+const DEFAULT_ROOF = Color.fromCssColorString('#7c4a3a');
+const DORMER_GLASS = Color.fromCssColorString('#2c3540');
+/** Заборы: некрашеная и потемневшая доска, крашеные — зелёный, синий, охра. */
+export const FENCE_COLORS = ['#8a6a48', '#857f73', '#5f7f4f', '#5b7b97', '#a8874f', '#7a5a3e'].map((c) =>
+  Color.fromCssColorString(c),
+);
 
 export interface BuildingDetailsOptions {
   frame: LocalFrame;
@@ -47,6 +68,8 @@ export interface BuildingDetailsOptions {
   isStreetSide: (point: Vec2) => boolean;
   /** Высота земли; на склоне дом стоит на самой низкой точке, а подъезд — на земле у двери. */
   heightAt?: (lon: number, lat: number) => number;
+  /** Деревенские дворы — заборы с воротами. */
+  yards?: readonly Yard[];
 }
 
 /**
@@ -55,12 +78,25 @@ export interface BuildingDetailsOptions {
  * Двери и балконы стоят напротив нарисованных окон. Всё — один Primitive.
  */
 export class BuildingDetailsLayer {
-  private constructor(readonly primitive: Primitive | undefined) {}
+  /** Скрытые редактором: дома (по id), дворы (по id дома во дворе) и дома, чьи дворы уходят вместе с ними. */
+  private hiddenBuildings = new Set<string>();
+  private hiddenYards = new Set<string>();
+  private yardOwnersGone = new Set<string>();
+  private dirty = false;
+
+  private constructor(
+    readonly primitive: Primitive | undefined,
+    /** Владелец («id дома» или «yard:id дома») → id его экземпляров. */
+    private readonly groups: ReadonlyMap<string, string[]>,
+  ) {}
 
   static create(shapes: readonly BuildingShape[], options: BuildingDetailsOptions): BuildingDetailsLayer {
     const { frame, isStreetSide, heightAt } = options;
     const toWindowAxis = windowAxis(options.center, frame);
     const instances: GeometryInstance[] = [];
+    const groups = new Map<string, string[]>();
+    /** Чьи сейчас детали: у каждого экземпляра id «владелец#n», чтобы скрывать их вместе с домом. */
+    let owner = '';
     const boxes = new Map<string, BoxGeometry>();
     const boxGeometry = ([w, d, h]: [number, number, number]) => {
       const key = `${w.toFixed(2)}|${d.toFixed(2)}|${h.toFixed(2)}`;
@@ -76,12 +112,28 @@ export class BuildingDetailsLayer {
       const enu = Transforms.eastNorthUpToFixedFrame(Cartesian3.fromDegrees(...frame.toLonLat([x, y]), ground + z));
       instances.push(
         new GeometryInstance({
+          id: nextId(),
           geometry: boxGeometry(box.size),
-          modelMatrix: Matrix4.multiply(enu, Matrix4.fromRotation(Matrix3.fromRotationZ(box.angle)), new Matrix4()),
-          attributes: { color: ColorGeometryInstanceAttribute.fromColor(color) },
+          modelMatrix: Matrix4.multiply(
+            enu,
+            Matrix4.fromRotation(
+              box.tilt
+                ? Matrix3.multiply(Matrix3.fromRotationZ(box.angle), Matrix3.fromRotationY(box.tilt), new Matrix3())
+                : Matrix3.fromRotationZ(box.angle),
+            ),
+            new Matrix4(),
+          ),
+          attributes: { color: ColorGeometryInstanceAttribute.fromColor(color), show: new ShowGeometryInstanceAttribute(true) },
         }),
       );
     };
+    function nextId(): string {
+      const list = groups.get(owner) ?? [];
+      groups.set(owner, list);
+      const id = `${owner}#${list.length}`;
+      list.push(id);
+      return id;
+    }
     const groundAt = (shape: BuildingShape, box: DetailBox) =>
       heightAt ? Math.max(shape.ground, heightAt(...frame.toLonLat([box.center[0], box.center[1]]))) : shape.ground;
     /** Сдвигает деталь вдоль стены к центру ближайшего окна. */
@@ -95,6 +147,7 @@ export class BuildingDetailsLayer {
     let balconyCount = 0;
     for (const shape of shapes) {
       const { props } = shape;
+      owner = props.id;
       if (UTILITY.has(props.building) || props.minHeight > 0 || shape.floorHeight <= 0) continue;
       const floors = Math.round(shape.wallTop / shape.floorHeight);
       const seed = hashString(props.id);
@@ -131,11 +184,29 @@ export class BuildingDetailsLayer {
         });
       }
 
+      const top = shape.ground + shape.wallTop;
+      if (shape.roof) {
+        // Трубы: в деревне — кирпич или побелка, в городе — кирпич или закопчённая штукатурка.
+        const chimneyColor = shape.village ? (seed % 3 === 0 ? WHITEWASH : BRICK) : seed % 2 ? BRICK : SOOT;
+        for (const box of chimneys(shape.roof, seed, shape.village)) addBox(box, top, chimneyColor);
+        if (!shape.village) {
+          const { bodies, roofs, windows } = dormers(shape.roof);
+          for (const box of bodies) addBox(box, top, shape.facadeColor);
+          for (const box of roofs) addBox(box, top, shape.roofColor ?? DEFAULT_ROOF);
+          for (const box of windows) addBox(box, top, DORMER_GLASS);
+        }
+      }
+      if (!shape.village && shape.flatRoof && shape.wallTop >= 12 && Math.abs(signedArea(shape.localRing)) >= 250) {
+        const boxColor = Color.multiplyByScalar(shape.facadeColor, 0.84, new Color());
+        for (const box of rooftopBoxes(shape.localRing)) addBox(box, top, boxColor);
+      }
+
       if (shape.flatRoof && shape.wallTop >= 6) {
         const cornice = corniceRing(shape.ring);
         if (cornice) {
           instances.push(
             new GeometryInstance({
+              id: nextId(),
               geometry: new PolygonGeometry({
                 polygonHierarchy: new PolygonHierarchy(Cartesian3.fromDegreesArray(cornice.flat())),
                 height: shape.ground + shape.wallTop - CORNICE.height,
@@ -144,11 +215,27 @@ export class BuildingDetailsLayer {
               }),
               attributes: {
                 color: ColorGeometryInstanceAttribute.fromColor(Color.multiplyByScalar(shape.facadeColor, 0.86, new Color())),
+                show: new ShowGeometryInstanceAttribute(true),
               },
             }),
           );
         }
       }
+    }
+
+    // Заборы дворов: куски не длиннее 5 м, каждый на своей высоте земли (участки на склонах).
+    for (const yard of options.yards ?? []) {
+      owner = `yard:${yard.houseId}`;
+      const color = FENCE_COLORS[yard.seed % FENCE_COLORS.length]!;
+      const postColor = Color.multiplyByScalar(color, 0.7, new Color());
+      yard.fence.forEach(([p, q], index) => {
+        const street = index < yard.fence.length - 3; // последние три стороны — бока и зады
+        // Столбы — только на уличной стороне, её видно лучше всего.
+        const { pieces, posts } = fenceBoxes(p, q, street ? FENCE.street : FENCE.other, street);
+        const groundOf = (box: DetailBox) => (heightAt ? heightAt(...frame.toLonLat([box.center[0], box.center[1]])) : 0);
+        for (const box of pieces) addBox(box, groundOf(box), color);
+        for (const box of posts) addBox(box, groundOf(box), postColor);
+      });
     }
 
     return new BuildingDetailsLayer(
@@ -160,7 +247,37 @@ export class BuildingDetailsLayer {
             allowPicking: false,
           })
         : undefined,
+      groups,
     );
+  }
+
+  /**
+   * Скрыть детали убранных и изменённых домов и заборы убранных дворов. Двор уходит вместе с домом
+   * только если дом удалён (yardOwnersGone), а не сдвинут или перестроен.
+   * Пока примитив не собран, применится в apply() — его зовут после каждого кадра.
+   */
+  setHidden(buildings: ReadonlySet<string>, yards: ReadonlySet<string>, yardOwnersGone: ReadonlySet<string>): void {
+    this.hiddenBuildings = new Set(buildings);
+    this.hiddenYards = new Set(yards);
+    this.yardOwnersGone = new Set(yardOwnersGone);
+    this.dirty = true;
+    this.apply();
+  }
+
+  /** Применить скрытие, если примитив уже готов; true — если что-то поменялось. */
+  apply(): boolean {
+    if (!this.dirty || !this.primitive?.ready) return false;
+    this.dirty = false;
+    for (const [owner, ids] of this.groups) {
+      const yard = owner.startsWith('yard:') ? owner.slice(5) : undefined;
+      // id дома во дворе — «id здания:номер контура».
+      const hidden = yard
+        ? this.hiddenYards.has(yard) || this.yardOwnersGone.has(yard.slice(0, yard.lastIndexOf(':')))
+        : this.hiddenBuildings.has(owner);
+      const value = ShowGeometryInstanceAttribute.toValue(!hidden);
+      for (const id of ids) this.primitive.getGeometryInstanceAttributes(id).show = value;
+    }
+    return true;
   }
 
   destroy(): void {

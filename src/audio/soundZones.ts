@@ -10,7 +10,7 @@ import {
 import type { AmbienceLevels, Surface } from './ambience';
 
 /** На каком расстоянии (м) слой затихает до нуля. */
-const RANGE = { traffic: 60, park: 35, water: 150 } as const;
+const RANGE = { traffic: 60, park: 35, water: 150, stream: 25 } as const;
 /** Выше этой высоты (м) над землёй слышен только далёкий гул города. */
 const STREET_LEVEL_FADE = 250;
 const DISTANT_CITY_TRAFFIC = 0.25;
@@ -26,6 +26,7 @@ export class SoundZones {
   private readonly roads: LocalPolygon[];
   private readonly greens: LocalPolygon[];
   private readonly waters: LocalPolygon[];
+  private readonly streams: LocalPolygon[];
   private readonly hard: LocalPolygon[];
 
   constructor(
@@ -33,14 +34,15 @@ export class SoundZones {
     frame: LocalFrame,
     private readonly village = false,
   ) {
-    const of = (kinds: GroundKind[]) =>
+    const of = (kinds: GroundKind[], keep: (f: GroundFeature) => boolean = () => true) =>
       ground
-        .filter((f) => kinds.includes(f.properties.kind))
+        .filter((f) => kinds.includes(f.properties.kind) && keep(f))
         .flatMap(polygonsOfGround)
         .map((rings) => toLocalPolygon(rings, frame));
     this.roads = of(['road']);
     this.greens = of(['green', 'pitch']);
-    this.waters = of(['water']);
+    this.waters = of(['water'], (f) => !f.properties.stream);
+    this.streams = of(['water'], (f) => !!f.properties.stream);
     this.hard = of(HARD);
   }
 
@@ -52,7 +54,11 @@ export class SoundZones {
 
     const traffic = clamp01(1 - nearest(point, this.roads, RANGE.traffic) / RANGE.traffic);
     const park = clamp01(1 - nearest(point, this.greens, RANGE.park) / RANGE.park);
-    const water = clamp01(1 - nearest(point, this.waters, RANGE.water) / RANGE.water);
+    const water = Math.max(
+      clamp01(1 - nearest(point, this.waters, RANGE.water) / RANGE.water),
+      // Ручей журчит только рядом.
+      0.6 * clamp01(1 - nearest(point, this.streams, RANGE.stream) / RANGE.stream),
+    );
     if (this.village) {
       return { traffic: traffic * VILLAGE.traffic * street, park: Math.max(park, VILLAGE.birds) * street, water: water * street };
     }

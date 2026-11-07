@@ -41,6 +41,9 @@ const ROAD_WIDTH = {
   motorway_link: 7, trunk_link: 7, primary_link: 7, secondary_link: 7, tertiary_link: 7,
 };
 /** Ширина пешеходных путей, м. */
+/** Ширина водотоков-линий, м (если в OSM нет width). Реки обычно ещё и полигоном natural=water. */
+const WATERWAY_WIDTH = { river: 12, canal: 6, stream: 2.5, ditch: 1.5, drain: 1.5 };
+
 const PATH_WIDTH = { pedestrian: 6, footway: 2.5, path: 2, cycleway: 2, steps: 2.5, track: 3, bridleway: 2 };
 const SIDEWALK_WIDTH = 2.5;
 /** Улицы, вдоль которых рисуем тротуары, если они не замаплены отдельно. */
@@ -132,6 +135,7 @@ const query = `[out:json][timeout:180];
   way["amenity"="parking"](${overpassBbox});
   way["place"="square"](${overpassBbox});
   way["man_made"="pier"](${overpassBbox});
+  way["waterway"~"^(river|stream|canal|ditch|drain)$"](${overpassBbox});
   node["natural"="tree"](${overpassBbox});
   node["highway"="street_lamp"](${overpassBbox});
   node["amenity"="bench"](${overpassBbox});
@@ -144,11 +148,12 @@ const { json, url } = await fetchOverpass(query);
 const features = [];
 const trees = [];
 const streets = { roads: [], paths: [], crossings: [], lamps: [], benches: [] };
-const add = (kind, geometry, name, cover) => {
+const add = (kind, geometry, name, cover, stream) => {
   if (!geometry) return;
   const properties = { kind };
   if (name) properties.name = name;
   if (cover) properties.cover = cover;
+  if (stream) properties.stream = true;
   features.push({ type: 'Feature', properties, geometry });
 };
 
@@ -180,6 +185,15 @@ for (const el of json.elements) {
   const areaHighway = tags['area:highway'] ?? (tags.area === 'yes' ? tags.highway : undefined);
   if (areaHighway && el.type === 'way') {
     add(ROAD_WIDTH[areaHighway] ? 'road' : 'paving', clip(wayToPolygon(el)), tags.name);
+    continue;
+  }
+
+  if (WATERWAY_WIDTH[tags.waterway] && el.type === 'way' && tags.tunnel !== 'culvert' && tags.tunnel !== 'yes') {
+    const line = wayToLine(el);
+    if (!line || !line.coordinates.some(insideClipBox)) continue;
+    const width = parseMeters(tags.width) ?? WATERWAY_WIDTH[tags.waterway];
+    // Ручьи и канавы помечаем: звук воды у них слышен только рядом, а не за полтораста метров.
+    add('water', bufferLine(line.coordinates, width), tags.name, undefined, width < 5 ? true : undefined);
     continue;
   }
 

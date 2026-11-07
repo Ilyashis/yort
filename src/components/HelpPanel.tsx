@@ -72,6 +72,37 @@ export function HelpPanel() {
             <Key>F</Key>
           </dt>
           <dd>ближе / дальше</dd>
+          <dt className="help-section">Редактор</dt>
+          <dd />
+          <dt>
+            <Key>V</Key>
+          </dt>
+          <dd>выбор: дом тянуть мышью, точки — растянуть и повернуть</dd>
+          <dt>
+            <Key>Y</Key>
+          </dt>
+          <dd>дом: тяните по земле — вырастет под участок</dd>
+          <dt>
+            <Key>T</Key>
+          </dt>
+          <dd>дорога: ведите от любой дороги</dd>
+          <dt>
+            <Key>B</Key>
+          </dt>
+          <dd>забор: ведите линию по земле</dd>
+          <dt>
+            <Key>Del</Key>
+          </dt>
+          <dd>убрать выбранное</dd>
+          <dt>
+            <Key>Ctrl</Key>
+            <Key>Z</Key>
+          </dt>
+          <dd>отменить (с Shift — повторить)</dd>
+          <dt>
+            <Key>Backspace</Key>
+          </dt>
+          <dd>совмещение подложки: шаг назад</dd>
         </dl>
       )}
     </aside>

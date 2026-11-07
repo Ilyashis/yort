@@ -4,6 +4,8 @@ import {
   defaultRoofHeight,
   orientedBox,
   rectangularity,
+  roofFrame,
+  roofSurfaceZ,
   roofTriangles,
   triangleNormal,
   type Triangle,
@@ -84,5 +86,42 @@ describe('defaultRoofHeight', () => {
     const box = orientedBox(rect);
     expect(defaultRoofHeight('gabled', box, 200)).toBeCloseTo(5 * Math.tan(Math.PI / 6), 5);
     expect(defaultRoofHeight('flat', box, 200)).toBe(0);
+  });
+});
+
+describe('свес крыши', () => {
+  const minZ = (ts: Triangle[]) => Math.min(...ts.flatMap((t) => t.map((p) => p[2])));
+  const projected = (ts: Triangle[]) => ts.reduce((sum, t) => sum + triangleNormal(t)[2] / 2, 0);
+
+  for (const shape of ['gabled', 'hipped'] as const) {
+    it(`${shape}: скаты выходят за стены и опускаются ниже их верха, снизу подшивка`, () => {
+      const plain = roofTriangles(rect, shape, 3)!;
+      const eaves = roofTriangles(rect, shape, 3, 'along', 0.5)!;
+      expect(minZ(plain)).toBeCloseTo(0, 6);
+      expect(minZ(eaves)).toBeLessThan(-0.1);
+      expect(maxZ(eaves)).toBeCloseTo(3, 6); // конёк на прежней высоте
+      // Подшивка смотрит вниз и закрывает свес: сумма проекций = площадь дома (200 м²).
+      expect(eaves.some((t) => triangleNormal(t)[2] < 0)).toBe(true);
+      expect(projected(eaves)).toBeCloseTo(200, 3);
+    });
+  }
+});
+
+describe('roofFrame', () => {
+  it('конёк по длинной оси, высота ската падает к краям', () => {
+    const frame = roofFrame(rect, 'gabled', 3)!;
+    expect(frame.halfA).toBeCloseTo(10, 5);
+    expect(frame.halfB).toBeCloseTo(5, 5);
+    expect(roofSurfaceZ(frame, 0, 0)).toBeCloseTo(3, 6);
+    expect(roofSurfaceZ(frame, 4, 2.5)).toBeCloseTo(1.5, 6);
+    expect(roofSurfaceZ(frame, 0, 5)).toBeCloseTo(0, 6);
+  });
+
+  it('у вальмовой конёк короче, на торцах — скаты; у Г-образного дома каркаса нет', () => {
+    const frame = roofFrame(rect, 'hipped', 3)!;
+    expect(frame.ridgeHalf).toBeCloseTo(5, 5);
+    expect(roofSurfaceZ(frame, 10, 0)).toBeCloseTo(0, 6);
+    expect(roofSurfaceZ(frame, 7.5, 0)).toBeCloseTo(1.5, 6);
+    expect(roofFrame(lShape, 'hipped', 3)).toBeUndefined();
   });
 });

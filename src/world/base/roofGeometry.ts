@@ -128,6 +128,8 @@ export function roofTriangles(
   shape: RoofShape,
   height: number,
   orientation: 'along' | 'across' = 'along',
+  /** Свес скатов за стены, м (только у прямоугольных двускатных и вальмовых крыш). */
+  overhang = 0,
 ): Triangle[] | undefined {
   const ring = openRing(ringInput);
   if (shape === 'flat' || height <= 0 || ring.length < 3) return undefined;
@@ -146,8 +148,14 @@ export function roofTriangles(
         triangles = fallback;
         break;
       }
-      triangles = shape === 'skillion' ? skillion(box, height) : pitched(box, height, shape === 'hipped', orientation);
-      break;
+      if (shape === 'skillion') {
+        triangles = skillion(box, height);
+        break;
+      }
+      // Свес: скаты продолжаются за стены тем же уклоном, снизу — подшивка (смотрит вниз, не разворачиваем).
+      const hipped = shape === 'hipped';
+      const roof = pitched(box, height, hipped, orientation, overhang);
+      return [...roof.map((t) => orientOutward(t, box.center)), ...soffit(box, height, hipped, orientation, overhang)];
     }
     case 'pyramidal': {
       const fallback = convex ? pyramid(ring, height) : rect >= 0.8 ? pitched(box, height, true, 'along') : insetHip(ring, height);
@@ -185,13 +193,33 @@ function corners(box: OrientedBox, across: boolean) {
   };
 }
 
-/** Двускатная (фронтоны на торцах) или вальмовая (четыре ската) крыша. */
-function pitched(box: OrientedBox, height: number, hipped: boolean, orientation: 'along' | 'across'): Triangle[] {
-  const { a, halfA, halfB, p1, p2, p3, p4 } = corners(box, orientation === 'across');
+/** Свес вдоль конька у двускатной крыши меньше: фронтон лишь чуть выступает над торцом. */
+const GABLE_OVERHANG_SHARE = 0.6;
+
+/** Насколько опускается край ската со свесом, чтобы уклон не менялся. */
+function eaveDrop(halfB: number, height: number, overhang: number): number {
+  return halfB > 0 ? (height * overhang) / halfB : 0;
+}
+
+/** Двускатная (фронтоны на торцах) или вальмовая (четыре ската) крыша; со свесом — шире стен. */
+function pitched(
+  box: OrientedBox,
+  height: number,
+  hipped: boolean,
+  orientation: 'along' | 'across',
+  overhang = 0,
+): Triangle[] {
+  const base = corners(box, orientation === 'across');
+  const oA = hipped ? overhang : overhang * GABLE_OVERHANG_SHARE;
+  const drop = eaveDrop(base.halfB, height, overhang);
+  const { a, halfA, halfB, p1, p2, p3, p4 } = corners(
+    { ...box, halfU: box.halfU + (orientation === 'across' ? overhang : oA), halfV: box.halfV + (orientation === 'across' ? oA : overhang) },
+    orientation === 'across',
+  );
   const inset = hipped ? Math.min(halfB, halfA) : 0;
   const r1 = at(add2(box.center, mul(a, -(halfA - inset))), height);
   const r2 = at(add2(box.center, mul(a, halfA - inset)), height);
-  const [q1, q2, q3, q4] = [at(p1, 0), at(p2, 0), at(p3, 0), at(p4, 0)];
+  const [q1, q2, q3, q4] = [at(p1, -drop), at(p2, -drop), at(p3, -drop), at(p4, -drop)];
   return [
     [q1, q2, r2],
     [q1, r2, r1],
@@ -201,6 +229,84 @@ function pitched(box: OrientedBox, height: number, hipped: boolean, orientation:
     [q2, q3, r2],
     [q4, q1, r1],
   ];
+}
+
+/**
+ * Подшивка свеса: горизонтальная «рамка» снизу между стенами и краем свеса, лицом вниз —
+ * чтобы с улицы под свесом не просвечивало небо.
+ */
+function soffit(box: OrientedBox, height: number, hipped: boolean, orientation: 'along' | 'across', overhang: number): Triangle[] {
+  if (overhang <= 0) return [];
+  const { a, halfA, halfB } = corners(box, orientation === 'across');
+  const b: Vec2 = [-a[1], a[0]];
+  const oA = hipped ? overhang : overhang * GABLE_OVERHANG_SHARE;
+  const z = -eaveDrop(halfB, height, overhang);
+  const point = (sa: number, sb: number) => at(add2(box.center, add2(mul(a, sa), mul(b, sb))), z);
+  // Прямоугольник [a0, a1] × [b0, b1] двумя треугольниками, лицом вниз.
+  const quad = (a0: number, a1: number, b0: number, b1: number): Triangle[] => {
+    const tris: Triangle[] = [
+      [point(a0, b0), point(a1, b0), point(a1, b1)],
+      [point(a0, b0), point(a1, b1), point(a0, b1)],
+    ];
+    return tris.map((t) => (triangleNormal(t)[2] > 0 ? [t[0], t[2], t[1]] : t));
+  };
+  const outerA = halfA + oA;
+  const outerB = halfB + overhang;
+  return [
+    ...quad(-outerA, outerA, halfB, outerB),
+    ...quad(-outerA, outerA, -outerB, -halfB),
+    ...quad(halfA, outerA, -halfB, halfB),
+    ...quad(-outerA, -halfA, -halfB, halfB),
+  ];
+}
+
+/** Конёк и скаты прямоугольной крыши — для труб и слуховых окон. */
+export interface RoofFrame {
+  center: Vec2;
+  /** Вдоль конька и поперёк (вниз по скату — ±b). */
+  a: Vec2;
+  b: Vec2;
+  halfA: number;
+  halfB: number;
+  /** Половина длины конька (у вальмовой короче дома). */
+  ridgeHalf: number;
+  height: number;
+  hipped: boolean;
+}
+
+/** Каркас крыши, если она строится по прямоугольнику (двускатная, вальмовая); иначе undefined. */
+export function roofFrame(
+  ringInput: readonly Vec2[],
+  shape: RoofShape,
+  height: number,
+  orientation: 'along' | 'across' = 'along',
+): RoofFrame | undefined {
+  if (shape !== 'gabled' && shape !== 'hipped') return undefined;
+  const ring = openRing(ringInput);
+  if (ring.length < 3 || height <= 0) return undefined;
+  const box = orientedBox(ring);
+  if (rectangularity(ring, box) < 0.8) return undefined;
+  const { a, halfA, halfB } = corners(box, orientation === 'across');
+  const hipped = shape === 'hipped';
+  return {
+    center: box.center,
+    a,
+    b: [-a[1], a[0]],
+    halfA,
+    halfB,
+    ridgeHalf: hipped ? halfA - Math.min(halfA, halfB) : halfA,
+    height,
+    hipped,
+  };
+}
+
+/** Высота ската над верхом стен в точке (sa вдоль конька, sb поперёк). */
+export function roofSurfaceZ(frame: RoofFrame, sa: number, sb: number): number {
+  let z = frame.height * (1 - Math.abs(sb) / frame.halfB);
+  if (frame.hipped && Math.abs(sa) > frame.ridgeHalf) {
+    z = Math.min(z, frame.height * (1 - (Math.abs(sa) - frame.ridgeHalf) / frame.halfB));
+  }
+  return Math.max(z, 0);
 }
 
 /** Односкатная: низкий край с одной длинной стороны, высокий — с другой, торцы закрыты. */

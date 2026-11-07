@@ -1,5 +1,6 @@
 import {
   BoundingSphere,
+  Cartesian2,
   Cartesian3,
   Color,
   Credit,
@@ -15,6 +16,7 @@ import {
   type TerrainProvider,
 } from 'cesium';
 import type { Territory } from '../config/territory';
+import { createIllustrationStage } from './illustrationStage';
 
 /** Время для положения солнца (UTC): 17:30 по Уфе — мягкий предвечерний свет и длинные тени. */
 const SUN_TIME = '2026-07-15T12:30:00Z';
@@ -75,7 +77,9 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
   configureShadows(viewer);
 
   scene.backgroundColor = Color.fromCssColorString('#bcd3e6');
-  // Сглаживание краёв («лесенки» у стен и столбов) — дёшево, включено всегда.
+  // «Рисованный» вид: контуры, воздушная перспектива, тёплая цветокоррекция.
+  scene.postProcessStages.add(createIllustrationStage(scene));
+  // Сглаживание краёв («лесенки» у стен и столбов) — дёшево, включено всегда; сглаживает и контуры.
   scene.postProcessStages.fxaa.enabled = true;
 
   // Стандартные действия Viewer (выбор сущности, «слежение» по двойному клику)
@@ -184,4 +188,36 @@ export function flyToTerritory(viewer: Viewer, territory: Territory, duration = 
     offset: new HeadingPitchRange(CesiumMath.toRadians(25), CesiumMath.toRadians(-35), radius * 1.9),
     duration,
   });
+}
+
+/** Вид сверху (план) или под углом. */
+export type ViewMode = 'top' | 'tilt';
+
+/** Сверху — почти отвесно (ровно −90° камера Cesium не любит); под углом — как в градостроителях. */
+const VIEW_PITCH: Record<ViewMode, number> = { top: -CesiumMath.PI_OVER_TWO + 0.0005, tilt: CesiumMath.toRadians(-35) };
+
+/**
+ * Плавно переводит камеру в вид сверху или под углом вокруг точки в центре экрана,
+ * сохраняя поворот и примерно расстояние — место под курсором не «уезжает».
+ */
+export function changeViewMode(viewer: Viewer, mode: ViewMode, heightAt: (lon: number, lat: number) => number): void {
+  const { scene, camera } = viewer;
+  const center = new Cartesian2(scene.canvas.clientWidth / 2, scene.canvas.clientHeight / 2);
+  const ray = camera.getPickRay(center);
+  let target = ray ? scene.globe.pick(ray, scene) : undefined;
+  if (!target) {
+    // Смотрим в горизонт — берём землю под камерой.
+    const c = camera.positionCartographic;
+    target = Cartesian3.fromRadians(c.longitude, c.latitude, heightAt(CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude)));
+  }
+  const range = Math.min(Math.max(Cartesian3.distance(camera.positionWC, target), 60), 6000);
+  camera.flyToBoundingSphere(new BoundingSphere(target, 0), {
+    offset: new HeadingPitchRange(camera.heading, VIEW_PITCH[mode], range),
+    duration: 0.9,
+  });
+}
+
+/** Какой сейчас вид: камера смотрит почти отвесно — «сверху». */
+export function viewModeOf(viewer: Viewer): ViewMode {
+  return viewer.camera.pitch < CesiumMath.toRadians(-75) ? 'top' : 'tilt';
 }

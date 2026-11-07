@@ -120,14 +120,19 @@ void main()
     float bottom = v_facade.y;
     float top = v_facade.z;
     float floorHeight = v_facade.w;
-    bool hasShops = v_style.x > 0.5;
+    // facadeStyle.x: 0 — обычные окна, 1 — витрины на первом этаже, 2 — деревенский дом с наличниками.
+    bool hasShops = v_style.x > 0.5 && v_style.x < 1.5;
+    bool carved = v_style.x > 1.5;
     float variant = v_style.y;
     float seed = v_style.z;
 
     if (abs(n.z) > 0.5) {
-        // Плоская крыша и днище: темнее и холоднее фасада. Скатные крыши и купола
-        // приходят уже со своим цветом (facadeStyle.w = 1) — их не трогаем.
-        if (v_style.w < 0.5) diffuse = mix(diffuse, vec3(0.38, 0.40, 0.43), 0.65);
+        // Плоская крыша и днище: тёплый светло-серый рубероид, у каждого дома свой оттенок.
+        // Скатные крыши и купола приходят уже со своим цветом (facadeStyle.w = 1) — их не трогаем.
+        if (v_style.w < 0.5) {
+            vec3 roof = mix(vec3(0.63, 0.59, 0.54), vec3(0.47, 0.46, 0.45), seed);
+            diffuse = mix(diffuse, roof, 0.7);
+        }
     } else {
         float h = v_local.z - ground;
 
@@ -148,6 +153,7 @@ void main()
             if (variant > 1.5) { bay = 3.4; win = vec4(0.36, 0.72, 0.10, 0.90); }      // ленточные
             else if (variant > 0.5) { bay = 2.6; win = vec4(0.20, 0.80, 0.30, 0.70); } // высокие узкие
             if (shopFloor) { bay = 4.5; win = vec4(0.06, 0.78, 0.06, 0.94); }        // витрины
+            if (carved) { bay = 2.6; win = vec4(0.30, 0.74, 0.34, 0.66); }           // окна избы
 
             float bays = along / bay;
             float inside = (1.0 - step(top - 0.9, h)) * (shopFloor ? 1.0 : step(bottom + 0.8, h));
@@ -165,6 +171,26 @@ void main()
             if (!shopFloor && cell > 0.82) glass = mix(glass, vec3(0.80, 0.72, 0.56), 0.35); // шторы
             if (shopFloor) glass = mix(glass, vec3(0.32, 0.35, 0.38), 0.3);
             vec3 frameColor = shopFloor ? vec3(0.17, 0.18, 0.20) : vec3(0.88, 0.87, 0.84);
+
+            if (carved) {
+                // Бревенчатая стена: тонкие тёмные швы между венцами (только у «деревянных» цветов).
+                float woody = step(base.b + 0.05, base.g) * step(base.g + 0.03, base.r) * (1.0 - step(0.5, dot(base.rgb, vec3(0.333))));
+                diffuse *= 1.0 - 0.14 * woody * band(h / 0.26, 0.0, 0.14) * (1.0 - tiny);
+
+                // Ставни по бокам окна — у каждого дома свой цвет.
+                float pick = fract(seed * 13.0);
+                vec3 shutterColor = pick < 0.3 ? vec3(0.30, 0.46, 0.68)
+                    : pick < 0.55 ? vec3(0.30, 0.52, 0.36)
+                    : pick < 0.8 ? vec3(0.50, 0.30, 0.19)
+                    : vec3(0.56, 0.22, 0.18);
+                float rows = band(floors, win.x, win.y) * inside;
+                float shutters = (band(bays, win.z - 0.21, win.z - 0.05) + band(bays, win.w + 0.05, win.w + 0.21)) * rows;
+                diffuse = mix(diffuse, shutterColor, shutters * (1.0 - tiny));
+
+                // Наличник: широкая рамка, сверху выше («кокошник»); белый или голубой.
+                frameColor = fract(seed * 7.0) > 0.6 ? vec3(0.62, 0.77, 0.88) : vec3(0.94, 0.93, 0.89);
+                outer = band(floors, win.x - 0.05, win.y + 0.1) * band(bays, win.z - 0.05, win.w + 0.05) * inside;
+            }
 
             float glassAmount = mix(inner, 0.2 * inside, tiny);
             diffuse = mix(diffuse, frameColor, clamp(outer - inner, 0.0, 1.0) * (1.0 - tiny));

@@ -62,3 +62,13 @@ describe('SoundZones в деревне', () => {
     expect(village.surfaceAt([0, 6])).toBe('pavement');
   });
 });
+
+describe('SoundZones: ручей', () => {
+  const stream: GroundFeature = { ...area('water', -200, 200, 400, 2.5), properties: { kind: 'water', stream: true } };
+  const zones = new SoundZones([stream], frame);
+
+  it('журчит рядом и не слышен за полсотни метров, в отличие от реки', () => {
+    expect(zones.levelsAt([0, 195], 1.7).water).toBeGreaterThan(0.3);
+    expect(zones.levelsAt([0, 150], 1.7).water).toBe(0);
+  });
+});

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bbox as turfBbox, booleanPointInPolygon, buffer, polygon } from '@turf/turf';
 import { fromUrl } from 'geotiff';
-import { root, territory, writeTerritoryFile } from './lib/osm.mjs';
+import { fetchOverpass, relationToGeometry, root, territory, wayToPolygon, writeTerritoryFile } from './lib/osm.mjs';
 
 /** Запас вокруг района, градусы (~4 км): рельеф виден до горизонта при взгляде сверху. */
 const MARGIN_DEG = 0.04;
@@ -80,9 +80,12 @@ if (values.some((v) => Number.isNaN(v))) {
   throw new Error('Часть района не покрыта тайлами Copernicus (нет тайла над водой?) — рельеф не собрать.');
 }
 
-// Узлы сетки — центры пикселей.
-const lonAt = (x) => originLon + (x0 + x + 0.5) * resLon;
-const latAt = (y) => originLat + (y0 + y + 0.5) * resLat;
+// Узлы сетки — центры пикселей. У тайлов Copernicus растр «PixelIsPoint»: координата угла —
+// это уже центр первого пикселя, а не его край (иначе рельеф съезжает на полпикселя, ~15 м).
+const pixelIsPoint = reference.getGeoKeys()?.GTRasterTypeGeoKey === 2;
+const half = pixelIsPoint ? 0 : 0.5;
+const lonAt = (x) => originLon + (x0 + x + half) * resLon;
+const latAt = (y) => originLat + (y0 + y + half) * resLat;
 const gridBbox = { west: lonAt(0), east: lonAt(width - 1), north: latAt(0), south: latAt(height - 1) };
 console.log(`  окно ${width}×${height} узлов, шаг ≈ ${Math.round(Math.abs(resLat) * 111_320)} м`);
 
@@ -143,6 +146,67 @@ for (let iteration = 0; iteration < 60; iteration++) {
   }
 }
 
+// --- лес -------------------------------------------------------------------------
+// Copernicus — модель поверхности: в лесу это верх крон, и залесённые склоны «вспухают»
+// на высоту деревьев. Берём леса из OSM на всё окно рельефа, оцениваем высоту крон
+// на опушках и опускаем лес на неё — плавно, от опушки вглубь.
+const CANOPY = { feather: 40, sampleDepth: [45, 120], openDistance: [30, 150], window: 5, minSamples: 30, min: 3, max: 25 };
+const mPerDegLat = 111_320;
+const stepX = Math.abs(resLon) * mPerDegLat * Math.cos((((area.south + area.north) / 2) * Math.PI) / 180);
+const stepY = Math.abs(resLat) * mPerDegLat;
+
+const forestBox = `${area.south},${area.west},${area.north},${area.east}`;
+console.log('  леса для поправки на кроны (OSM)…');
+const { json: forestJson } = await fetchOverpass(`[out:json][timeout:180];
+(
+  way["landuse"="forest"](${forestBox});
+  way["natural"="wood"](${forestBox});
+  relation["landuse"="forest"]["type"="multipolygon"](${forestBox});
+  relation["natural"="wood"]["type"="multipolygon"](${forestBox});
+);
+out geom;`);
+const forestPolygons = forestJson.elements.flatMap((el) => {
+  const geometry = el.type === 'way' ? wayToPolygon(el) : el.type === 'relation' ? relationToGeometry(el) : undefined;
+  if (!geometry) return [];
+  return geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+});
+const forest = rasterize(forestPolygons);
+const forestCount = forest.reduce((sum, f) => sum + f, 0);
+const depth = distanceTo(forest, 1); // в лесу: расстояние до опушки, м
+const openDistance = distanceTo(forest, 0); // на открытом месте: расстояние до леса, м
+
+let canopy = 0;
+const samples = [];
+for (let y = 0; y < height; y += 2) {
+  for (let x = 0; x < width; x += 2) {
+    const i = y * width + x;
+    if (!forest[i] || depth[i] < CANOPY.sampleDepth[0] || depth[i] > CANOPY.sampleDepth[1]) continue;
+    // Плоскость по открытой земле вокруг: насколько лес над ней — это и есть кроны (склон учтён).
+    const points = [];
+    for (let dy = -CANOPY.window; dy <= CANOPY.window; dy++) {
+      for (let dx = -CANOPY.window; dx <= CANOPY.window; dx++) {
+        const xx = x + dx;
+        const yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+        const j = yy * width + xx;
+        if (forest[j] || openDistance[j] < CANOPY.openDistance[0] || openDistance[j] > CANOPY.openDistance[1]) continue;
+        points.push([dx * stepX, dy * stepY, values[j]]);
+      }
+    }
+    const plane = fitPlane(points);
+    if (plane !== undefined) samples.push(values[i] - plane);
+  }
+}
+if (samples.length >= CANOPY.minSamples) {
+  samples.sort((a, b) => a - b);
+  canopy = Math.min(Math.max(samples[Math.floor(samples.length / 2)], CANOPY.min), CANOPY.max);
+  for (let i = 0; i < values.length; i++) {
+    if (!forest[i]) continue;
+    const t = Math.min(depth[i] / CANOPY.feather, 1);
+    values[i] -= canopy * t * t * (3 - 2 * t);
+  }
+}
+
 // Лёгкое сглаживание 3×3 — убирает шум радарной съёмки.
 const smoothed = new Float32Array(values.length);
 for (let y = 0; y < height; y++) {
@@ -180,6 +244,9 @@ const file = writeTerritoryFile('terrain.json', {
     credit: CREDIT,
     fetchedAt: new Date().toISOString(),
     buildingsMasked: maskedCount,
+    pixelIsPoint,
+    forestNodes: forestCount,
+    forestCanopyM: Math.round(canopy * 10) / 10,
   },
   bbox: gridBbox,
   width,
@@ -191,4 +258,92 @@ const file = writeTerritoryFile('terrain.json', {
 
 console.log(`\n✓ Рельеф: ${width}×${height} узлов, высоты ${min.toFixed(0)}–${max.toFixed(0)} м над уровнем моря`);
 console.log(`  узлов под зданиями заменено: ${maskedCount}`);
+console.log(
+  canopy
+    ? `  лес: ${forestCount} узлов, высота крон по опушкам ≈ ${canopy.toFixed(1)} м (замеров ${samples.length}) — вычтена`
+    : `  лес: ${forestCount} узлов, замеров на опушках мало (${samples.length}) — поправки нет`,
+);
 console.log(`  → ${file}`);
+
+// --- вспомогательное ------------------------------------------------------------
+
+/** Полигоны [lon, lat] → маска узлов сетки (чётно-нечётное правило внутри полигона, дыры — дыры). */
+function rasterize(polygons) {
+  const mask = new Uint8Array(width * height);
+  const colOf = (lon) => (lon - lonAt(0)) / resLon;
+  for (const rings of polygons) {
+    const edges = rings.flatMap((ring) => ring.slice(1).map((b, k) => [ring[k], b]));
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const ring of rings) for (const [, lat] of ring) { minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat); }
+    const yFrom = Math.max(0, Math.ceil((maxLat - latAt(0)) / resLat));
+    const yTo = Math.min(height - 1, Math.floor((minLat - latAt(0)) / resLat));
+    for (let y = yFrom; y <= yTo; y++) {
+      const lat = latAt(y);
+      const crossings = [];
+      for (const [[ax, ay], [bx, by]] of edges) {
+        if (ay > lat !== by > lat) crossings.push(ax + ((lat - ay) * (bx - ax)) / (by - ay));
+      }
+      crossings.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < crossings.length; k += 2) {
+        const from = Math.max(0, Math.ceil(colOf(crossings[k])));
+        const to = Math.min(width - 1, Math.floor(colOf(crossings[k + 1])));
+        for (let x = from; x <= to; x++) mask[y * width + x] = 1;
+      }
+    }
+  }
+  return mask;
+}
+
+/** Для узлов со значением value в маске — расстояние (м) до ближайшего узла с другим значением (фаска 3×3). */
+function distanceTo(mask, value) {
+  const dist = new Float32Array(width * height);
+  for (let i = 0; i < dist.length; i++) dist[i] = mask[i] === value ? Infinity : 0;
+  const diagonal = Math.hypot(stepX, stepY);
+  const relax = (i, j, step) => {
+    if (dist[j] + step < dist[i]) dist[i] = dist[j] + step;
+  };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (x > 0) relax(i, i - 1, stepX);
+      if (y > 0) {
+        relax(i, i - width, stepY);
+        if (x > 0) relax(i, i - width - 1, diagonal);
+        if (x < width - 1) relax(i, i - width + 1, diagonal);
+      }
+    }
+  }
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = width - 1; x >= 0; x--) {
+      const i = y * width + x;
+      if (x < width - 1) relax(i, i + 1, stepX);
+      if (y < height - 1) {
+        relax(i, i + width, stepY);
+        if (x < width - 1) relax(i, i + width + 1, diagonal);
+        if (x > 0) relax(i, i + width - 1, diagonal);
+      }
+    }
+  }
+  return dist;
+}
+
+/** Плоскость z = a + b·x + c·y по точкам [x, y, z] (МНК); возвращает a — высоту в начале координат. */
+function fitPlane(points) {
+  if (points.length < 8) return undefined;
+  let n = 0, sx = 0, sy = 0, sz = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0;
+  for (const [x, y, z] of points) {
+    n++; sx += x; sy += y; sz += z; sxx += x * x; syy += y * y; sxy += x * y; sxz += x * z; syz += y * z;
+  }
+  // Нормальные уравнения 3×3, правило Крамера.
+  const m = [[n, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]];
+  const r = [sz, sxz, syz];
+  const det = (a) =>
+    a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+    a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+    a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+  const d = det(m);
+  if (Math.abs(d) < 1e-6) return undefined;
+  const withR = m.map((row, k) => [r[k], row[1], row[2]]);
+  return det(withR) / d;
+}

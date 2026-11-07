@@ -10,6 +10,7 @@ import {
   PolygonHierarchy,
   Primitive,
   ShadowMode,
+  ShowGeometryInstanceAttribute,
   type Scene,
   type TerrainProvider,
 } from 'cesium';
@@ -26,8 +27,10 @@ import {
   openRing,
   orientedBox,
   rectangularity,
+  roofFrame,
   roofTriangles,
   signedArea,
+  type RoofFrame,
   type RoofShape,
 } from './roofGeometry';
 import type { BaseBuildingFeature, BaseBuildingProperties, BaseBuildingsCollection, Ring } from './types';
@@ -66,7 +69,9 @@ const MATERIAL_PALETTES: Record<string, Color[]> = {
   plaster: FACADE_PALETTE,
 };
 /** Цвета скатных крыш (крашеный металл) и куполов. */
-const ROOF_PALETTE = palette(['#7c4a3a', '#4f6b5a', '#6d7378', '#8a5a44', '#5d6f7a', '#5b5f63']);
+const ROOF_PALETTE = palette([
+  '#b0533a', '#9c4632', '#c06a45', '#7c4a3a', '#4f6b5a', '#6d7378', '#8a5a44', '#5d6f7a', '#a65a3c',
+]);
 const DOME_PALETTE = palette(['#c9a14a', '#4f8a72', '#5f7f99']);
 /** Деревня: бревенчатые и обшитые доской дома, крашеная обшивка, белый силикатный и красный кирпич. */
 const VILLAGE_FACADE_PALETTE = palette([
@@ -103,6 +108,21 @@ export interface BuildingShape {
   facadeColor: Color;
   /** Тип окон и витрин — чтобы детали вставали напротив нарисованных окон. */
   style: FacadeStyle;
+  /** Каркас прямоугольной скатной крыши (для труб и слуховых окон) и её цвет. */
+  roof?: RoofFrame;
+  roofColor?: Color;
+  village: boolean;
+}
+
+/** Что нужно редактору, чтобы взять дом OSM в правку: контур, этажи, цвета, крыша. */
+export interface BuildingInfo {
+  props: BaseBuildingProperties;
+  /** Внешний контур (lon/lat, без замыкающей точки). */
+  outline: LonLat[];
+  wallTop: number;
+  roof: RoofShape;
+  facadeColor: Color;
+  roofColor?: Color;
 }
 
 interface InstanceRef {
@@ -123,6 +143,9 @@ export class BaseBuildingsLayer {
   private readonly roofsPrimitive: Primitive | undefined;
   private readonly buildings = new Map<string, BaseBuildingProperties>();
   private readonly refs = new Map<string, InstanceRef[]>();
+  private readonly infos = new Map<string, BuildingInfo>();
+  /** Скрытые редактором здания (убранные или заменённые правкой). */
+  private hidden = new Set<string>();
   private readonly shapesList: BuildingShape[] = [];
   private selectedId: string | undefined;
   private conflicts = new Set<string>();
@@ -143,7 +166,14 @@ export class BaseBuildingsLayer {
     const roofs: GeometryInstance[] = [];
 
     /** simple — здание без частей: только для них считаем форму под балконы и карнизы. */
-    const addBuilding = (owner: BaseBuildingProperties, elements: BaseBuildingFeature[], ground: number, simple: boolean) => {
+    const addBuilding = (
+      owner: BaseBuildingProperties,
+      elements: BaseBuildingFeature[],
+      ground: number,
+      simple: boolean,
+      /** Контур всего здания (у зданий из частей — общий). */
+      outline?: Ring,
+    ) => {
       this.buildings.set(owner.id, owner);
       const refs: InstanceRef[] = [];
       const style = facadeStyle(owner, streetFront.has(owner.id), village);
@@ -170,8 +200,9 @@ export class BaseBuildingsLayer {
                 extrudedHeight: ground + Math.max(wallTop, props.minHeight + 0.5),
                 vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT,
               }),
+              // facadeStyle.x: 0 — обычные окна, 1 — витрины, 2 — деревенские наличники со ставнями.
               attributes: attributesFor(this.colorOf(owner.id, owner), [ground, props.minHeight, wallTop, floorH], [
-                style.shopfront ? 1 : 0,
+                village ? 2 : style.shopfront ? 1 : 0,
                 style.variant,
                 style.seed,
                 0,
@@ -179,8 +210,8 @@ export class BaseBuildingsLayer {
             }),
           );
 
-          if (roof.triangles) {
-            const roofColor = roofColorFor(props, roof.shape, village);
+          const roofColor = roof.triangles ? roofColorFor(props, roof.shape, village) : undefined;
+          if (roof.triangles && roofColor) {
             const base = ground + wallTop;
             const triangles = roof.triangles.map(
               (t) => t.map(([x, y, z]) => Cartesian3.fromDegrees(...frame.toLonLat([x, y]), base + z)) as [Cartesian3, Cartesian3, Cartesian3],
@@ -196,6 +227,17 @@ export class BaseBuildingsLayer {
             );
           }
 
+          if (!this.infos.has(owner.id)) {
+            this.infos.set(owner.id, {
+              props: owner,
+              outline: openRing(outline ?? outer) as LonLat[],
+              wallTop,
+              roof: roof.triangles ? roof.shape : 'flat',
+              facadeColor: color,
+              roofColor,
+            });
+          }
+
           if (simple && this.shapesList[this.shapesList.length - 1]?.props !== owner) {
             this.shapesList.push({
               props: owner,
@@ -207,6 +249,9 @@ export class BaseBuildingsLayer {
               floorHeight: floorH,
               facadeColor: color,
               style,
+              roof: roof.frame,
+              roofColor,
+              village,
             });
           }
         }
@@ -217,7 +262,8 @@ export class BaseBuildingsLayer {
     collection.features.forEach((feature, i) => {
       const ground = groundHeights[i] ?? 0;
       const ownParts = parts.byBuilding.get(feature.properties.id);
-      if (ownParts?.length) addBuilding(feature.properties, ownParts, ground, false);
+      const outline = (feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0]?.[0]) ?? [];
+      if (ownParts?.length) addBuilding(feature.properties, ownParts, ground, false, outline);
       else addBuilding(feature.properties, [feature], ground, true);
     });
     parts.orphans.forEach((part, j) => {
@@ -260,6 +306,19 @@ export class BaseBuildingsLayer {
     return new BaseBuildingsLayer(scene, collection, groundHeights, center, streetFront, parts, frame, village);
   }
 
+  /** Контур и внешний вид здания OSM — для правки в редакторе. */
+  buildingInfo(id: string): BuildingInfo | undefined {
+    return this.infos.get(id);
+  }
+
+  /** Скрыть здания (убранные редактором или заменённые правкой), остальные показать. */
+  setHidden(ids: ReadonlySet<string>): void {
+    const changed = [...this.hidden, ...ids].filter((id) => this.hidden.has(id) !== ids.has(id));
+    this.hidden = new Set(ids);
+    for (const id of changed) this.applyVisibility(id);
+    this.scene.requestRender();
+  }
+
   /** Формы зданий для слоя деталей. */
   shapes(): readonly BuildingShape[] {
     return this.shapesList;
@@ -274,8 +333,9 @@ export class BaseBuildingsLayer {
       const done = this.primitives.every((p) => p.isDestroyed() || p.ready);
       if (done) {
         removeListener();
-        // Подсветка/раскраска, заданные до готовности, применяем сейчас.
+        // Подсветка/раскраска и скрытие, заданные до готовности, применяем сейчас.
         for (const id of this.buildings.keys()) this.paint(id);
+        for (const id of this.hidden) this.applyVisibility(id);
       }
       this.scene.requestRender();
     });
@@ -327,6 +387,15 @@ export class BaseBuildingsLayer {
     return facadeColor(props, this.village);
   }
 
+  private applyVisibility(buildingId: string): void {
+    const show = !this.hidden.has(buildingId);
+    for (const ref of this.refs.get(buildingId) ?? []) {
+      const primitive = ref.primitive === 'walls' ? this.wallsPrimitive : this.roofsPrimitive;
+      if (!primitive?.ready) continue;
+      primitive.getGeometryInstanceAttributes(ref.id).show = ShowGeometryInstanceAttribute.toValue(show);
+    }
+  }
+
   private paint(buildingId: string): void {
     const props = this.buildings.get(buildingId);
     if (!props) return;
@@ -345,6 +414,7 @@ export class BaseBuildingsLayer {
 function attributesFor(color: Color, facade: number[], style: number[]) {
   return {
     color: ColorGeometryInstanceAttribute.fromColor(color),
+    show: new ShowGeometryInstanceAttribute(true),
     facade: new GeometryInstanceAttribute({ componentDatatype: ComponentDatatype.FLOAT, componentsPerAttribute: 4, value: facade }),
     facadeStyle: new GeometryInstanceAttribute({ componentDatatype: ComponentDatatype.FLOAT, componentsPerAttribute: 4, value: style }),
   };
@@ -356,6 +426,7 @@ interface RoofPlan {
   /** Крыша описана в OSM — её высота уже входит в height здания. */
   osm: boolean;
   triangles: ReturnType<typeof roofTriangles>;
+  frame?: RoofFrame;
 }
 
 /**
@@ -386,13 +457,13 @@ function planRoof(props: BaseBuildingProperties, localRing: Vec2[], hasHoles: bo
   }
 
   const height = props.roofHeight ?? defaultRoofHeight(shape, box, area);
-  const triangles = roofTriangles(
-    localRing,
-    shape,
-    height,
-    props.roofOrientation === 'across' ? 'across' : 'along',
-  );
-  return triangles ? { shape, height, osm, triangles } : flat;
+  const orientation = props.roofOrientation === 'across' ? 'across' : 'along';
+  // Свес скатов за стены: у деревенского дома ~0,5 м, у больших зданий пропорционально, но не больше 0,6 м.
+  const overhang = village ? 0.5 : Math.min(Math.max(box.halfV * 0.06, 0.25), 0.6);
+  const triangles = roofTriangles(localRing, shape, height, orientation, overhang);
+  return triangles
+    ? { shape, height, osm, triangles, frame: roofFrame(localRing, shape, height, orientation) }
+    : flat;
 }
 
 function roofColorFor(props: BaseBuildingProperties, shape: RoofShape, village: boolean): Color {

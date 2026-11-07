@@ -739,3 +739,275 @@ kbd {
 .cesium-viewer-bottom {
   font-size: 11px;
 }
+
+/* --- редактор (инструменты внизу, как в градостроителях) ------------------------ */
+
+.editor {
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.editor > * {
+  pointer-events: auto;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+}
+
+.editor-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.editor-tool svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.editor-tool:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.editor-tool.active {
+  background: var(--accent);
+  color: #1d1400;
+  font-weight: 600;
+}
+
+.editor kbd,
+.edit-panel kbd {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  font: 600 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: inherit;
+  opacity: 0.8;
+}
+
+.editor-tool.active kbd {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.editor-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: var(--panel-border);
+}
+
+.editor-icon {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.editor-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.editor-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.editor-count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #1d1400;
+  font: 700 10px/16px inherit;
+  font-style: normal;
+}
+
+.editor-menu-wrap {
+  position: relative;
+}
+
+.editor-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor-menu p {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
+.editor-hint,
+.editor-notice {
+  max-width: 560px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: rgba(18, 22, 30, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 13px;
+  text-align: center;
+}
+
+.editor-hint {
+  color: var(--muted);
+}
+
+.editor-notice {
+  border: 1px solid rgba(245, 165, 36, 0.5);
+  color: var(--text);
+  animation: editor-notice-in 0.2s ease-out;
+}
+
+@keyframes editor-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.editor-kinds {
+  margin: 0;
+  background: rgba(18, 22, 30, 0.82);
+}
+
+.edit-panel {
+  border-color: rgba(245, 165, 36, 0.35);
+}
+
+@media (max-width: 720px) {
+  .editor-tool span {
+    display: none;
+  }
+}
+
+.help-keys dt.help-section {
+  margin-top: 8px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- звук ------------------------------------------------------------------- */
+
+.sound-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 290px;
+}
+
+.sound-panel .toggle {
+  margin: 0 0 4px;
+}
+
+.field-disabled {
+  opacity: 0.45;
+}
+
+.sound-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+/* --- подложка ----------------------------------------------------------------- */
+
+.underlay-panel {
+  left: 0;
+  right: auto;
+  width: 320px;
+}
+
+.underlay-panel h2 {
+  margin-top: 0;
+}
+
+.underlay-panel .toggle {
+  margin-top: 8px;
+}
+
+.underlay-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-hint-accent {
+  border: 1px solid rgba(245, 165, 36, 0.55);
+  color: var(--text);
+}
+
+.editor-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.underlay-busy,
+.underlay-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.underlay-busy {
+  color: var(--accent);
+}
+
+.underlay-error {
+  color: var(--error);
+}
+
+.underlay-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

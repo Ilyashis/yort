@@ -2,6 +2,8 @@ import { BuilderPanel } from './components/BuilderPanel';
 import { BuildingCard } from './components/BuildingCard';
 import { CityViewer } from './components/CityViewer';
 import { CornerControls } from './components/CornerControls';
+import { EditPanel } from './components/EditPanel';
+import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
 import { PlotPanel } from './components/PlotPanel';
@@ -43,6 +45,8 @@ export function App() {
             )}
           </div>
           <BuildingCard />
+          <EditPanel />
+          <EditorToolbar />
         </>
       )}
       <HelpPanel />

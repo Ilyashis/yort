@@ -1,5 +1,5 @@
 import type { Vec2 } from '../world/walk/localFrame';
-import { AudioEngine } from './AudioEngine';
+import { AudioEngine, type Volumes } from './AudioEngine';
 import { Ambience } from './ambience';
 import { GenerativeMusic } from './music';
 import type { SoundZones } from './soundZones';
@@ -43,6 +43,10 @@ export class Soundscape {
 
   setEnabled(enabled: boolean): void {
     this.engine.setEnabled(enabled);
+  }
+
+  setVolumes(volumes: Volumes): void {
+    this.engine.setVolumes(volumes);
   }
 
   /** Пешеход прошёл distance метров — пора ли «шагнуть». */

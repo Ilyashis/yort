@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../walk/localFrame';
-import { balconies, entrances, facadeEdges } from './buildingDetails';
+import { balconies, chimneys, dormers, entrances, facadeEdges, rooftopBoxes } from './buildingDetails';
+import { roofFrame } from './roofGeometry';
 import { assignParts } from './parts';
 import type { BaseBuildingFeature } from './types';
 
@@ -68,5 +69,55 @@ describe('assignParts', () => {
     );
     expect(byBuilding.get('way/1')?.map((p) => p.id)).toEqual(['way/2']);
     expect(orphans.map((p) => p.id)).toEqual(['way/3']);
+  });
+});
+
+describe('детали крыш', () => {
+  // Дом 30 × 12 м, двускатная крыша высотой 4 м.
+  const frame = roofFrame(
+    [
+      [0, 0],
+      [30, 0],
+      [30, 12],
+      [0, 12],
+    ],
+    'gabled',
+    4,
+  )!;
+
+  it('труба выше конька, её низ утоплен в скат', () => {
+    const [chimney] = chimneys(frame, 5, true);
+    const top = chimney!.center[2] + chimney!.size[2] / 2;
+    const bottom = chimney!.center[2] - chimney!.size[2] / 2;
+    expect(top).toBeGreaterThan(4.5);
+    expect(bottom).toBeLessThan(4);
+    expect(chimneys(frame, 5, false).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('слуховые окна — на обоих длинных скатах, в пределах дома, с крышей и стеклом', () => {
+    const { bodies, roofs, windows } = dormers(frame);
+    expect(bodies.length).toBeGreaterThanOrEqual(6);
+    expect(roofs.length).toBe(bodies.length);
+    expect(windows.length).toBe(bodies.length);
+    for (const box of bodies) {
+      expect(box.center[0]).toBeGreaterThan(1);
+      expect(box.center[0]).toBeLessThan(29);
+      expect(box.center[2] - box.size[2] / 2).toBeLessThan(2.5); // стоит на скате, не висит над коньком
+    }
+    expect(new Set(bodies.map((b) => Math.sign(b.center[1] - 6))).size).toBe(2);
+  });
+
+  it('будки — только на плоской крыше достаточно большого дома и не у края', () => {
+    const boxes = rooftopBoxes([
+      [0, 0],
+      [60, 0],
+      [60, 14],
+      [0, 14],
+    ]);
+    expect(boxes.length).toBe(2);
+    for (const b of boxes) {
+      expect(b.center[1]).toBeGreaterThan(2.5);
+      expect(b.center[1]).toBeLessThan(11.5);
+    }
   });
 });

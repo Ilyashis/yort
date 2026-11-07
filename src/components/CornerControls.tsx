@@ -1,4 +1,80 @@
+import { useEffect, useRef, useState } from 'react';
+import type { Volumes } from '../audio/AudioEngine';
 import { useAppStore } from '../store/useAppStore';
+
+/** Вид сверху: план — квадрат с сеткой. */
+const TopViewIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7">
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="M4 12h16M12 4v16" />
+  </svg>
+);
+
+/** Вид под углом: плоскость в перспективе. */
+const TiltViewIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
+    <path d="M7 6h10l4 13H3z" />
+    <path d="M12 6v13M5 13h14" />
+  </svg>
+);
+
+const VOLUME_ROWS: { key: keyof Volumes; label: string }[] = [
+  { key: 'master', label: 'Общая громкость' },
+  { key: 'music', label: 'Музыка' },
+  { key: 'ambience', label: 'Звуки города: машины, птицы, вода' },
+  { key: 'sfx', label: 'Шаги и щелчки' },
+];
+
+/** Настройки звука: включить/выключить и громкость по группам. */
+function SoundPanel({ onClose }: { onClose: () => void }) {
+  const soundOn = useAppStore((s) => s.soundOn);
+  const setSoundOn = useAppStore((s) => s.setSoundOn);
+  const volumes = useAppStore((s) => s.volumes);
+  const setVolumes = useAppStore((s) => s.setVolumes);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (ref.current && target && !ref.current.contains(target) && !target.closest?.('.sound-button')) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code === 'Escape') onClose();
+    };
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className="panel sound-panel" role="dialog" aria-label="Звук">
+      <label className="toggle">
+        <input type="checkbox" checked={soundOn} onChange={(e) => setSoundOn(e.target.checked)} />
+        Звук включён
+      </label>
+      {VOLUME_ROWS.map(({ key, label }) => (
+        <label key={key} className={`field ${soundOn ? '' : 'field-disabled'}`}>
+          <span>
+            {label} <b>{Math.round(volumes[key] * 100)}%</b>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(volumes[key] * 100)}
+            disabled={!soundOn}
+            onChange={(e) => setVolumes({ [key]: Number(e.target.value) / 100 })}
+          />
+        </label>
+      ))}
+      <p className="muted sound-note">Браузер включит звук после первого клика по странице.</p>
+    </div>
+  );
+}
 
 const SoundOnIcon = () => (
   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -21,11 +97,14 @@ const SparkleIcon = () => (
   </svg>
 );
 
-/** Кнопки в правом нижнем углу: звук и качество графики. */
+/** Кнопки в правом нижнем углу: подсказка, вид сверху/под углом, звук, качество графики. */
 export function CornerControls() {
   const soundOn = useAppStore((s) => s.soundOn);
   const quality = useAppStore((s) => s.graphicsQuality);
-  const setSoundOn = useAppStore((s) => s.setSoundOn);
+  const viewMode = useAppStore((s) => s.viewMode);
+  const changeView = useAppStore((s) => s.changeView);
+  const walking = useAppStore((s) => s.mode === 'walk');
+  const [soundPanel, setSoundPanel] = useState(false);
   const setQuality = useAppStore((s) => s.setGraphicsQuality);
   const helpOpen = useAppStore((s) => s.helpOpen);
   const setHelpOpen = useAppStore((s) => s.setHelpOpen);
@@ -41,15 +120,27 @@ export function CornerControls() {
       >
         ?
       </button>
+      {!walking && (
+        <button
+          type="button"
+          className="round-button"
+          onClick={() => changeView?.(viewMode === 'top' ? 'tilt' : 'top')}
+          disabled={!changeView}
+          title={viewMode === 'top' ? 'Вид под углом' : 'Вид сверху — удобно обводить по подложке'}
+        >
+          {viewMode === 'top' ? <TiltViewIcon /> : <TopViewIcon />}
+        </button>
+      )}
       <button
         type="button"
-        className={`round-button ${soundOn ? 'on' : ''}`}
-        onClick={() => setSoundOn(!soundOn)}
-        aria-pressed={soundOn}
-        title={soundOn ? 'Выключить музыку и звуки' : 'Включить музыку и звуки'}
+        className={`round-button sound-button ${soundOn ? 'on' : ''}`}
+        onClick={() => setSoundPanel(!soundPanel)}
+        aria-expanded={soundPanel}
+        title="Звук: громкость музыки, города, шагов"
       >
         {soundOn ? <SoundOnIcon /> : <SoundOffIcon />}
       </button>
+      {soundPanel && <SoundPanel onClose={() => setSoundPanel(false)} />}
       <button
         type="button"
         className={`round-button ${quality === 'high' ? 'on' : ''}`}

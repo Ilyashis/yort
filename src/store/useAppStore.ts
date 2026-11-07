@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_VOLUMES, type Volumes } from '../audio/AudioEngine';
 import type { GraphicsQuality } from '../cesium/createViewer';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../cesium/terrain';
@@ -51,6 +52,20 @@ export interface WalkControls {
   exit: () => void;
 }
 
+/** Громкость по группам из браузера (если сохранена и в порядке). */
+function readVolumes(): Volumes {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem('citia:volumes') ?? 'null') as Partial<Volumes> | null;
+    const pick = (key: keyof Volumes) => {
+      const v = saved?.[key];
+      return typeof v === 'number' && v >= 0 && v <= 1 ? v : DEFAULT_VOLUMES[key];
+    };
+    return { master: pick('master'), music: pick('music'), ambience: pick('ambience'), sfx: pick('sfx') };
+  } catch {
+    return DEFAULT_VOLUMES;
+  }
+}
+
 /** Населённый пункт при открытии: из ссылки (?place=…), иначе последний выбранный. */
 function initialTerritoryId(): string {
   try {
@@ -100,6 +115,10 @@ interface AppState {
   userBuildings: UserBuilding[];
   /** Музыка и звуки города (запоминается в браузере). */
   soundOn: boolean;
+  /** Громкость по группам (запоминается в браузере). */
+  volumes: Volumes;
+  /** Вид камеры: сверху (план) или под углом — для подсветки кнопки. */
+  viewMode: 'top' | 'tilt';
   /** Качество графики (запоминается в браузере). */
   graphicsQuality: GraphicsQuality;
 
@@ -121,6 +140,11 @@ interface AppState {
   setMode: (mode: InteractionMode) => void;
   setWalkStreet: (street: string | undefined) => void;
   setSoundOn: (on: boolean) => void;
+  setVolumes: (patch: Partial<Volumes>) => void;
+  setViewMode: (mode: 'top' | 'tilt') => void;
+  /** Регистрирует сцена: перелёт к виду сверху или под углом. */
+  changeView?: (mode: 'top' | 'tilt') => void;
+  setChangeView: (change: ((mode: 'top' | 'tilt') => void) | undefined) => void;
   setGraphicsQuality: (quality: GraphicsQuality) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setHelpOpen: (open: boolean) => void;
@@ -148,6 +172,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   plotDraft: [],
   userBuildings: [],
   soundOn: readPref('sound', ['on', 'off'], 'on') === 'on',
+  volumes: readVolumes(),
+  viewMode: 'tilt',
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
   walkMouseLocked: false,
   helpOpen: readPref('help', ['seen', 'new'] as const, 'new') !== 'seen',
@@ -185,6 +211,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('sound', soundOn ? 'on' : 'off');
     set({ soundOn });
   },
+  setVolumes: (patch) => {
+    const volumes = { ...get().volumes, ...patch };
+    writePref('volumes', JSON.stringify(volumes));
+    set({ volumes });
+  },
+  setViewMode: (viewMode) => {
+    if (viewMode !== get().viewMode) set({ viewMode });
+  },
+  setChangeView: (changeView) => set({ changeView }),
   setGraphicsQuality: (graphicsQuality) => {
     writePref('graphics', graphicsQuality);
     set({ graphicsQuality });
