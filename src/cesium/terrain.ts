@@ -42,7 +42,7 @@ export async function createTerrain(territory: Territory): Promise<TerrainSetup>
   if (token) {
     Ion.defaultAccessToken = token;
     try {
-      return { provider: await createWorldTerrainAsync(), kind: 'world' };
+      return { provider: withFastMeshes(await createWorldTerrainAsync()), kind: 'world' };
     } catch (error) {
       console.warn('[terrain] Cesium World Terrain недоступен, пробую свой рельеф', error);
     }
@@ -53,7 +53,7 @@ export async function createTerrain(territory: Territory): Promise<TerrainSetup>
     if (response.ok) {
       const file = (await response.json()) as TerrainFile;
       const grid = decodeTerrainFile(file);
-      const provider = createDemProvider(grid, file.metadata.credit);
+      const provider = withFastMeshes(createDemProvider(grid, file.metadata.credit));
       grids.set(provider, grid);
       return { provider, kind: 'dem', grid, credit: file.metadata.credit };
     }
@@ -75,6 +75,28 @@ export function heightSampler(
   }
   if (terrain.kind === 'world') return (lon, lat) => globeHeight(lon, lat) ?? 0;
   return () => 0;
+}
+
+/**
+ * Сетки тайлов рельефа — без очереди «не больше 5 за раз» (TerrainData.maximumAsynchronousTasks).
+ * С ней после поворота камеры видимые тайлы уточнялись по ~5 за кадр, и земля оставалась
+ * размытой 2–5 секунд; сетка 33×33 строится в воркере за доли миллисекунды — ограничение лишнее.
+ */
+interface MeshSource {
+  createMesh: (options: Record<string, unknown>) => unknown;
+}
+
+function withFastMeshes<T extends TerrainProvider>(provider: T): T {
+  const request = provider.requestTileGeometry.bind(provider);
+  provider.requestTileGeometry = (x, y, level, ...rest) =>
+    request(x, y, level, ...rest)?.then((data) => {
+      // createMesh у Cesium внутренний (@private), в типах его нет.
+      const mesh = data as unknown as MeshSource;
+      const createMesh = mesh.createMesh.bind(mesh);
+      mesh.createMesh = (options) => createMesh({ ...options, throttle: false });
+      return data;
+    });
+  return provider;
 }
 
 /** Провайдер Cesium поверх нашей сетки: каждый тайл — выборка высот с билинейной интерполяцией. */

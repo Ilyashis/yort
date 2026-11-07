@@ -10,6 +10,7 @@ import {
   Math as CesiumMath,
   OpenStreetMapImageryProvider,
   PostProcessStageLibrary,
+  Rectangle,
   ScreenSpaceEventType,
   SunLight,
   Viewer,
@@ -68,6 +69,9 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
 
   const { scene } = viewer;
   scene.globe.depthTestAgainstTerrain = true;
+  // Кэш тайлов: по умолчанию 100 — при повороте камеры под углом в кадре до 400 тайлов,
+  // и уже виденные тут же выбрасывались; вернуть взгляд назад — снова грузить всё (~1 с).
+  scene.globe.tileCacheSize = 400;
 
   // Солнце: летний вечер, фасады освещены с запада тёплым светом, тени длинные.
   viewer.clock.currentTime = JulianDate.fromIso8601(SUN_TIME);
@@ -89,6 +93,26 @@ export function createViewer(container: HTMLElement, terrainProvider: TerrainPro
   viewer.creditDisplay.addStaticCredit(new Credit('Здания: © участники OpenStreetMap, ODbL'));
 
   return viewer;
+}
+
+/**
+ * Базовую карту OSM под покрытиями района не грузим: там лежит наш непрозрачный слой тайлов,
+ * и сетевые тайлы OSM всё равно не видны — а при повороте камеры они занимали очередь загрузки.
+ */
+export function skipBaseMapUnder(viewer: Viewer, bounds: { west: number; south: number; east: number; north: number }): void {
+  const base = viewer.imageryLayers.get(0)?.imageryProvider;
+  if (!base) return;
+  const rectangle = Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north);
+  const blank = document.createElement('canvas');
+  blank.width = 1;
+  blank.height = 1;
+  const request = base.requestImage.bind(base);
+  base.requestImage = (x, y, level, ...rest) => {
+    const tile = base.tilingScheme.tileXYToRectangle(x, y, level);
+    const covered =
+      tile.west >= rectangle.west && tile.east <= rectangle.east && tile.south >= rectangle.south && tile.north <= rectangle.north;
+    return covered ? Promise.resolve(blank) : request(x, y, level, ...rest);
+  };
 }
 
 interface ShadowBias {

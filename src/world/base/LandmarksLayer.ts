@@ -1,4 +1,5 @@
 import {
+  Axis,
   BoxGeometry,
   Cartesian2,
   Cartesian3,
@@ -6,7 +7,6 @@ import {
   ColorGeometryInstanceAttribute,
   CylinderGeometry,
   DistanceDisplayCondition,
-  EllipsoidGeometry,
   GeometryInstance,
   HorizontalOrigin,
   LabelCollection,
@@ -14,6 +14,7 @@ import {
   Math as CesiumMath,
   Matrix3,
   Matrix4,
+  Model,
   PerInstanceColorAppearance,
   Primitive,
   ShadowMode,
@@ -30,96 +31,59 @@ import type { BaseBuildingFeature, Ring } from './types';
 
 const VERTEX_FORMAT = PerInstanceColorAppearance.VERTEX_FORMAT;
 const GRANITE_LIGHT = Color.fromCssColorString('#a29b92');
+const GRANITE = Color.fromCssColorString('#857c74');
 const GRANITE_DARK = Color.fromCssColorString('#6f6862');
 const BRONZE = Color.fromCssColorString('#4d4335');
 
-/** Масштаб фигуры: при 1.5 высота от пьедестала до кнута ≈ 9,8 м, как у настоящей статуи. */
-const STATUE_SCALE = 1.5;
-const PLATFORM = { radius: 7, height: 0.5 };
-/** «Юбка» площадки вниз, м: на склоне (памятник — на краю обрыва) под ней не будет щели. */
-const PLATFORM_SKIRT = 3;
-const PEDESTAL = { width: 4.2, length: 6.5, height: 3.5 };
-const PEDESTAL_TOP = PLATFORM.height + PEDESTAL.height;
-
-type Shape =
-  | { type: 'ellipsoid'; radii: [number, number, number] }
-  | { type: 'cylinder'; length: number; top: number; bottom: number };
-
-interface Part {
-  shape: Shape;
-  /** Центр детали в координатах фигуры: x — вправо, y — вперёд (куда смотрит конь), z — вверх. */
-  at: [number, number, number];
-  /** Наклон, градусы: rx поднимает перед (+) детали, вытянутой вдоль y; ry наклоняет верх вправо. */
-  rx?: number;
-  ry?: number;
-}
-
-const ellipsoid = (rx: number, ry: number, rz: number): Shape => ({ type: 'ellipsoid', radii: [rx, ry, rz] });
-const cylinder = (length: number, top: number, bottom = top): Shape => ({ type: 'cylinder', length, top, bottom });
-
-/** Конь, вставший на дыбы, и всадник с поднятой рукой — стилизация из простых форм. */
-const EQUESTRIAN: Part[] = [
-  // Конь
-  { shape: cylinder(2.0, 0.16, 0.13), at: [-0.35, -1.2, 1.0], rx: -15 },
-  { shape: cylinder(2.0, 0.16, 0.13), at: [0.35, -1.15, 1.0], rx: -10 },
-  { shape: ellipsoid(0.75, 1.7, 0.85), at: [0, -0.2, 2.3], rx: 32 },
-  { shape: ellipsoid(0.7, 0.9, 0.9), at: [0, 0.9, 3.0], rx: 32 },
-  { shape: ellipsoid(0.4, 0.5, 1.0), at: [0, 1.35, 3.9], rx: -25 },
-  { shape: ellipsoid(0.28, 0.6, 0.32), at: [0, 1.75, 4.7], rx: -30 },
-  { shape: cylinder(1.5, 0.15, 0.11), at: [-0.35, 1.55, 2.6], rx: 50 },
-  { shape: cylinder(1.4, 0.15, 0.11), at: [0.35, 1.65, 2.75], rx: 65 },
-  { shape: ellipsoid(0.15, 0.25, 0.9), at: [0, -1.85, 1.6], rx: -35 },
-  // Всадник
-  { shape: ellipsoid(0.42, 0.32, 0.85), at: [0, 0.15, 3.85], rx: -15 },
-  { shape: ellipsoid(0.26, 0.26, 0.3), at: [0, 0.35, 4.85] },
-  { shape: ellipsoid(0.18, 0.6, 0.22), at: [-0.62, 0.3, 3.15], rx: 20 },
-  { shape: ellipsoid(0.18, 0.6, 0.22), at: [0.62, 0.3, 3.15], rx: 20 },
-  { shape: cylinder(0.9, 0.12, 0.1), at: [-0.7, 0.55, 2.65], rx: -20 },
-  { shape: cylinder(0.9, 0.12, 0.1), at: [0.7, 0.55, 2.65], rx: -20 },
-  { shape: cylinder(1.1, 0.1, 0.09), at: [0.55, 0.25, 4.85], ry: 35 },
-  { shape: cylinder(1.3, 0.035, 0.03), at: [0.95, 0.35, 5.8], ry: 15 },
-  { shape: cylinder(0.9, 0.1, 0.09), at: [-0.45, 0.6, 4.1], rx: 60 },
+/** Площадка в две ступени; «юбка» вниз, м: на склоне (памятник — на краю обрыва) под ней не будет щели. */
+const STEPS = [
+  { radius: 7.2, height: 0.25 },
+  { radius: 6.4, height: 0.25 },
 ];
+const PLATFORM_HEIGHT = STEPS.reduce((sum, step) => sum + step.height, 0);
+const PLATFORM_SKIRT = 3;
+/** Пьедестал: цоколь, ствол и карниз — как у классических постаментов, общая высота ~4,1 м. */
+const PLINTH = { width: 4.8, length: 7.1, height: 0.45 };
+const SHAFT = { width: 4.2, length: 6.5, height: 3.0 };
+const CORNICE = { width: 4.6, length: 6.9, height: 0.35 };
+const PEDESTAL_TOP = PLATFORM_HEIGHT + PLINTH.height + SHAFT.height + CORNICE.height;
+/** Бронзовая доска с надписью на лицевой стороне ствола. */
+const PLAQUE = { width: 2.6, height: 0.9, depth: 0.06 };
 
+/** Высота статуи над пьедесталом, м (модель собрана в этой высоте, см. scripts/sculpt-statue.mjs). */
+const STATUE_HEIGHT = 9.8;
 /** Высота верха фигуры над землёй, м. */
-const STATUE_TOP = PEDESTAL_TOP + 6.5 * STATUE_SCALE;
+const STATUE_TOP = PEDESTAL_TOP + STATUE_HEIGHT;
 
-/** Памятники: гранитный пьедестал, бронзовая фигура и подпись. */
+/** Памятники: гранитный пьедестал, бронзовая статуя (модель GLB) и подпись. */
 export class LandmarksLayer {
   private constructor(
     readonly primitive: Primitive,
     readonly labels: LabelCollection,
+    readonly statues: Model[],
   ) {}
 
   static async create(landmarks: readonly Landmark[], terrainProvider: TerrainProvider): Promise<LandmarksLayer> {
     // Земля — самая низкая точка под площадкой: на склоне площадка не повиснет в воздухе.
     const grounds = await sampleMinHeights(
-      landmarks.map((l) => [l.position, ...(landmarkClearance(l, PLATFORM.radius)[0] ?? [])]),
+      landmarks.map((l) => [l.position, ...(landmarkClearance(l, STEPS[0]!.radius)[0] ?? [])]),
       terrainProvider,
     );
     const instances: GeometryInstance[] = [];
     const labels = new LabelCollection();
+    const statues: Promise<Model | undefined>[] = [];
 
     landmarks.forEach((landmark, i) => {
       const ground = grounds[i] ?? 0;
+      // Оси памятника: x — вправо, y — вперёд (куда смотрит конь), z — вверх.
       const base = Matrix4.multiply(
         Transforms.eastNorthUpToFixedFrame(Cartesian3.fromDegrees(...landmark.position, ground)),
         Matrix4.fromRotationTranslation(Matrix3.fromRotationZ(CesiumMath.toRadians(-landmark.heading))),
         new Matrix4(),
       );
-      const place = (offset: [number, number, number], rx = 0, ry = 0) => {
-        const rotation = Matrix3.multiply(
-          Matrix3.fromRotationX(CesiumMath.toRadians(rx)),
-          Matrix3.fromRotationY(CesiumMath.toRadians(ry)),
-          new Matrix3(),
-        );
-        return Matrix4.multiply(
-          base,
-          Matrix4.fromRotationTranslation(rotation, new Cartesian3(...offset)),
-          new Matrix4(),
-        );
-      };
-      const add = (geometry: CylinderGeometry | EllipsoidGeometry | BoxGeometry, modelMatrix: Matrix4, color: Color) =>
+      const place = (offset: [number, number, number]) =>
+        Matrix4.multiply(base, Matrix4.fromTranslation(new Cartesian3(...offset)), new Matrix4());
+      const add = (geometry: CylinderGeometry | BoxGeometry, modelMatrix: Matrix4, color: Color) =>
         instances.push(
           new GeometryInstance({
             geometry,
@@ -127,47 +91,49 @@ export class LandmarksLayer {
             attributes: { color: ColorGeometryInstanceAttribute.fromColor(color) },
           }),
         );
+      const box = (size: { width: number; length: number; height: number }, z: number, color: Color) =>
+        add(
+          BoxGeometry.fromDimensions({
+            dimensions: new Cartesian3(size.width, size.length, size.height),
+            vertexFormat: VERTEX_FORMAT,
+          }),
+          place([0, 0, z + size.height / 2]),
+          color,
+        );
 
-      add(
-        new CylinderGeometry({
-          length: PLATFORM.height + PLATFORM_SKIRT,
-          topRadius: PLATFORM.radius,
-          bottomRadius: PLATFORM.radius,
-          slices: 32,
-          vertexFormat: VERTEX_FORMAT,
-        }),
-        place([0, 0, (PLATFORM.height - PLATFORM_SKIRT) / 2]),
-        GRANITE_LIGHT,
-      );
+      // Ступени: нижняя уходит «юбкой» в склон.
+      let z = 0;
+      STEPS.forEach((step, k) => {
+        const skirt = k === 0 ? PLATFORM_SKIRT : 0;
+        add(
+          new CylinderGeometry({
+            length: step.height + skirt,
+            topRadius: step.radius,
+            bottomRadius: step.radius,
+            slices: 48,
+            vertexFormat: VERTEX_FORMAT,
+          }),
+          place([0, 0, z + (step.height - skirt) / 2]),
+          k === 0 ? GRANITE_LIGHT : GRANITE,
+        );
+        z += step.height;
+      });
+      box(PLINTH, z, GRANITE);
+      z += PLINTH.height;
+      box(SHAFT, z, GRANITE_DARK);
+      // Доска на лицевой стороне ствола, по центру высоты.
       add(
         BoxGeometry.fromDimensions({
-          dimensions: new Cartesian3(PEDESTAL.width, PEDESTAL.length, PEDESTAL.height),
+          dimensions: new Cartesian3(PLAQUE.width, PLAQUE.depth * 2, PLAQUE.height),
           vertexFormat: VERTEX_FORMAT,
         }),
-        place([0, 0, PLATFORM.height + PEDESTAL.height / 2]),
-        GRANITE_DARK,
+        place([0, SHAFT.length / 2, z + SHAFT.height * 0.55]),
+        BRONZE,
       );
+      z += SHAFT.height;
+      box(CORNICE, z, GRANITE);
 
-      const s = STATUE_SCALE;
-      for (const part of EQUESTRIAN) {
-        const geometry =
-          part.shape.type === 'ellipsoid'
-            ? new EllipsoidGeometry({
-                radii: new Cartesian3(...part.shape.radii.map((r) => r * s) as [number, number, number]),
-                stackPartitions: 12,
-                slicePartitions: 14,
-                vertexFormat: VERTEX_FORMAT,
-              })
-            : new CylinderGeometry({
-                length: part.shape.length * s,
-                topRadius: part.shape.top * s,
-                bottomRadius: part.shape.bottom * s,
-                slices: 10,
-                vertexFormat: VERTEX_FORMAT,
-              });
-        const [x, y, z] = part.at;
-        add(geometry, place([x * s, y * s, PEDESTAL_TOP + z * s], part.rx, part.ry), BRONZE);
-      }
+      if (landmark.model) statues.push(loadStatue(landmark.model, place([0, 0, PEDESTAL_TOP])));
 
       labels.add({
         text: landmark.name,
@@ -194,17 +160,39 @@ export class LandmarksLayer {
         allowPicking: false,
       }),
       labels,
+      (await Promise.all(statues)).filter((model): model is Model => !!model),
     );
   }
 
   addTo(scene: Scene): void {
     scene.primitives.add(this.primitive);
+    for (const statue of this.statues) scene.primitives.add(statue);
     scene.primitives.add(this.labels);
   }
 
   destroy(): void {
     if (!this.primitive.isDestroyed()) this.primitive.destroy();
+    for (const statue of this.statues) if (!statue.isDestroyed()) statue.destroy();
     if (!this.labels.isDestroyed()) this.labels.destroy();
+  }
+}
+
+/**
+ * Статуя из GLB. Модель собрана в метрах: основание в нуле, вперёд — −z glTF; с forwardAxis = X
+ * Cesium кладёт её так, что вперёд — ось y памятника, вверх — z. Не загрузилась — остаётся пьедестал.
+ */
+async function loadStatue(url: string, modelMatrix: Matrix4): Promise<Model | undefined> {
+  try {
+    return await Model.fromGltfAsync({
+      url: `${import.meta.env.BASE_URL}${url}`,
+      modelMatrix,
+      forwardAxis: Axis.X,
+      shadows: ShadowMode.ENABLED,
+      allowPicking: false,
+    });
+  } catch (error) {
+    console.warn('[landmarks] модель статуи не загрузилась', url, error);
+    return undefined;
   }
 }
 
@@ -222,8 +210,8 @@ export function landmarkClearance(landmark: Landmark, radius = 20): Ring[] {
 export function landmarkObstacle(landmark: Landmark): BaseBuildingFeature {
   const frame = createLocalFrame(landmark.position);
   const h = CesiumMath.toRadians(landmark.heading);
-  const halfW = PEDESTAL.width / 2;
-  const halfL = PEDESTAL.length / 2;
+  const halfW = PLINTH.width / 2;
+  const halfL = PLINTH.length / 2;
   // Поворот локальных осей фигуры (x — вправо, y — вперёд) на курс памятника.
   const toWorld = ([x, y]: [number, number]): LonLat =>
     frame.toLonLat([x * Math.cos(h) + y * Math.sin(h), -x * Math.sin(h) + y * Math.cos(h)]);

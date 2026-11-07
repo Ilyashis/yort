@@ -103,6 +103,11 @@ export class GroundLayer {
   private readonly roads: RoadEntry[];
   private readonly bounds: Bounds | undefined;
 
+  /** Где лежат покрытия района (непрозрачный слой тайлов): под ним базовую карту можно не грузить. */
+  get landBounds(): Readonly<Bounds> | undefined {
+    return this.bounds;
+  }
+
   private constructor(
     private readonly features: readonly GroundFeature[],
     private readonly terrain: TerrainKind,

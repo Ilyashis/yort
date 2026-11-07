@@ -1,6 +1,6 @@
 import type { LonLat } from '../world/user/plot';
 
-/** Достопримечательность, для которой в OSM нет 3D-формы, — рисуем стилизованную модель. */
+/** Достопримечательность, для которой в OSM нет 3D-формы: пьедестал рисуем сами, статую — моделью. */
 export interface Landmark {
   id: string;
   name: string;
@@ -10,6 +10,8 @@ export interface Landmark {
   heading: number;
   kind: 'equestrian-statue';
   osm?: string;
+  /** Модель статуи в public/ (GLB в метрах, основание в нуле), ставится на пьедестал. */
+  model?: string;
 }
 
 export const LANDMARKS: Landmark[] = [
@@ -21,5 +23,7 @@ export const LANDMARKS: Landmark[] = [
     heading: 250,
     kind: 'equestrian-statue',
     osm: 'node/656228306',
+    // Слеплена в коде: scripts/sculpt-statue.mjs (npm run models:statue).
+    model: 'models/salavat-yulaev.glb',
   },
 ];

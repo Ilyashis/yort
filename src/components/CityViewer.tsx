@@ -19,6 +19,7 @@ import {
   flyToTerritory,
   setGraphicsQuality,
   setIntroView,
+  skipBaseMapUnder,
   territoryCenter,
   changeViewMode,
   viewModeOf,
@@ -152,6 +153,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       );
       ground.addTo(v);
       owned.push(ground);
+      if (ground.landBounds) skipBaseMapUnder(v, ground.landBounds);
 
       const landmarks = LANDMARKS.filter(
         ({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north,

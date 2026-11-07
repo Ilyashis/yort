@@ -17,7 +17,8 @@
     "data:fetch": "npm run data:fetch:buildings && npm run data:fetch:environment && npm run data:fetch:terrain",
     "data:fetch:terrain": "node scripts/fetch-dem.mjs",
     "data:fetch:buildings": "node scripts/fetch-osm-buildings.mjs",
-    "data:fetch:environment": "node scripts/fetch-osm-environment.mjs"
+    "data:fetch:environment": "node scripts/fetch-osm-environment.mjs",
+    "models:statue": "node scripts/sculpt-statue.mjs"
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",

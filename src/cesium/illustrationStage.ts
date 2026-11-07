@@ -67,15 +67,20 @@ in vec2 v_textureCoordinates;
 
 // Точка сцены в координатах камеры; sky — в пикселе только небо; ground — голый рельеф
 // (глубина сцены совпадает с глубиной земли), а не дом, дерево или фонарь.
-// Глубина [0, 1] → NDC [−1, 1]: без этого расстояния выходят почти вдвое больше (сверено с pickPosition).
+// Небо и землю узнаём по «сырой» логарифмической глубине: у пустого пикселя она ровно 1.0.
+// После пересчёта в обычную глубину (czm_readDepth) на прогулке — ближняя плоскость 0,1 м,
+// дальняя 10¹⁰ м — точности float не хватает: небо через кадр выходило «не небом» и мерцало дымкой.
+// Расстояние — тоже прямо из логарифмической глубины: w = 2^(z·log2(far − near + 1)) − 1 + near.
 vec3 eyeAt(vec2 uv, out bool sky, out bool ground)
 {
-    float depth = czm_readDepth(depthTexture, uv);
-    float groundDepth = czm_reverseLogDepth(czm_unpackDepth(texture(globeDepth, uv)));
-    sky = depth >= 1.0;
-    ground = !sky && abs(depth - groundDepth) < 1e-6;
-    vec4 p = czm_inverseProjection * vec4(2.0 * uv - 1.0, 2.0 * depth - 1.0, 1.0);
-    return p.xyz / p.w;
+    float logDepth = texture(depthTexture, uv).r;
+    float groundLogDepth = czm_unpackDepth(texture(globeDepth, uv));
+    sky = logDepth >= 1.0;
+    ground = !sky && abs(logDepth - groundLogDepth) < 1e-6;
+    float w = exp2(logDepth * czm_log2FarDepthFromNearPlusOne) - 1.0 + czm_currentFrustum.x;
+    vec4 q = czm_inverseProjection * vec4(2.0 * uv - 1.0, -1.0, 1.0);
+    vec3 ray = q.xyz / q.w;
+    return ray * (w / -ray.z);
 }
 
 // Сила контура между центром c и соседом n по плоскости центра.
