@@ -60,6 +60,10 @@ export class SkySystem {
   private readonly moon: Sprite;
   private readonly ambient = new HemisphereLight('#4a5f95', '#1c2018', 0);
   private readonly fog = new FogExp2(0xc5d3df, 0.000105);
+  /** Дымка вдали: плотность тумана (слабая — даль почти прозрачна, сильная — воздушная перспектива). */
+  setHaze(on: boolean): void {
+    this.fog.density = on ? 0.00062 : 0.000105;
+  }
 
   constructor(
     private readonly scene: Scene,

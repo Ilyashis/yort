@@ -7,6 +7,7 @@ export function HelpPanel() {
   const open = useAppStore((s) => s.helpOpen);
   const ready = useAppStore((s) => s.status === 'ready');
   const walking = useAppStore((s) => s.mode === 'walk');
+  const driving = useAppStore((s) => s.mode === 'drive');
   const setOpen = useAppStore((s) => s.setHelpOpen);
   if (!open || !ready) return null;
 
@@ -15,8 +16,49 @@ export function HelpPanel() {
       <button type="button" className="close" aria-label="Закрыть" onClick={() => setOpen(false)}>
         ×
       </button>
-      <h2>{walking ? 'Управление на прогулке' : 'Управление камерой'}</h2>
-      {walking ? (
+      <h2>{driving ? 'Управление машиной' : walking ? 'Управление на прогулке' : 'Управление камерой'}</h2>
+      {driving ? (
+        <dl className="help-keys">
+          <dt>
+            <Key>W</Key>
+            <Key>S</Key> или <Key>↑</Key>
+            <Key>↓</Key>
+          </dt>
+          <dd>газ / тормоз; стоя — задний ход</dd>
+          <dt>
+            <Key>A</Key>
+            <Key>D</Key> или <Key>←</Key>
+            <Key>→</Key>
+          </dt>
+          <dd>руль</dd>
+          <dt>
+            <Key>Пробел</Key>
+          </dt>
+          <dd>ручник</dd>
+          <dt>
+            <Key>Shift</Key>
+          </dt>
+          <dd>быстрее: до 90 км/ч вместо 60</dd>
+          <dt>
+            <Key>C</Key>
+          </dt>
+          <dd>камера: сзади или из кабины</dd>
+          <dt>мышь с кнопкой, колесо</dt>
+          <dd>оглядеться; ближе / дальше</dd>
+          <dt>
+            <Key>R</Key>
+          </dt>
+          <dd>вернуть машину на ближайшую дорогу</dd>
+          <dt>
+            <Key>M</Key>
+          </dt>
+          <dd>мини-карта: спрятать / показать</dd>
+          <dt>
+            <Key>Esc</Key>
+          </dt>
+          <dd>выйти из машины</dd>
+        </dl>
+      ) : walking ? (
         <dl className="help-keys">
           <dt>
             <Key>W</Key>
@@ -44,6 +86,10 @@ export function HelpPanel() {
             <Key>Esc</Key>
           </dt>
           <dd>отпустить курсор; ещё раз — выйти из прогулки</dd>
+          <dt>
+            <Key>M</Key>
+          </dt>
+          <dd>мини-карта: спрятать / показать</dd>
         </dl>
       ) : (
         <dl className="help-keys">

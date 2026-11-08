@@ -7,6 +7,7 @@
 // Открытый интерфейс:
 //   new EditorTool(ctx: EditorContext) — слушает мышь на city.canvas и клавиатуру на window;
 //   resolve(id)       — дом для правки: уже изменённый или дом OSM в виде правки (для useEditStore.setResolver);
+//   applyModel(b, m)  — дом-модель на месте дома: прямоугольник контура, фасад к ближайшей улице (или без модели);
 //   deleteSelection() — удалить выделенное;
 //   destroy().
 
@@ -24,11 +25,13 @@ import {
   centroidOf,
   fromOsm,
   lineLength,
+  modelFootprint,
   nearestOnLines,
   newBuilding,
   removeBuilding,
   removeFence,
   removeRoad,
+  replacedOsmIds,
   resizeByCorner,
   rotate,
   simplifyLine,
@@ -37,15 +40,19 @@ import {
   translate,
   upsertBuilding,
   upsertRoad,
+  withModel,
   type EditedBuilding,
+  type HouseModelRef,
   type LonLat,
 } from '../world/edit/edits';
+import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
 import { toLocal2 } from './coords';
 import type { EditLayer, Handle } from './EditLayer';
 import type { GroundLayer } from './GroundLayer';
+import type { VillageModelsLayer } from './VillageModelsLayer';
 import { isTypingTarget } from './OverviewControls';
 
 /** Сдвиг курсора меньше этого (px) — клик, а не перетаскивание. */
@@ -55,6 +62,8 @@ const ROAD_SNAP_M = 10;
 /** Дом выравнивается по улице, если она ближе этого, м. */
 const ALIGN_TO_STREET_M = 60;
 const MIN_HOUSE_SIDE = 3;
+/** Дом-модель кликом у дороги: фасад не ближе этого к оси улицы, м (полдороги и палисадник). */
+const FACADE_SETBACK_M = 6.5;
 const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence' };
 
 /** Точка экрана (координаты клиента, px). */
@@ -82,9 +91,13 @@ export interface EditorContext {
   /** Дома OSM — проверка, что новый дом ни на что не налезает. */
   osmBuildings: readonly BaseBuildingFeature[];
   yards: readonly Yard[];
+  /** Деревня из моделей: дома OSM, нарисованные башкирскими домами (выбор, правка, скрытие). */
+  models?: VillageModelsLayer;
 }
 
 const screenDistance = (a: ScreenPoint, b: ScreenPoint) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+/** Зерно по месту (до дециметра): пока тянут дом, окраска модели не мигает. */
+const pointSeed = (point: Vec2) => hashString(`${point[0].toFixed(1)}:${point[1].toFixed(1)}`) % 9973;
 
 /**
  * Редактор в сцене — как в градостроителях: «Дом» — тяни по земле, дом вырастает под участок
@@ -125,7 +138,7 @@ export class EditorTool {
     if (own) return own;
     const info = this.ctx.base.buildingInfo(id);
     if (!info || info.outline.length < 3) return undefined;
-    return fromOsm({
+    const osm = fromOsm({
       id,
       building: info.props.building,
       levels: info.props.levels,
@@ -135,6 +148,19 @@ export class EditorTool {
       facadeColor: info.facadeColor,
       roofColor: info.roofColor,
     });
+    // Дом деревни, нарисованный моделью, — в правку с той же моделью и её прямоугольником.
+    const house = this.ctx.models?.house(id);
+    const rect = house && this.ctx.models?.rectLonLat(id);
+    return house && rect ? withModel(osm, { id: house.model, seed: house.seed }, rect) : osm;
+  }
+
+  /** Дом-модель на месте дома: прямоугольник контура, фасад — к ближайшей улице; без модели — простой объём. */
+  applyModel(b: EditedBuilding, model: HouseModelRef | undefined): EditedBuilding {
+    if (!model) return withModel(b, undefined);
+    // Уже модель — контур и сторона фасада остаются (меняется только вид).
+    if (b.model && b.footprint.length === 4) return withModel(b, model);
+    const rect = modelFootprint(this.local(b), this.roadLines());
+    return withModel(b, model, rect.map(this.ctx.frame.toLonLat) as LonLat[]);
   }
 
   /** Удалить выделенное (Delete). */
@@ -213,7 +239,7 @@ export class EditorTool {
 
     if (drag.type === 'house') {
       drag.current = point;
-      const building = this.houseFrom(drag.start, point, drag.dir);
+      const building = this.houseFrom(drag.start, point, drag.dir) ?? this.modelAt(drag.start);
       layer.preview(building, !building || this.blocked(building));
     } else if (drag.type === 'line') {
       const last = drag.points[drag.points.length - 1]!;
@@ -248,7 +274,8 @@ export class EditorTool {
       return;
     }
     if (drag.type === 'house') {
-      const building = drag.current && this.houseFrom(drag.start, drag.current, drag.dir);
+      // С моделью — клик ставит дом обычного размера фасадом к улице, растяжка — по размеру.
+      const building = (drag.current && this.houseFrom(drag.start, drag.current, drag.dir)) || this.modelAt(drag.start);
       if (!building) return store.notify('Растяните дом побольше — хотя бы 3 × 3 м');
       if (this.blocked(building)) return store.notify('Здесь уже стоит дом — выберите свободное место');
       store.commit(upsertBuilding(store.edits, building));
@@ -327,12 +354,12 @@ export class EditorTool {
    * побеждает ближайшее к камере; спрятанные слои не выбираются.
    */
   private pick([x, y]: ScreenPoint): { handle?: Handle; building?: string; fence?: string } {
-    const { city, layer, base } = this.ctx;
-    const objects = [...layer.pickables, ...base.pickables].filter((object) => object.visible);
+    const { city, layer, base, models } = this.ctx;
+    const objects = [...layer.pickables, ...base.pickables, ...(models?.pickables ?? [])].filter((object) => object.visible);
     const intersection = city.pickObject(x, y, objects);
     const hit = layer.hit(x, y, intersection);
     if (hit.handle || hit.building || hit.fence) return hit;
-    const building = base.buildingFromPick(intersection)?.id;
+    const building = base.buildingFromPick(intersection)?.id ?? models?.buildingFromPick(intersection);
     return building ? { building } : {};
   }
 
@@ -422,9 +449,41 @@ export class EditorTool {
     const rect = stretchRectangle(start, end, dir);
     const [a, b, c] = rect;
     if (Math.hypot(b[0] - a[0], b[1] - a[1]) < MIN_HOUSE_SIDE || Math.hypot(c[0] - b[0], c[1] - b[1]) < MIN_HOUSE_SIDE) return undefined;
-    const id = `house-${hashString(`${start[0].toFixed(1)}:${start[1].toFixed(1)}`).toString(36)}-${Date.now().toString(36)}`;
+    const id = this.newHouseId(start);
     const footprint = rect.map(this.ctx.frame.toLonLat) as LonLat[];
-    return newBuilding(id, footprint, areaOf(rect), this.ctx.village, hashString(id));
+    const building = newBuilding(id, footprint, areaOf(rect), this.ctx.village, hashString(id));
+    const model = useEditStore.getState().houseModel;
+    return model ? this.applyModel(building, { id: model, seed: pointSeed(start) }) : building;
+  }
+
+  /**
+   * Дом-модель обычного размера у точки клика: вдоль ближайшей улицы, фасадом к ней; если клик у самой
+   * дороги — дом отходит, чтобы фасад был в FACADE_SETBACK_M от её оси (на проезжую часть не встаёт).
+   */
+  private modelAt(point: Vec2, id: HouseModelId | undefined = useEditStore.getState().houseModel): EditedBuilding | undefined {
+    const model = id && findHouseModel(id);
+    if (!model) return undefined;
+    const d = this.streetDirection(point);
+    const n: Vec2 = [-d[1], d[0]];
+    const w = model.width.value / 2;
+    const h = model.depth.value / 2;
+    let center = point;
+    const snap = nearestOnLines(point, this.roadLines());
+    if (snap && snap.distance < h + FACADE_SETBACK_M) {
+      // Прочь от оси дороги (клик прямо на оси — в сторону левой нормали улицы).
+      const away: Vec2 = snap.distance > 0.01 ? [(point[0] - snap.point[0]) / snap.distance, (point[1] - snap.point[1]) / snap.distance] : [-snap.dir[1], snap.dir[0]];
+      const shift = h + FACADE_SETBACK_M - snap.distance;
+      center = [point[0] + away[0] * shift, point[1] + away[1] * shift];
+    }
+    const corner = (sw: number, sh: number): Vec2 => [center[0] + d[0] * w * sw + n[0] * h * sh, center[1] + d[1] * w * sw + n[1] * h * sh];
+    const rect = modelFootprint([corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)], this.roadLines());
+    const houseId = this.newHouseId(point);
+    const footprint = rect.map(this.ctx.frame.toLonLat) as LonLat[];
+    return withModel(newBuilding(houseId, footprint, areaOf(rect), this.ctx.village, hashString(houseId)), { id: model.id, seed: pointSeed(point) }, footprint);
+  }
+
+  private newHouseId(point: Vec2): string {
+    return `house-${pointSeed(point).toString(36)}-${Date.now().toString(36)}`;
   }
 
   /** Налезает ли дом на другие (дома OSM, свои, здания из конструктора); сараи внутри дворов не мешают друг другу. */
@@ -452,6 +511,7 @@ export class EditorTool {
   private hideWhileDragging(b: EditedBuilding): void {
     const { edits } = useEditStore.getState();
     this.ctx.base.setHidden(new Set([...edits.removedBuildings, b.id]));
+    this.ctx.models?.setHidden(new Set([...replacedOsmIds(edits), b.id]));
     this.ctx.layer.render(edits, undefined, b.id);
   }
 
@@ -459,6 +519,7 @@ export class EditorTool {
   private refreshHidden(): void {
     const { edits, selection } = useEditStore.getState();
     this.ctx.base.setHidden(new Set(edits.removedBuildings));
+    this.ctx.models?.setHidden(replacedOsmIds(edits));
     this.ctx.layer.render(edits, selection?.type === 'building' ? selection.id : undefined);
   }
 

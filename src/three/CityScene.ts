@@ -62,6 +62,8 @@ export class CityScene {
   /** Освещение текущего времени суток. */
   lighting: Lighting = lightingAt(30);
   private hours = DEFAULT_TIME;
+  private blurOn = false;
+  private outlinesOn = false;
   private readonly animators = new Set<Animator>();
   private readonly clock = new Clock();
   private readonly raycaster = new Raycaster();
@@ -199,10 +201,31 @@ export class CityScene {
     return this.hours;
   }
 
+  /** Дымка вдали: даль уходит в цвет неба у горизонта (воздушная перспектива). */
+  setHaze(on: boolean): void {
+    this.sky.setHaze(on);
+    this.requestRender();
+  }
+
+  /** Тонкие тёмные контуры, как на рисунке (тоже по глубине прохода AO). */
+  setOutlines(on: boolean): void {
+    this.outlinesOn = on;
+    this.illustration.uniforms['useOutlines']!.value = on && this.ao.enabled ? 1 : 0;
+    this.requestRender();
+  }
+
+  /** Мягкое размытие дали (нужен буфер глубины прохода AO — только с мягкими тенями). */
+  setBlur(on: boolean): void {
+    this.blurOn = on;
+    this.illustration.uniforms['blurStrength']!.value = on && this.ao.enabled ? 1 : 0;
+    this.requestRender();
+  }
+
   setQuality(quality: GraphicsQuality): void {
     this.ao.enabled = quality === 'high';
     // Без AO нет и буфера глубины для контуров.
-    this.illustration.uniforms['useOutlines']!.value = quality === 'high' ? 1 : 0;
+    this.illustration.uniforms['useOutlines']!.value = this.outlinesOn && quality === 'high' ? 1 : 0;
+    this.illustration.uniforms['blurStrength']!.value = this.blurOn && quality === 'high' ? 1 : 0;
     this.requestRender();
   }
 
@@ -364,6 +387,8 @@ export class CityScene {
     }
     if (!this.dirty && !active) return;
     this.dirty = false;
+    // Фокус размытия — там, куда смотрит камера (на прогулке — в паре десятков метров впереди).
+    this.illustration.uniforms['focusDistance']!.value = MathUtils.clamp(this.camera.position.distanceTo(this.target), 30, 900);
     this.csm.update();
     this.renderer.info.reset();
     this.composer.render(dt);

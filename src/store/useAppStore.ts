@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { DEFAULT_VOLUMES, type Volumes } from '../audio/AudioEngine';
 import type { GraphicsQuality } from '../three/CityScene';
+import type { DriveHudState, DriveView } from '../three/DriveController';
+import { CAR_COLORS } from '../world/drive/carModel';
+import type { MinimapSource } from '../world/map/minimap';
 import { DEFAULT_TIME } from '../three/dayNight';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../world/base/heightGrid';
@@ -34,7 +37,10 @@ let buildingCounter = 0;
 const newBuildingId = () => `${Date.now().toString(36)}-${(buildingCounter++).toString(36)}`;
 
 /** Что сейчас делает левый клик по сцене. */
-export type InteractionMode = 'explore' | 'draw-plot' | 'pick-walk-start' | 'walk';
+export type InteractionMode = 'explore' | 'draw-plot' | 'pick-walk-start' | 'walk' | 'pick-drive-start' | 'drive';
+
+/** На улице от первого лица: пешком или на машине (боковые панели прячутся, видна мини-карта). */
+export const isOnStreet = (mode: InteractionMode) => mode === 'walk' || mode === 'drive';
 
 /** Команды инструменту участка; регистрирует сцена, вызывает UI. */
 export interface PlotControls {
@@ -47,10 +53,16 @@ export interface PlotControls {
 
 /** Команды прогулки; регистрирует сцена, вызывает UI. */
 export interface WalkControls {
-  /** Ждать клика по улице, с которой начнётся прогулка. */
-  pickStart: () => void;
+  /** Ждать клика по улице, с которой начнётся прогулка (или поездка — машина встанет на ближайшую дорогу). */
+  pickStart: (kind?: 'walk' | 'drive') => void;
   cancelPick: () => void;
   exit: () => void;
+}
+
+/** Команды машины; регистрирует сцена, вызывает UI. */
+export interface DriveControls {
+  toggleView: () => void;
+  backToRoad: () => void;
 }
 
 /** Громкость по группам из браузера (если сохранена и в порядке). */
@@ -135,11 +147,26 @@ interface AppState {
   /** Время суток (местное, часы 0..24) и идёт ли оно само (запоминается в браузере). */
   timeOfDay: number;
   timeFlowing: boolean;
+  /** Деревня из моделей: дома OSM нарисованы башкирскими домами (запоминается в браузере). */
+  villageModels: boolean;
+  /** Дымка вдали и мягкое размытие дали (запоминаются в браузере). */
+  haze: boolean;
+  blur: boolean;
+  /** Контуры, как на рисунке. */
+  outlines: boolean;
+  /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
+  driveHud: DriveHudState;
+  driveView: DriveView;
+  carColor: string;
+  /** Мини-карта на улице (запоминается в браузере) и кто её рисует (регистрирует сцена). */
+  minimapOn: boolean;
+  minimap?: MinimapSource;
 
   /** Регистрирует сцена; UI вызывает, чтобы вернуть камеру к территории. */
   flyHome?: () => void;
   plotControls?: PlotControls;
   walkControls?: WalkControls;
+  driveControls?: DriveControls;
 
   /** Переключает населённый пункт: сцена пересоздаётся, постройки пользователя сбрасываются. */
   setTerritory: (id: string) => void;
@@ -162,7 +189,17 @@ interface AppState {
   setGraphicsQuality: (quality: GraphicsQuality) => void;
   setTimeOfDay: (hours: number) => void;
   setTimeFlowing: (on: boolean) => void;
+  setVillageModels: (on: boolean) => void;
+  setHaze: (on: boolean) => void;
+  setBlur: (on: boolean) => void;
+  setOutlines: (on: boolean) => void;
   setWalkMouseLocked: (locked: boolean) => void;
+  setDriveControls: (controls: DriveControls | undefined) => void;
+  setDriveHud: (hud: DriveHudState) => void;
+  setDriveView: (view: DriveView) => void;
+  setCarColor: (color: string) => void;
+  setMinimapOn: (on: boolean) => void;
+  setMinimap: (source: MinimapSource | undefined) => void;
   setHelpOpen: (open: boolean) => void;
 
   plotDrawingStarted: () => void;
@@ -193,7 +230,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
   timeOfDay: readTime(),
   timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
+  villageModels: readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
+  haze: readPref('haze', ['on', 'off'] as const, 'on') === 'on',
+  blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
+  outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
   walkMouseLocked: false,
+  driveHud: { speed: 0, gear: 'N' },
+  driveView: 'chase',
+  carColor: readPref('car-color', CAR_COLORS.map((c) => c.color), CAR_COLORS[0]!.color),
+  minimapOn: readPref('minimap', ['on', 'off'] as const, 'on') === 'on',
   helpOpen: readPref('help', ['seen', 'new'] as const, 'new') !== 'seen',
 
   setTerritory: (territoryId) => {
@@ -251,7 +296,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('time-flow', timeFlowing ? 'on' : 'off');
     set({ timeFlowing });
   },
+  setVillageModels: (villageModels) => {
+    writePref('village-models', villageModels ? 'on' : 'off');
+    set({ villageModels });
+  },
+  setHaze: (haze) => {
+    writePref('haze', haze ? 'on' : 'off');
+    set({ haze });
+  },
+  setBlur: (blur) => {
+    writePref('blur', blur ? 'on' : 'off');
+    set({ blur });
+  },
+  setOutlines: (outlines) => {
+    writePref('outlines', outlines ? 'on' : 'off');
+    set({ outlines });
+  },
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),
+  setDriveControls: (driveControls) => set({ driveControls }),
+  setDriveHud: (driveHud) => {
+    const prev = get().driveHud;
+    if (prev.speed !== driveHud.speed || prev.gear !== driveHud.gear) set({ driveHud });
+  },
+  setDriveView: (driveView) => set({ driveView }),
+  setCarColor: (carColor) => {
+    writePref('car-color', carColor);
+    set({ carColor });
+  },
+  setMinimapOn: (minimapOn) => {
+    writePref('minimap', minimapOn ? 'on' : 'off');
+    set({ minimapOn });
+  },
+  setMinimap: (minimap) => set({ minimap }),
   setHelpOpen: (helpOpen) => {
     if (!helpOpen) writePref('help', 'seen');
     set({ helpOpen });

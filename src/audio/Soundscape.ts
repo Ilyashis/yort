@@ -1,6 +1,7 @@
 import type { Vec2 } from '../world/walk/localFrame';
 import { AudioEngine, type Volumes } from './AudioEngine';
 import { Ambience } from './ambience';
+import { EngineSound, type CarSound } from './engineSound';
 import { GenerativeMusic } from './music';
 import type { SoundZones } from './soundZones';
 
@@ -23,6 +24,7 @@ export class Soundscape {
   private readonly engine = new AudioEngine();
   private readonly music = new GenerativeMusic(this.engine);
   private readonly ambience = new Ambience(this.engine);
+  private readonly car = new EngineSound(this.engine);
   private readonly timer: number;
   private stepDistance = 0;
 
@@ -58,8 +60,24 @@ export class Soundscape {
     this.ambience.footstep(this.zones.surfaceAt(point), running);
   }
 
+  /** Машина: мотор и шины (undefined — заглушить). */
+  drove(car: CarSound | undefined): void {
+    this.car.update(car);
+  }
+
+  /** Машина ударилась: сила 0..1. */
+  bumped(strength: number): void {
+    this.car.bump(strength);
+  }
+
+  /** По чему едет или идёт: «плитка» или трава/грунт. */
+  surfaceAt(point: Vec2) {
+    return this.zones.surfaceAt(point);
+  }
+
   destroy(): void {
     window.clearInterval(this.timer);
+    this.car.stop();
     window.removeEventListener('pointerdown', this.unlock, true);
     window.removeEventListener('keydown', this.unlock, true);
     document.removeEventListener('click', this.onClick, true);

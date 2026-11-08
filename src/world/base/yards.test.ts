@@ -55,4 +55,34 @@ describe('planYards', () => {
     expect(fenced).toBeLessThan(streetLength - 2.5);
     expect(fenced).toBeGreaterThan(0);
   });
+
+  it('перед домом — палисадник от стены до улицы шириной с фасад; уличный забор напротив него вырезан, ворота — сбоку', () => {
+    const yard = yards.find((y) => y.houseId === 'n2')!;
+    const p = yard.palisade!;
+    expect(p).toBeDefined();
+    // Дом n2: центр (44, 14), 10 × 8 — фасад на y = 10, к улице — вниз.
+    expect(p.origin[0]).toBeCloseTo(44, 6);
+    expect(p.origin[1]).toBeCloseTo(10, 6);
+    expect(p.toStreet[1]).toBeCloseTo(-1, 6);
+    expect(p.width).toBeCloseTo(10, 6);
+    const [c0] = yard.corners;
+    expect(p.depth).toBeCloseTo(10 - c0[1], 6);
+    expect(p.depth).toBeGreaterThanOrEqual(1);
+    // Забор по улице не заходит на фасад: x от 39 до 49 свободен (там штакетник палисадника).
+    const street = yard.fence.filter(([a, b]) => Math.abs(a[1] - c0[1]) < 1e-6 && Math.abs(b[1] - c0[1]) < 1e-6);
+    for (const [a, b] of street) {
+      const lo = Math.min(a[0], b[0]);
+      const hi = Math.max(a[0], b[0]);
+      expect(hi <= 39 + 1e-6 || lo >= 49 - 1e-6).toBe(true);
+    }
+    // Ворота остались: уличный забор по бокам от палисадника короче, чем сами бока.
+    const sides = 2 * (Math.hypot(yard.corners[1][0] - yard.corners[0][0], yard.corners[1][1] - yard.corners[0][1]) / 2 - 5);
+    const fenced = street.reduce((sum, [a, b]) => sum + Math.hypot(b[0] - a[0], b[1] - a[1]), 0);
+    expect(fenced).toBeLessThan(sides - 1);
+  });
+
+  it('дом у самой дороги — без палисадника', () => {
+    const close = planYards([house('c', 0, 4.6)], [road]);
+    expect(close[0]?.palisade).toBeUndefined();
+  });
 });

@@ -1,5 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
+import { hashString } from '../utils/hash';
+import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import {
   BUILDING_KINDS,
   FACADE_COLORS,
@@ -9,8 +11,11 @@ import {
   removeBuilding,
   removeFence,
   removeRoad,
+  turnFacade,
   upsertBuilding,
   upsertRoad,
+  withModel,
+  type LonLat,
   type EditBuildingKind,
   type EditRoadKind,
   type EditRoof,
@@ -25,12 +30,23 @@ const ROOFS: { roof: EditRoof; label: string }[] = [
 ];
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
 
+const fmt = (v: number) => v.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/** Стороны прямоугольника контура (lon/lat), м: вдоль фасада (первая сторона) и вглубь. */
+function sidesOf(footprint: readonly LonLat[]): [number, number] {
+  const [a, b, c] = footprint as [LonLat, LonLat, LonLat];
+  const k = Math.cos((a[1] * Math.PI) / 180) * 111_320;
+  const d = (p: LonLat, q: LonLat) => Math.hypot((q[0] - p[0]) * k, (q[1] - p[1]) * 110_574);
+  return [d(a, b), d(b, c)];
+}
+
 /** Свойства выделенного в редакторе: дом (тип, этажи, крыша, цвета), дорога или забор. */
 export function EditPanel() {
   const mode = useAppStore((s) => s.mode);
   const selection = useEditStore((s) => s.selection);
   const edits = useEditStore((s) => s.edits);
   const resolve = useEditStore((s) => s.resolveBuilding);
+  const applyModel = useEditStore((s) => s.applyModel);
   const select = useEditStore((s) => s.select);
   if (mode !== 'explore' || !selection) return null;
 
@@ -58,87 +74,152 @@ export function EditPanel() {
     const own = edits.buildings.some((b) => b.id === selection.id);
     const fromOsm = !!building.source;
     const update = (patch: Partial<EditedBuilding>) => commit(upsertBuilding(useEditStore.getState().edits, { ...building, ...patch }));
+    const model = building.model && findHouseModel(building.model.id);
+    const setModel = (id: HouseModelId | undefined) => {
+      if (!applyModel) return;
+      const seed = building.model?.seed ?? hashString(building.id) % 9973;
+      commit(upsertBuilding(useEditStore.getState().edits, applyModel(building, id ? { id, seed } : undefined)));
+    };
+    // Модель вписана в контур, но у каждой свои пределы размеров — скажем, если не совпало.
+    let sizeNote = '';
+    if (model && building.footprint.length === 4) {
+      const [w, d] = sidesOf(building.footprint);
+      const plan = model.plan({ seed: building.model!.seed, width: w, depth: d });
+      sizeNote =
+        Math.abs(plan.width - w) > 0.3 || Math.abs(plan.depth - d) > 0.3
+          ? `Модель ${fmt(plan.width)} × ${fmt(plan.depth)} м, контур ${fmt(w)} × ${fmt(d)} м — у этой модели другие пределы размеров.`
+          : `${fmt(plan.width)} × ${fmt(plan.depth)} м по контуру, высота ${fmt(plan.height)} м.`;
+    }
     return (
       <aside className="panel building-card edit-panel">
         {close}
-        <h2>{BUILDING_KINDS[building.kind].label}</h2>
+        <h2>{model ? model.name : BUILDING_KINDS[building.kind].label}</h2>
         <p className="muted">
           {fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью, белые точки —
           растянуть, оранжевая — повернуть
         </p>
 
-        <div className="segmented segmented-small" role="group" aria-label="Тип дома">
-          {KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={building.kind === kind ? 'active' : ''}
-              onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : building.floors })}
-            >
-              {BUILDING_KINDS[kind].label}
+        <div className="field">
+          <span>Модель дома</span>
+          <div className="model-grid" role="group" aria-label="Модель дома">
+            <button type="button" className={!model ? 'active' : ''} onClick={() => setModel(undefined)} title="Простой объём: тип, этажи, крыша и цвета">
+              Объём
             </button>
+          </div>
+          {MODEL_GROUPS.map(({ group, label }) => (
+            <div key={group}>
+              <div className="model-group">{label}</div>
+              <div className="model-grid" role="group" aria-label={label}>
+                {HOUSE_MODELS.filter((m) => m.group === group).map((m) => (
+                  <button key={m.id} type="button" className={model?.id === m.id ? 'active' : ''} onClick={() => setModel(m.id)} title={m.description}>
+                    {m.short}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
 
-        {building.kind !== 'shed' && (
-          <label className="field">
-            <span>
-              Этажей <b>{building.floors}</b>
-            </span>
-            <input
-              type="range"
-              min={1}
-              max={building.kind === 'house' ? 3 : 30}
-              step={1}
-              value={building.floors}
-              onChange={(e) => update({ floors: clampFloors(Number(e.target.value)) })}
-            />
-          </label>
-        )}
-
-        <div className="field">
-          <span>Крыша</span>
-          <div className="segmented segmented-small" role="group" aria-label="Крыша">
-            {ROOFS.map(({ roof, label }) => (
-              <button key={roof} type="button" className={building.roof === roof ? 'active' : ''} onClick={() => update({ roof })}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="field">
-          <span>Стены</span>
-          <div className="swatches" role="group" aria-label="Цвет стен">
-            {FACADE_COLORS.map((color) => (
+        {model ? (
+          <>
+            <p className="muted model-note">{sizeNote}</p>
+            <div className="button-row">
               <button
-                key={color}
                 type="button"
-                aria-label={color}
-                className={building.facadeColor === color ? 'active' : ''}
-                style={{ background: color }}
-                onClick={() => update({ facadeColor: color })}
-              />
-            ))}
-          </div>
-        </div>
-
-        {building.roof !== 'flat' && (
-          <div className="field">
-            <span>Кровля</span>
-            <div className="swatches" role="group" aria-label="Цвет кровли">
-              {ROOF_COLORS.map((color) => (
+                className="button"
+                onClick={() => commit(upsertBuilding(useEditStore.getState().edits, withModel(building, { ...building.model!, seed: building.model!.seed + 1 })))}
+              >
+                Другая окраска
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={() => commit(upsertBuilding(useEditStore.getState().edits, { ...building, footprint: turnFacade(building.footprint) }))}
+                title="Фасад — на соседнюю сторону контура"
+              >
+                Развернуть фасад
+              </button>
+            </div>
+            <a className="model-link" href="/houses.html" target="_blank" rel="noreferrer">
+              Все модели в мастерской ↗
+            </a>
+          </>
+        ) : (
+          <>
+            <div className="segmented segmented-small" role="group" aria-label="Тип дома">
+              {KINDS.map((kind) => (
                 <button
-                  key={color}
+                  key={kind}
                   type="button"
-                  aria-label={color}
-                  className={building.roofColor === color ? 'active' : ''}
-                  style={{ background: color }}
-                  onClick={() => update({ roofColor: color })}
-                />
+                  className={building.kind === kind ? 'active' : ''}
+                  onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : building.floors })}
+                >
+                  {BUILDING_KINDS[kind].label}
+                </button>
               ))}
             </div>
-          </div>
+
+            {building.kind !== 'shed' && (
+              <label className="field">
+                <span>
+                  Этажей <b>{building.floors}</b>
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={building.kind === 'house' ? 3 : 30}
+                  step={1}
+                  value={building.floors}
+                  onChange={(e) => update({ floors: clampFloors(Number(e.target.value)) })}
+                />
+              </label>
+            )}
+
+            <div className="field">
+              <span>Крыша</span>
+              <div className="segmented segmented-small" role="group" aria-label="Крыша">
+                {ROOFS.map(({ roof, label }) => (
+                  <button key={roof} type="button" className={building.roof === roof ? 'active' : ''} onClick={() => update({ roof })}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="field">
+              <span>Стены</span>
+              <div className="swatches" role="group" aria-label="Цвет стен">
+                {FACADE_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    aria-label={color}
+                    className={building.facadeColor === color ? 'active' : ''}
+                    style={{ background: color }}
+                    onClick={() => update({ facadeColor: color })}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {building.roof !== 'flat' && (
+              <div className="field">
+                <span>Кровля</span>
+                <div className="swatches" role="group" aria-label="Цвет кровли">
+                  {ROOF_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      aria-label={color}
+                      className={building.roofColor === color ? 'active' : ''}
+                      style={{ background: color }}
+                      onClick={() => update({ roofColor: color })}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         <div className="button-row">

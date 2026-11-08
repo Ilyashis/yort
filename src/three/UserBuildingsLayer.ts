@@ -16,10 +16,11 @@ import { hashString } from '../utils/hash';
 import { roofColorHex } from '../world/base/buildingPlan';
 import { openRing, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { toProperties, userBuildingId, type UserBuilding } from '../world/user/userBuildings';
-import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
+import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { createFacadeMaterial, createRoofMaterial } from './facadeShader';
 import { MeshBuilder } from './meshBuilder';
+import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 
 /** Свес скатной крыши за стены, м (как у малоэтажных домов города). */
 const ROOF_OVERHANG = 0.4;
@@ -88,7 +89,9 @@ export class UserBuildingsLayer {
     const { id, spec, building } = item;
     const ring = openRing(building.footprint.map(this.frame.toLocal));
     if (ring.length < 3) return;
-    const ground = groundHeight(this.heightAt, ring);
+    const site = siteOnSlope(ring, this.heightAt);
+    const ground = site.floor;
+    const bottom = site.low - FOOTING_DEPTH;
     const top = ground + building.wallHeight;
     const color = new Color(spec.facadeColor);
     const seed = (hashString(id) % 10_000) / 10_000;
@@ -105,8 +108,8 @@ export class UserBuildingsLayer {
       const len = Math.hypot(dx, dy);
       if (len < 0.01) continue;
       const outward = [(dy / len) * sign, (-dx / len) * sign, 0];
-      const A0 = [a[0], a[1], ground];
-      const B0 = [b[0], b[1], ground];
+      const A0 = [a[0], a[1], bottom];
+      const B0 = [b[0], b[1], bottom];
       const B1 = [b[0], b[1], top];
       const A1 = [a[0], a[1], top];
       walls.triangle(A0, B0, B1, outward, color, facade, wallStyle, owner);
@@ -128,12 +131,6 @@ export class UserBuildingsLayer {
       roofs.triangle([a[0], a[1], top + a[2]], [b[0], b[1], top + b[2]], [c[0], c[1], top + c[2]], undefined, roofColor, [ground, 0, 0, 0], [0, 0, seed, 1], owner);
     }
   }
-}
-
-/** Земля под зданием: минимум по вершинам, чтобы на склоне дом не висел в воздухе. */
-function groundHeight(heightAt: (x: number, y: number) => number, ring: readonly Vec2[]): number {
-  const heights = ring.map(([x, y]) => heightAt(x, y)).filter(Number.isFinite);
-  return heights.length ? Math.min(...heights) : 0;
 }
 
 /** Цвет кровли из палитры города — по цвету фасада, чтобы у предпросмотра и построенного дома он совпадал. */

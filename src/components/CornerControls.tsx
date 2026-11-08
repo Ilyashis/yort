@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Volumes } from '../audio/AudioEngine';
 import { findTerritory } from '../config/territory';
-import { useAppStore } from '../store/useAppStore';
+import { isOnStreet, useAppStore } from '../store/useAppStore';
 import { formatTime, lightingAt, sunElevationAt, TIME_PRESETS } from '../three/dayNight';
 
 /** Вид сверху: план — квадрат с сеткой. */
@@ -157,6 +157,44 @@ const MoonIcon = () => (
   </svg>
 );
 
+/** Картинка: мягкие тени в углах, дымка вдали, мягкое размытие дали. */
+function PicturePanel({ onClose }: { onClose: () => void }) {
+  const quality = useAppStore((s) => s.graphicsQuality);
+  const setQuality = useAppStore((s) => s.setGraphicsQuality);
+  const haze = useAppStore((s) => s.haze);
+  const setHaze = useAppStore((s) => s.setHaze);
+  const blur = useAppStore((s) => s.blur);
+  const setBlur = useAppStore((s) => s.setBlur);
+  const outlines = useAppStore((s) => s.outlines);
+  const setOutlines = useAppStore((s) => s.setOutlines);
+  const ref = useDismiss(onClose, '.picture-button');
+  return (
+    <div ref={ref} className="panel sound-panel" role="dialog" aria-label="Картинка">
+      <label className="toggle">
+        <input type="checkbox" checked={quality === 'high'} onChange={(e) => setQuality(e.target.checked ? 'high' : 'normal')} />
+        Мягкие тени в углах
+      </label>
+      <label className="toggle">
+        <input type="checkbox" checked={haze} onChange={(e) => setHaze(e.target.checked)} />
+        Дымка вдали
+      </label>
+      <label className={`toggle ${quality === 'high' ? '' : 'field-disabled'}`}>
+        <input type="checkbox" checked={blur} disabled={quality !== 'high'} onChange={(e) => setBlur(e.target.checked)} />
+        Мягкое размытие вдали
+      </label>
+      <label className={`toggle ${quality === 'high' ? '' : 'field-disabled'}`}>
+        <input type="checkbox" checked={outlines} disabled={quality !== 'high'} onChange={(e) => setOutlines(e.target.checked)} />
+        Контуры, как на рисунке
+      </label>
+      <p className="muted sound-note">
+        Дымка — даль уходит в воздух, как в ясный летний день. Размытие — как у фотоаппарата: резко то, на что смотрит камера, дальше мягче
+        {quality === 'high' ? '.' : ' (размытие и контуры работают вместе с мягкими тенями).'} Мягкие тени нагружают видеокарту — на слабой
+        выключите.
+      </p>
+    </div>
+  );
+}
+
 const SoundOnIcon = () => (
   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
     <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" />
@@ -184,9 +222,10 @@ export function CornerControls() {
   const quality = useAppStore((s) => s.graphicsQuality);
   const viewMode = useAppStore((s) => s.viewMode);
   const changeView = useAppStore((s) => s.changeView);
-  const walking = useAppStore((s) => s.mode === 'walk');
+  const walking = useAppStore((s) => isOnStreet(s.mode));
   const [soundPanel, setSoundPanel] = useState(false);
-  const setQuality = useAppStore((s) => s.setGraphicsQuality);
+  const [picturePanel, setPicturePanel] = useState(false);
+  const closePicture = useCallback(() => setPicturePanel(false), []);
   const helpOpen = useAppStore((s) => s.helpOpen);
   const setHelpOpen = useAppStore((s) => s.setHelpOpen);
   const [timePanel, setTimePanel] = useState(false);
@@ -244,17 +283,14 @@ export function CornerControls() {
       {soundPanel && <SoundPanel onClose={closeSound} />}
       <button
         type="button"
-        className={`round-button ${quality === 'high' ? 'on' : ''}`}
-        onClick={() => setQuality(quality === 'high' ? 'normal' : 'high')}
-        aria-pressed={quality === 'high'}
-        title={
-          quality === 'high'
-            ? 'Мягкие тени в углах включены — выключите, если тормозит'
-            : 'Включить мягкие тени в углах (нагружает видеокарту)'
-        }
+        className={`round-button picture-button ${quality === 'high' ? 'on' : ''}`}
+        onClick={() => setPicturePanel(!picturePanel)}
+        aria-expanded={picturePanel}
+        title="Картинка: мягкие тени, дымка вдали, размытие"
       >
         <SparkleIcon />
       </button>
+      {picturePanel && <PicturePanel onClose={closePicture} />}
     </div>
   );
 }

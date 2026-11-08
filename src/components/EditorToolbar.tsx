@@ -4,6 +4,7 @@ import { useEditStore, type EditTool } from '../store/useEditStore';
 import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { EMPTY_EDITS, ROAD_KINDS, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
+import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
 
 const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: ReactNode }[] = [
   {
@@ -51,6 +52,8 @@ export function EditorToolbar() {
   const setTool = useEditStore((s) => s.setTool);
   const roadKind = useEditStore((s) => s.roadKind);
   const setRoadKind = useEditStore((s) => s.setRoadKind);
+  const houseModel = useEditStore((s) => s.houseModel);
+  const setHouseModel = useEditStore((s) => s.setHouseModel);
   const canUndo = useEditStore((s) => s.past.length > 0);
   const canRedo = useEditStore((s) => s.future.length > 0);
   const undo = useEditStore((s) => s.undo);
@@ -58,6 +61,7 @@ export function EditorToolbar() {
   const edits = useEditStore((s) => s.edits);
   const notice = useEditStore((s) => s.notice);
   const [menu, setMenu] = useState(false);
+  const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
   const [underlayOpen, setUnderlayOpen] = useState(false);
   const underlayMode = useUnderlayStore((s) => s.mode);
   const align = useUnderlayStore((s) => s.align);
@@ -112,7 +116,51 @@ export function EditorToolbar() {
       {underlayMode ? (
         <div className="editor-hint editor-hint-accent">{underlayMode === 'move' ? MOVE_HINT : alignHint(underlayMode, align)}</div>
       ) : (
-        active && <div className="editor-hint">{active.hint}</div>
+        active && (
+          <div className="editor-hint">
+            {active.tool === 'house' && houseModel
+              ? `Клик по земле — поставить «${findHouseModel(houseModel)?.name}» фасадом к ближайшей улице; растяните — дом встанет по размеру.`
+              : active.hint}
+          </div>
+        )
+      )}
+      {tool === 'house' && (
+        <div className="editor-models">
+          <div className="segmented editor-kinds" role="group" aria-label="Раздел каталога">
+            <button type="button" className={!houseModel ? 'active' : ''} onClick={() => setHouseModel(undefined)} title="Простой объём растяжкой">
+              Объём
+            </button>
+            {MODEL_GROUPS.map(({ group, label }) => (
+              <button
+                key={group}
+                type="button"
+                className={houseModel && findHouseModel(houseModel)?.group === group ? 'active' : ''}
+                onClick={() => {
+                  setModelGroup(group);
+                  // Раздел — сразу его первая модель (или та, что уже выбрана в нём).
+                  if (!houseModel || findHouseModel(houseModel)?.group !== group) setHouseModel(HOUSE_MODELS.find((m) => m.group === group)?.id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {houseModel && (
+            <div className="segmented editor-kinds" role="group" aria-label="Модель">
+              {HOUSE_MODELS.filter((m) => m.group === (findHouseModel(houseModel)?.group ?? modelGroup)).map((model) => (
+                <button
+                  key={model.id}
+                  type="button"
+                  className={houseModel === model.id ? 'active' : ''}
+                  onClick={() => setHouseModel(model.id)}
+                  title={model.description}
+                >
+                  {model.short}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       {tool === 'road' && (
         <div className="segmented editor-kinds" role="group" aria-label="Тип дороги">

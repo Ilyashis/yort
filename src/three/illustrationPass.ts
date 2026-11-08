@@ -1,4 +1,5 @@
-// «Рисованный» вид: тонкие тёмные контуры по силуэтам
+// «Рисованный» вид: мягкое размытие дали (по желанию — как у фотоаппарата: резко там, куда смотрит
+// камера, дальше — мягче), тонкие тёмные контуры по силуэтам
 // и изломам (сосед не лежит в плоскости пикселя — значит, край) и цветокоррекция — чуть больше
 // насыщенности, тёплый свет и прохладные тени, мягкая виньетка. Глубину берём из прохода AO (GTAO),
 // который и так рисует буфер глубины и нормалей, — второй раз сцену не рисуем.
@@ -17,6 +18,10 @@ export function createIllustrationPass(camera: PerspectiveCamera, depth: DepthTe
       resolution: { value: new Vector2(1, 1) },
       outlineStrength: { value: 0.7 },
       useOutlines: { value: 1 },
+      /** 0 — без размытия, 1 — мягкое размытие дальше точки фокуса. */
+      blurStrength: { value: 0 },
+      /** Расстояние до того, на что смотрит камера, м (там — резко). */
+      focusDistance: { value: 300 },
     },
     vertexShader: /* glsl */ `
 varying vec2 vUv;
@@ -32,7 +37,16 @@ uniform float projection11;
 uniform vec2 resolution;
 uniform float outlineStrength;
 uniform float useOutlines;
+uniform float blurStrength;
+uniform float focusDistance;
 varying vec2 vUv;
+
+// Диск выборок (Пуассон) для размытия.
+const vec2 DISC[12] = vec2[12](
+  vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
+  vec2(0.962, -0.195), vec2(0.473, -0.480), vec2(0.519, 0.767), vec2(0.185, -0.893),
+  vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598)
+);
 
 vec3 eyeAt(vec2 uv, out bool sky) {
   float d = texture2D(tDepth, uv).x;
@@ -58,6 +72,28 @@ void main() {
   vec3 color = source.rgb;
   bool sky;
   vec3 c = eyeAt(vUv, sky);
+  // Размытие дали: радиус растёт от 1,6 до 6 расстояний фокуса; близкие предметы в размытый фон не тянем.
+  float blurK = 0.0;
+  if (blurStrength > 0.0) {
+    float far = sky ? 1e6 : length(c);
+    float k = smoothstep(focusDistance * 1.6, focusDistance * 6.0, far) * blurStrength;
+    blurK = k;
+    if (k > 0.01) {
+      vec2 radius = vec2(k * 2.8 * resolution.y / 1000.0) / resolution;
+      vec3 sum = color;
+      float weight = 1.0;
+      for (int i = 0; i < 12; i++) {
+        vec2 uv = vUv + DISC[i] * radius;
+        bool s2;
+        vec3 p2 = eyeAt(uv, s2);
+        float d2 = s2 ? 1e6 : length(p2);
+        float w = smoothstep(focusDistance * 1.2, focusDistance * 2.0, d2);
+        sum += texture2D(tDiffuse, uv).rgb * w;
+        weight += w;
+      }
+      color = sum / weight;
+    }
+  }
   if (!sky && useOutlines > 0.5) {
     vec2 px = 1.0 / resolution;
     bool sL; bool sR; bool sD; bool sU;
@@ -78,12 +114,16 @@ void main() {
     edge = max(edge, smoothstep(lo, hi, abs(dot(d - c, n))));
     edge = max(edge, smoothstep(lo, hi, abs(dot(u - c, n))));
     edge *= 1.0 - smoothstep(900.0, 3000.0, dist);
+    // В размытой дали и контуры растворяются.
+    edge *= 1.0 - 0.85 * blurK;
     vec3 ink = color * 0.32 + vec3(0.025, 0.02, 0.02);
     color = mix(color, ink, edge * outlineStrength);
   }
   gl_FragColor = vec4(grade(color, vUv), source.a);
 }`,
   });
+  // ShaderPass копирует uniforms (и текстуры вместе с ними) — глубину отдаём ту самую, в которую рисует AO.
+  pass.uniforms['tDepth']!.value = depth;
   const update = pass.render.bind(pass);
   // Перед каждым кадром — матрицы камеры и размер (камера двигается, окно меняется).
   pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {

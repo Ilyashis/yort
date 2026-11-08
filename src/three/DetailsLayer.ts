@@ -52,6 +52,8 @@ export interface DetailsOptions {
 }
 
 export class DetailsLayer {
+  private replaced: ReadonlySet<string> = new Set();
+  private lastHidden: [ReadonlySet<string>, ReadonlySet<string>, ReadonlySet<string>] = [new Set(), new Set(), new Set()];
   private readonly merged?: MergedMesh;
 
   constructor(
@@ -170,12 +172,21 @@ export class DetailsLayer {
    * только если дом удалён (yardOwnersGone), а не сдвинут или перестроен.
    */
   setHidden(buildings: ReadonlySet<string>, yards: ReadonlySet<string>, yardOwnersGone: ReadonlySet<string>): void {
+    this.lastHidden = [buildings, yards, yardOwnersGone];
     const changed = this.merged?.setHidden((owner) => {
       const yard = owner.startsWith('yard:') ? owner.slice(5) : undefined;
       // id дома во дворе — «id здания:номер контура».
-      return yard ? yards.has(yard) || yardOwnersGone.has(yard.slice(0, yard.lastIndexOf(':'))) : buildings.has(owner);
+      return yard
+        ? yards.has(yard) || yardOwnersGone.has(yard.slice(0, yard.lastIndexOf(':')))
+        : buildings.has(owner) || this.replaced.has(owner);
     });
     if (changed) this.city.requestRender();
+  }
+
+  /** Дома, нарисованные моделями: их подъезды, балконы и трубы не нужны (дворы остаются). */
+  setReplaced(ids: ReadonlySet<string>): void {
+    this.replaced = new Set(ids);
+    this.setHidden(...this.lastHidden);
   }
 
   setVisible(visible: boolean): void {

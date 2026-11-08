@@ -24,6 +24,7 @@ import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { createFacadeMaterial, createRoofMaterial } from './facadeShader';
 import { MeshBuilder } from './meshBuilder';
+import { FOOTING_DEPTH, siteOnSlope, type Site } from '../world/base/siting';
 
 /** Форма объёма для слоя деталей (балконы, подъезды, трубы). */
 export interface BuildingShape {
@@ -82,6 +83,8 @@ export class BuildingsLayer {
   private readonly infos = new Map<string, BuildingInfo>();
   private readonly shapesList: BuildingShape[] = [];
   private hidden = new Set<string>();
+  /** Дома, нарисованные моделями (деревня из моделей): прячутся вдобавок к hidden. */
+  private replaced: ReadonlySet<string> = new Set();
   private selectedId?: string;
   private conflicts = new Set<string>();
   private colorMode: BuildingColorMode = 'city';
@@ -104,13 +107,15 @@ export class BuildingsLayer {
       if (!c) colors.set(css, (c = new Color(css)));
       return c;
     };
-    const groundOf = (feature: BaseBuildingFeature) => {
-      let min = Infinity;
-      for (const rings of polygonsOf(feature)) for (const [lon, lat] of rings[0] ?? []) min = Math.min(min, heightAt(...frame.toLocal([lon, lat])));
-      return Number.isFinite(min) ? min : 0;
-    };
+    // Пол — по верхней точке земли под домом, стены — до нижней (на склоне дом не уходит в землю).
+    const siteOf = (feature: BaseBuildingFeature): Site =>
+      siteOnSlope(
+        polygonsOf(feature).flatMap((rings) => openRing((rings[0] ?? []).map(frame.toLocal))),
+        heightAt,
+      );
 
-    const addBuilding = (owner: BaseBuildingProperties, elements: BaseBuildingFeature[], ground: number, simple: boolean, outline?: Ring) => {
+    const addBuilding = (owner: BaseBuildingProperties, elements: BaseBuildingFeature[], site: Site, simple: boolean, outline?: Ring) => {
+      const ground = site.floor;
       const style = facadeStyle(owner, streetFront.has(owner.id), village);
       const facadeCss = facadeColorHex(owner, village);
       const facadeColor = color(facadeCss);
@@ -128,7 +133,8 @@ export class BuildingsLayer {
           const roof = planRoof(props, outer, rings.length > 1, village);
           const wallTop = roof.osm ? props.height - roof.height : props.height;
           const floorH = floorHeight(props, wallTop);
-          const z0 = ground + props.minHeight;
+          // Части, что начинаются над землёй (арки, верхние ярусы), — от пола; остальные — до низа склона.
+          const z0 = props.minHeight > 0 ? ground + props.minHeight : site.low - FOOTING_DEPTH;
           const z1 = ground + Math.max(wallTop, props.minHeight + 0.5);
           const facade = [ground, props.minHeight, wallTop, floorH];
           const wallStyle = [village ? 2 : style.shopfront ? 1 : 0, style.variant, style.seed, 0];
@@ -206,13 +212,13 @@ export class BuildingsLayer {
     };
 
     collection.features.forEach((feature) => {
-      const ground = groundOf(feature);
+      const site = siteOf(feature);
       const own = parts.byBuilding.get(feature.properties.id);
       const outline = (feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0]?.[0]) ?? [];
-      if (own?.length) addBuilding(feature.properties, own, ground, false, outline);
-      else addBuilding(feature.properties, [feature], ground, true);
+      if (own?.length) addBuilding(feature.properties, own, site, false, outline);
+      else addBuilding(feature.properties, [feature], site, true);
     });
-    parts.orphans.forEach((part) => addBuilding(part.properties, [part], groundOf(part), false));
+    parts.orphans.forEach((part) => addBuilding(part.properties, [part], siteOf(part), false));
 
     this.walls = new Mesh(walls.geometry(), createFacadeMaterial(csm));
     this.roofs = new Mesh(roofs.geometry(), createRoofMaterial(csm));
@@ -254,7 +260,7 @@ export class BuildingsLayer {
     const owners = hit.object === this.walls ? this.wallOwners : hit.object === this.roofs ? this.roofOwners : undefined;
     const index = owners?.[hit.faceIndex];
     const owner = index === undefined ? undefined : this.owners[index];
-    return owner && !this.hidden.has(owner.id) ? owner.props : undefined;
+    return owner && !this.isHidden(owner.id) ? owner.props : undefined;
   }
 
   /** Скрыть здания (убранные редактором или заменённые правкой), остальные показать. */
@@ -263,6 +269,18 @@ export class BuildingsLayer {
     this.hidden = new Set(ids);
     for (const id of changed) this.applyVisibility(id);
     if (changed.length) this.city.requestRender();
+  }
+
+  /** Дома, вместо которых нарисованы модели (деревня из моделей). */
+  setReplaced(ids: ReadonlySet<string>): void {
+    const changed = [...this.replaced, ...ids].filter((id) => this.replaced.has(id) !== ids.has(id));
+    this.replaced = new Set(ids);
+    for (const id of changed) this.applyVisibility(id);
+    if (changed.length) this.city.requestRender();
+  }
+
+  private isHidden(id: string): boolean {
+    return this.hidden.has(id) || this.replaced.has(id);
   }
 
   select(id: string | undefined): void {
@@ -332,7 +350,7 @@ export class BuildingsLayer {
   private applyVisibility(id: string): void {
     const owner = this.byId.get(id);
     if (!owner) return;
-    const hide = this.hidden.has(id);
+    const hide = this.isHidden(id);
     const apply = (mesh: Mesh, ranges: [number, number][], original: Float32Array) => {
       const attribute = mesh.geometry.getAttribute('position') as BufferAttribute;
       const array = attribute.array as Float32Array;

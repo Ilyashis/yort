@@ -15,6 +15,8 @@ export function InfoPanel() {
   const flyHome = useAppStore((s) => s.flyHome);
   const colorMode = useAppStore((s) => s.buildingColorMode);
   const setColorMode = useAppStore((s) => s.setBuildingColorMode);
+  const villageModels = useAppStore((s) => s.villageModels);
+  const setVillageModels = useAppStore((s) => s.setVillageModels);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
 
@@ -66,6 +68,12 @@ export function InfoPanel() {
         </dl>
       )}
 
+      {territory.kind === 'village' && (
+        <label className="toggle" title="Дома из OSM нарисованы башкирскими домами: изба, пятистенок, дом с верандой, вальмовый, кирпичный, баня">
+          <input type="checkbox" checked={villageModels} onChange={(event) => setVillageModels(event.target.checked)} />
+          Башкирские дома-модели вместо простых объёмов
+        </label>
+      )}
       <label className="toggle">
         <input
           type="checkbox"

@@ -126,9 +126,10 @@ export class FurnitureLayer {
   }
 
   /** Спрятать фонари и скамейки в этих областях (lon/lat) с запасом margin метров. true — если что-то поменялось. */
-  hideWithin(areas: readonly (readonly LonLat[])[], margin: number): boolean {
+  hideWithin(areas: readonly (readonly LonLat[])[], margin: number, extra: readonly (readonly LonLat[])[] = []): boolean {
     if (!this.merged) return false;
     const inside = pointsInsideAreas(this.positions, areas, margin);
+    if (extra.length) pointsInsideAreas(this.positions, extra, 0).forEach((hit, i) => (inside[i] ||= hit));
     this.hidden = inside;
     const hide = (owner: string) => inside[Number(owner)] ?? false;
     const changed = this.merged.setHidden(hide);

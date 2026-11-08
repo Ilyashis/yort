@@ -7,13 +7,15 @@ import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
 import { PlotPanel } from './components/PlotPanel';
+import { DriveHud } from './components/DriveHud';
+import { Minimap } from './components/Minimap';
 import { WalkHud } from './components/WalkHud';
 import { WalkPanel } from './components/WalkPanel';
 import { defaultTerritory, findTerritory } from './config/territory';
-import { useAppStore } from './store/useAppStore';
+import { isOnStreet, useAppStore } from './store/useAppStore';
 
 export function App() {
-  const walking = useAppStore((s) => s.mode === 'walk');
+  const mode = useAppStore((s) => s.mode);
   const building = useAppStore((s) => !!s.builder);
   const loading = useAppStore((s) => s.status === 'loading');
   const territory = useAppStore((s) => findTerritory(s.territoryId) ?? defaultTerritory);
@@ -29,8 +31,11 @@ export function App() {
           <span>Загружаем: {territory.shortName}…</span>
         </div>
       </div>
-      {walking ? (
-        <WalkHud />
+      {isOnStreet(mode) ? (
+        <>
+          {mode === 'drive' ? <DriveHud /> : <WalkHud />}
+          <Minimap />
+        </>
       ) : (
         <>
           <div className="sidebar">

@@ -3,6 +3,9 @@
 // или забора и ручки выделенного дома. Геометрия маленькая — при каждой правке пересобираем целиком.
 //
 // Открытый интерфейс:
+//   Дома с моделью (изба, пятистенок, кирпичный…) рисуются моделью из каталога, вписанной в прямоугольник
+//   контура фасадом по первой стороне; геометрия моделей кэшируется по виду и размеру.
+//
 //   new EditLayer(city, frame, heightAt, village) — heightAt(x, y): высота земли в локальных метрах;
 //   render(edits, selectedId?, hiddenId?)   — все правки; selectedId подсвечен, hiddenId не рисуется (его тянут);
 //   preview(building | undefined, invalid?) — предпросмотр дома (красным — здесь ставить нельзя);
@@ -36,9 +39,11 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { hashString } from '../utils/hash';
 import { chimneys, FENCE, FENCE_COLOR_HEX, fenceBoxes } from '../world/base/buildingDetails';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
+import { findHouseModel } from '../world/village/houseModels';
 import {
   ROAD_KINDS,
   footprintCorners,
+  modelPlacement,
   nearestOnLines,
   rotateHandle,
   wallHeightOf,
@@ -52,9 +57,11 @@ import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { toLocal2, toThree } from './coords';
 import { createFacadeMaterial, createRoofMaterial } from './facadeShader';
+import { buildHouseMesh, createHouseMaterials, type HouseMaterials, type HouseMesh } from './houseMesh';
 import { MergedBuilder } from './merged';
 import { MeshBuilder } from './meshBuilder';
 import { hookMaterial } from './shaderHooks';
+import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 
 const SELECTED = new Color('#f5a524');
 const INVALID = new Color('#e5484d');
@@ -95,6 +102,11 @@ interface Assembly {
   roofOwners: number[];
   /** Оси заборов (локальные метры) — по ним узнаём, в какой забор попал луч. */
   fenceLines: { id: string; line: Vec2[] }[];
+  /** Дома-модели (у группы в userData.buildingId — чей дом) и рамки выделения вокруг них. */
+  models: Group[];
+  outlines: Line2[];
+  /** Ключи кэша моделей, которые нужны этой сборке. */
+  modelKeys: Set<string>;
 }
 
 /**
@@ -108,6 +120,10 @@ export class EditLayer {
   private readonly boxMaterial: MeshStandardMaterial;
   private readonly lineMaterial: LineMaterial;
   private readonly highlightMaterial: LineMaterial;
+  private readonly invalidMaterial: LineMaterial;
+  private readonly houseMaterials: HouseMaterials;
+  /** Геометрия моделей по виду и размеру — перетаскивание и перерисовка не пересобирают дом. */
+  private readonly modelCache = new Map<string, HouseMesh>();
   private readonly cornerPoints: Points;
   private readonly rotatePoints: Points;
   private main?: Assembly;
@@ -131,6 +147,8 @@ export class EditLayer {
     hookMaterial(this.boxMaterial, 'edit-boxes', undefined, city.csm);
     this.lineMaterial = lineMaterial(HIGHLIGHT, 5, 0.85);
     this.highlightMaterial = lineMaterial(HIGHLIGHT, 4, 1);
+    this.invalidMaterial = lineMaterial('#e5484d', 4, 1);
+    this.houseMaterials = createHouseMaterials(city.csm);
     this.cornerPoints = handlePoints(CORNER_STYLE);
     this.rotatePoints = handlePoints(ROTATE_STYLE);
     this.group.name = 'edits';
@@ -145,6 +163,7 @@ export class EditLayer {
       .filter((b) => b.id !== hiddenId)
       .map((building) => ({ building, tint: building.id === selectedId ? SELECTED : undefined }));
     this.main = this.assemble('edit', items, edits.fences);
+    this.sweepModels();
     this.city.requestRender();
   }
 
@@ -152,6 +171,7 @@ export class EditLayer {
   preview(building: EditedBuilding | undefined, invalid = false): void {
     this.disposeAssembly(this.previewed);
     this.previewed = building ? this.assemble('edit-preview', [{ building, tint: invalid ? INVALID : SELECTED }], []) : undefined;
+    this.sweepModels();
     this.city.requestRender();
   }
 
@@ -185,7 +205,7 @@ export class EditLayer {
     const footprint = building?.footprint ?? outline;
     if (footprint && footprint.length >= 3) {
       const local = footprint.map(this.frame.toLocal);
-      const ground = Math.min(...local.map(([x, y]) => this.heightAt(x, y)));
+      const ground = siteOnSlope(local, this.heightAt).floor;
       const top = ground + (building ? wallHeightOf(building, this.village) : 3) + 0.5;
       const corners = footprintCorners(local);
       corners.forEach(([x, y], index) => {
@@ -201,9 +221,15 @@ export class EditLayer {
 
   /** Объекты для луча выбора: свои дома (и предпросмотр) и свои заборы. */
   get pickables(): Object3D[] {
-    return [this.main?.walls, this.main?.roofs, this.main?.fences, this.previewed?.walls, this.previewed?.roofs].filter(
-      (object): object is Mesh => !!object,
-    );
+    return [
+      this.main?.walls,
+      this.main?.roofs,
+      this.main?.fences,
+      this.previewed?.walls,
+      this.previewed?.roofs,
+      ...(this.main?.models ?? []),
+      ...(this.previewed?.models ?? []),
+    ].filter((object): object is Mesh | Group => !!object);
   }
 
   /**
@@ -214,6 +240,11 @@ export class EditLayer {
     const handle = this.handleAt(clientX, clientY);
     if (handle) return { handle };
     if (!intersection) return {};
+    // Дом-модель: группа дома помнит, чей он.
+    for (let object: Object3D | null = intersection.object; object; object = object.parent) {
+      const id = object.userData['buildingId'] as string | undefined;
+      if (id) return { building: id };
+    }
     for (const assembly of [this.main, this.previewed]) {
       if (!assembly || intersection.faceIndex == null) continue;
       const owners =
@@ -249,7 +280,12 @@ export class EditLayer {
       material.map?.dispose();
       material.dispose();
     }
-    for (const material of [this.wallMaterial, this.roofMaterial, this.boxMaterial, this.lineMaterial, this.highlightMaterial]) material.dispose();
+    for (const mesh of this.modelCache.values()) mesh.dispose();
+    this.modelCache.clear();
+    this.houseMaterials.dispose();
+    for (const material of [this.wallMaterial, this.roofMaterial, this.boxMaterial, this.lineMaterial, this.highlightMaterial, this.invalidMaterial]) {
+      material.dispose();
+    }
     this.city.scene.remove(this.group);
     this.city.requestRender();
   }
@@ -261,7 +297,21 @@ export class EditLayer {
     const roofs = new MeshBuilder();
     const extras = new MergedBuilder();
     const fenceParts = new MergedBuilder();
-    items.forEach(({ building, tint }, index) => this.addBuilding(building, index, tint, walls, roofs, extras));
+    const models: Group[] = [];
+    const outlines: Line2[] = [];
+    const modelKeys = new Set<string>();
+    items.forEach(({ building, tint }, index) => {
+      if (building.model && building.footprint.length === 4) {
+        const model = this.addModel(building, modelKeys);
+        if (model) models.push(model);
+        if (tint) {
+          const outline = this.addLine([...building.footprint, building.footprint[0]!], tint === INVALID ? this.invalidMaterial : this.highlightMaterial);
+          if (outline) outlines.push(outline);
+        }
+        return;
+      }
+      this.addBuilding(building, index, tint, walls, roofs, extras);
+    });
     const fenceLines = fences.map(({ id, line }) => {
       const local = line.map(this.frame.toLocal);
       this.addFence(id, local, fenceParts);
@@ -276,7 +326,46 @@ export class EditLayer {
       wallOwners: walls.owners,
       roofOwners: roofs.owners,
       fenceLines,
+      models,
+      outlines,
+      modelKeys,
     };
+  }
+
+  /** Дом-модель: вписан в прямоугольник контура, фасад — по первой стороне, на самой низкой точке земли. */
+  private addModel(b: EditedBuilding, keys: Set<string>): Group | undefined {
+    const ref = b.model!;
+    const model = findHouseModel(ref.id);
+    if (!model) return undefined;
+    const local = b.footprint.map(this.frame.toLocal);
+    const place = modelPlacement(local);
+    // Пол — по верхней точке склона; цоколь, крыльцо и ступени уходят вниз до нижней.
+    const site = siteOnSlope(local, this.heightAt);
+    const foundation = Math.round((site.floor - site.low + FOOTING_DEPTH) * 10) / 10;
+    const key = `${ref.id}:${ref.seed}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
+    let mesh = this.modelCache.get(key);
+    if (!mesh) {
+      mesh = buildHouseMesh(model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation }), this.houseMaterials);
+      this.modelCache.set(key, mesh);
+    }
+    keys.add(key);
+    const group = mesh.group.clone();
+    group.name = `edit-model:${b.id}`;
+    group.userData['buildingId'] = b.id;
+    group.position.copy(toThree(place.center[0], place.center[1], site.floor));
+    group.rotation.y = place.angle;
+    this.group.add(group);
+    return group;
+  }
+
+  /** Убрать из кэша модели, которые не нужны ни правкам, ни предпросмотру. */
+  private sweepModels(): void {
+    const used = new Set([...(this.main?.modelKeys ?? []), ...(this.previewed?.modelKeys ?? [])]);
+    for (const [key, mesh] of this.modelCache) {
+      if (used.has(key)) continue;
+      mesh.dispose();
+      this.modelCache.delete(key);
+    }
   }
 
   /** Дом из правки: стены с окнами и плоским верхом, скатная крыша со свесом, у жилого дома — труба. */
@@ -290,7 +379,8 @@ export class EditLayer {
   ): void {
     const local = openRing(b.footprint.map(this.frame.toLocal));
     if (local.length < 3) return;
-    const ground = Math.min(...local.map(([x, y]) => this.heightAt(x, y)));
+    const site = siteOnSlope(local, this.heightAt);
+    const ground = site.floor;
     const wallTop = wallHeightOf(b, this.village);
     const seed = hashString(b.id);
     const grain = (seed % 10_000) / 10_000;
@@ -304,7 +394,7 @@ export class EditLayer {
     const facade = [ground, 0, wallTop, floorHeight];
     const style = [carved ? 2 : b.kind === 'shop' ? 1 : 0, variant, grain, 0];
     const facadeColor = shade(b.facadeColor);
-    const z0 = ground;
+    const z0 = site.low - FOOTING_DEPTH;
     const z1 = ground + wallTop;
 
     // Стены: нормаль наружу при любом направлении обхода контура.
@@ -377,6 +467,9 @@ export class EditLayer {
       this.group.remove(mesh);
       mesh.geometry.dispose();
     }
+    // Геометрия моделей — в кэше (общая), здесь только убираем копии из сцены.
+    for (const model of assembly.models) this.group.remove(model);
+    for (const line of assembly.outlines) this.removeLine(line);
   }
 
   // --- линии и ручки ---------------------------------------------------------------------------

@@ -104,8 +104,10 @@ export class TreesLayer {
   }
 
   /** Спрятать деревья в этих областях (lon/lat) с запасом margin метров, остальные вернуть. */
-  hideWithin(areas: readonly (readonly LonLat[])[], margin: number): void {
+  /** extra — области без запаса (уже раздвинутые прямоугольники домов-моделей): так быстрее. */
+  hideWithin(areas: readonly (readonly LonLat[])[], margin: number, extra: readonly (readonly LonLat[])[] = []): void {
     const next = pointsInsideAreas(this.positions, areas, margin);
+    if (extra.length) pointsInsideAreas(this.positions, extra, 0).forEach((inside, i) => (next[i] ||= inside));
     const touched = new Set<InstancedMesh>();
     next.forEach((hide, i) => {
       if (hide === this.hidden[i]) return;

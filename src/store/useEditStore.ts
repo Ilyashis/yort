@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits } from '../world/edit/edits';
+import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseModelRef } from '../world/edit/edits';
+import type { HouseModelId } from '../world/village/houseModels';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией. */
 export type EditTool = 'select' | 'house' | 'road' | 'fence';
@@ -39,16 +40,21 @@ interface EditState {
   selection?: Selection;
   /** Тип дороги для инструмента «Дорога». */
   roadKind: EditRoadKind;
+  /** Модель для инструмента «Дом» (изба, кирпичный…); нет — простой объём растяжкой. */
+  houseModel?: HouseModelId;
   /** Короткое сообщение внизу экрана (почему нельзя поставить дом и т. п.). */
   notice?: { text: string; at: number };
   /** Дом для правки по id: уже изменённый или дом OSM в виде правки (регистрирует сцена). */
   resolveBuilding?: (id: string) => EditedBuilding | undefined;
+  /** Поставить модель на место дома (фасадом к улице) или снять её (регистрирует сцена — знает улицы). */
+  applyModel?: (building: EditedBuilding, model: HouseModelRef | undefined) => EditedBuilding;
 
   /** Загрузить правки населённого пункта (из браузера). */
   load: (territoryId: string) => void;
   setTool: (tool: EditTool | undefined) => void;
   select: (selection: Selection | undefined) => void;
   setRoadKind: (kind: EditRoadKind) => void;
+  setHouseModel: (model: HouseModelId | undefined) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -57,6 +63,7 @@ interface EditState {
   replace: (next: Edits) => void;
   notify: (text: string) => void;
   setResolver: (resolve: ((id: string) => EditedBuilding | undefined) | undefined) => void;
+  setModelApplier: (apply: ((building: EditedBuilding, model: HouseModelRef | undefined) => EditedBuilding) | undefined) => void;
 }
 
 export const useEditStore = create<EditState>()((set, get) => ({
@@ -70,6 +77,7 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setTool: (tool) => set({ tool, selection: tool === 'select' ? get().selection : undefined }),
   select: (selection) => set({ selection }),
   setRoadKind: (roadKind) => set({ roadKind }),
+  setHouseModel: (houseModel) => set({ houseModel }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();
@@ -94,4 +102,5 @@ export const useEditStore = create<EditState>()((set, get) => ({
   replace: (next) => get().commit(next),
   notify: (text) => set({ notice: { text, at: Date.now() } }),
   setResolver: (resolveBuilding) => set({ resolveBuilding }),
+  setModelApplier: (applyModel) => set({ applyModel }),
 }));

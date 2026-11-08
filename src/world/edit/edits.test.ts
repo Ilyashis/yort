@@ -7,6 +7,8 @@ import {
   areaOf,
   centroidOf,
   footprintCorners,
+  modelFootprint,
+  modelPlacement,
   parseEdits,
   rectangleSize,
   removeBuilding,
@@ -18,9 +20,11 @@ import {
   simplifyLine,
   snapEnds,
   stretchRectangle,
+  turnFacade,
   upsertBuilding,
   upsertRoad,
   wallHeightOf,
+  withModel,
   type EditedBuilding,
 } from './edits';
 
@@ -157,5 +161,74 @@ describe('линии от руки', () => {
     const snapped = snapEnds(line, [road], 6);
     expect(snapped[0]).toEqual([20, 0]);
     expect(snapped[1]).toEqual([20, 40]);
+  });
+});
+
+describe('дома-модели', () => {
+  // Дом 6 × 10 м: длинной стороной вдоль y, улица — восточнее (x = 20).
+  const outline: Vec2[] = [
+    [0, 0],
+    [6, 0],
+    [6, 10],
+    [0, 10],
+  ];
+  const street: Vec2[] = [
+    [20, -50],
+    [20, 50],
+  ];
+
+  it('фасад — к ближайшей улице, обход против часовой', () => {
+    const rect = modelFootprint(outline, [street]);
+    expect(rect).toHaveLength(4);
+    const [a, b] = rect as [Vec2, Vec2];
+    // Первая сторона — восточная (x = 6).
+    expect(a[0]).toBeCloseTo(6, 6);
+    expect(b[0]).toBeCloseTo(6, 6);
+    const place = modelPlacement(rect);
+    expect(place.width).toBeCloseTo(10, 6);
+    expect(place.depth).toBeCloseTo(6, 6);
+    expect(place.center[0]).toBeCloseTo(3, 6);
+    expect(place.center[1]).toBeCloseTo(5, 6);
+    // Ось фасада идёт на север, значит дом смотрит на восток (направо от оси).
+    expect(place.angle).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it('без улицы рядом фасад смотрит на юг', () => {
+    const rect = modelFootprint(outline, []);
+    const [a, b] = rect as [Vec2, Vec2];
+    expect(a[1]).toBeCloseTo(0, 6);
+    expect(b[1]).toBeCloseTo(0, 6);
+    expect(b[0]).toBeGreaterThan(a[0]);
+  });
+
+  it('«развернуть фасад» перебирает стороны по кругу', () => {
+    const rect = modelFootprint(outline, [street]);
+    let turned = rect;
+    for (let i = 0; i < 4; i++) turned = turnFacade(turned);
+    expect(turned).toEqual(rect);
+    expect(modelPlacement(turnFacade(rect)).width).toBeCloseTo(6, 6);
+  });
+
+  it('модель в правке: тип, этажность; снять модель — простой объём', () => {
+    const b = withModel(house('h'), { id: 'izba', seed: 3 });
+    expect(b.model).toEqual({ id: 'izba', seed: 3 });
+    expect(b.kind).toBe('house');
+    expect(b.floors).toBe(1);
+    expect(withModel(house('h'), { id: 'banya', seed: 1 }).kind).toBe('shed');
+    expect(withModel(b, undefined).model).toBeUndefined();
+  });
+
+  it('правки с моделью переживают сохранение; чужие модели отбрасываются', () => {
+    const footprint: [number, number][] = [
+      [55.9, 54.7],
+      [55.9001, 54.7],
+      [55.9001, 54.7001],
+      [55.9, 54.7001],
+    ];
+    const good = { ...house('a'), footprint, model: { id: 'pyatistenok', seed: 2 } };
+    const bad = { ...house('b'), footprint, model: { id: 'castle', seed: 1 } };
+    const parsed = parseEdits(JSON.parse(JSON.stringify({ ...EMPTY_EDITS, buildings: [good, bad] })))!;
+    expect(parsed.buildings[0]!.model).toEqual({ id: 'pyatistenok', seed: 2 });
+    expect(parsed.buildings[1]!.model).toBeUndefined();
   });
 });

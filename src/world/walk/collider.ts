@@ -50,14 +50,17 @@ export class Collider {
     this.ignored = ids;
   }
 
-  isBlocked(point: Vec2): boolean {
+  /** Стена ближе radius (по умолчанию — «толщина» пешехода или машины из настроек). */
+  isBlocked(point: Vec2, radius = this.options.radius): boolean {
     const [x, y] = point;
-    const r = this.options.radius;
-    for (const { id, polygon: o } of [...this.obstacles, ...this.extra]) {
-      if (this.ignored.has(id)) continue;
-      if (x < o.minX - r || x > o.maxX + r || y < o.minY - r || y > o.maxY + r) continue;
-      if (insidePolygon(point, o)) return true;
-      if (o.rings.some((ring) => distanceToRing(point, ring) < r)) return true;
+    const r = radius;
+    for (const list of [this.obstacles, this.extra]) {
+      for (const { id, polygon: o } of list) {
+        if (x < o.minX - r || x > o.maxX + r || y < o.minY - r || y > o.maxY + r) continue;
+        if (this.ignored.has(id)) continue;
+        if (insidePolygon(point, o)) return true;
+        if (o.rings.some((ring) => distanceToRing(point, ring) < r)) return true;
+      }
     }
     return false;
   }

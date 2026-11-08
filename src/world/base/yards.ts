@@ -27,6 +27,11 @@ export interface Yard {
   fence: [Vec2, Vec2][];
   /** Огород в глубине участка (если участок достаточно длинный) и направление грядок. */
   garden?: { corners: [Vec2, Vec2, Vec2, Vec2]; rows: Vec2 };
+  /**
+   * Палисадник перед домом: от стены до забора по улице, шириной с фасад. origin — середина фасада,
+   * toStreet — единичный вектор к улице. Уличный забор напротив палисадника вырезан — там штакетник палисадника.
+   */
+  palisade?: { origin: Vec2; toStreet: Vec2; width: number; depth: number };
   /** Стабильное число для цвета забора. */
   seed: number;
 }
@@ -44,6 +49,8 @@ export interface YardOptions {
 }
 
 const DEFAULTS: YardOptions = { minHouseArea: 45, back: [20, 40], side: [3, 7], maxFront: 5, gateWidth: 3 };
+/** Палисадник — если от дома до улицы хотя бы метр, а сбоку от дома хватает места на ворота. */
+const PALISADE = { minFront: 1, minSide: 1.6 };
 const SHRINK_STEPS = 6;
 const ROAD_CLEARANCE = 0.6;
 
@@ -122,19 +129,26 @@ export function planYards(
     const [c0, c1, c2, c3] = corners; // c0→c1 — по улице (слева направо, если смотреть с улицы на дом)
     const along = (t: number): Vec2 => [c0[0] + (c1[0] - c0[0]) * t, c0[1] + (c1[1] - c0[1]) * t];
     const width = Math.hypot(c1[0] - c0[0], c1[1] - c0[1]);
-    const gate = Math.min(opts.gateWidth / width, 0.4);
-    const gateAt = seed % 2 ? 0.08 : 0.92 - gate;
+    const houseFrom = side / width;
+    const palisade = front >= PALISADE.minFront && side >= PALISADE.minSide;
+    let gate = Math.min(opts.gateWidth / width, 0.4);
+    let gateAt = seed % 2 ? 0.08 : 0.92 - gate;
+    if (palisade) {
+      // Ворота — сбоку от дома: напротив фасада палисадник.
+      gate = Math.min(opts.gateWidth, side - 0.5) / width;
+      gateAt = seed % 2 ? (houseFrom - gate) / 2 : 1 - houseFrom + (houseFrom - gate) / 2;
+    }
     const fence: [Vec2, Vec2][] = [];
     const streetCuts: [number, number][] = [[gateAt, gateAt + gate]];
-    if (front < 0.8) {
-      // Дом стоит прямо на линии улицы — его стена и есть забор.
-      const houseFrom = side / width;
-      streetCuts.push([houseFrom, 1 - houseFrom]);
-    }
+    // Дом стоит прямо на линии улицы — его стена и есть забор; перед палисадником — его штакетник.
+    if (front < 0.8 || palisade) streetCuts.push([houseFrom, 1 - houseFrom]);
     for (const [t0, t1] of complement(streetCuts)) fence.push([along(t0), along(t1)]);
     fence.push([c1, c2], [c2, c3], [c3, c0]);
 
     const yard: Yard = { houseId: house.id, corners, fence, seed };
+    if (palisade) {
+      yard.palisade = { origin: [box.center[0] + f[0] * halfF, box.center[1] + f[1] * halfF], toStreet: f, width: 2 * halfL, depth: front };
+    }
     if (back >= 14) {
       yard.garden = {
         corners: rectangle(box.center, f, l, -halfF - back + 1.5, -halfF - 5, -halfL - side + 1.2, halfL + side - 1.2),

@@ -63,6 +63,11 @@ export class WalkController {
     return this.walking;
   }
 
+  /** Где пешеход и куда смотрит (локальные метры, курс — рад от севера по часовой). */
+  pose(): { position: Vec2; heading: number; speed: number } {
+    return { position: this.position, heading: this.heading, speed: Math.hypot(...this.velocity) };
+  }
+
   /** Точка земли в distance метрах впереди пешехода (локальные метры). */
   pointAhead(distance: number): Vec2 {
     return [this.position[0] + Math.sin(this.heading) * distance, this.position[1] + Math.cos(this.heading) * distance];

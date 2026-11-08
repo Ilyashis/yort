@@ -6,6 +6,7 @@ import type { BaseBuildingFeature } from '../base/types';
 import type { Vec2 } from '../walk/localFrame';
 import { distanceToSegment } from '../walk/localFrame';
 import { openRing, orientedBox, signedArea } from '../base/roofGeometry';
+import { findHouseModel, type HouseModelId } from '../village/houseModels';
 
 export type LonLat = [number, number];
 
@@ -13,6 +14,12 @@ export type LonLat = [number, number];
 export type EditBuildingKind = 'house' | 'apartments' | 'shop' | 'shed';
 export type EditRoof = 'flat' | 'gabled' | 'hipped';
 export type EditRoadKind = 'street' | 'lane' | 'track' | 'path';
+
+/** Модель дома из каталога (сруб, обшивка, кирпич…) и зерно варианта окраски. */
+export interface HouseModelRef {
+  id: HouseModelId;
+  seed: number;
+}
 
 export interface EditedBuilding {
   id: string;
@@ -25,6 +32,11 @@ export interface EditedBuilding {
   roof: EditRoof;
   facadeColor: string;
   roofColor: string;
+  /**
+   * Дом-модель вместо простого объёма: контур — прямоугольник (4 угла против часовой),
+   * первая сторона — уличный фасад.
+   */
+  model?: HouseModelRef;
 }
 
 export interface EditedRoad {
@@ -120,6 +132,11 @@ export function removeFence(edits: Edits, id: string): Edits {
   return edits.removedYards.includes(id) ? edits : { ...edits, removedYards: [...edits.removedYards, id] };
 }
 
+/** Дома OSM, которых в сцене больше нет в исходном виде: убранные и изменённые правками. */
+export function replacedOsmIds(edits: Edits): Set<string> {
+  return new Set([...edits.removedBuildings, ...edits.buildings.map((b) => b.source).filter((s): s is string => !!s)]);
+}
+
 export function isEmpty(edits: Edits): boolean {
   return (
     !edits.buildings.length &&
@@ -144,7 +161,12 @@ export function parseEdits(value: unknown): Edits | undefined {
   return {
     buildings: arr<EditedBuilding>(v.buildings)
       .filter((b) => b && typeof b.id === 'string' && b.kind in BUILDING_KINDS)
-      .map((b) => ({ ...b, footprint: points(b.footprint), floors: clampFloors(Number(b.floors) || 1) }))
+      .map((b) => {
+        const footprint = points(b.footprint);
+        const model = parseModel(b.model, footprint.length);
+        const { model: _drop, ...rest } = b;
+        return { ...rest, footprint, floors: clampFloors(Number(b.floors) || 1), ...(model ? { model } : {}) };
+      })
       .filter((b) => b.footprint.length >= 3),
     removedBuildings: strings(v.removedBuildings),
     roads: arr<EditedRoad>(v.roads)
@@ -161,6 +183,66 @@ export function parseEdits(value: unknown): Edits | undefined {
 }
 
 export const clampFloors = (floors: number) => Math.min(Math.max(Math.round(floors), 1), 30);
+
+function parseModel(value: unknown, corners: number): HouseModelRef | undefined {
+  if (!value || typeof value !== 'object' || corners !== 4) return undefined;
+  const { id, seed } = value as Partial<HouseModelRef>;
+  if (typeof id !== 'string' || !findHouseModel(id) || typeof seed !== 'number' || !Number.isFinite(seed)) return undefined;
+  return { id: id as HouseModelId, seed: Math.round(seed) };
+}
+
+// --- дома-модели ---------------------------------------------------------------------------
+
+/** Улица ближе этого, м, — фасад поворачиваем к ней; иначе — на юг. */
+const FACADE_TO_STREET_M = 60;
+
+/**
+ * Прямоугольник под модель: углы ориентированного прямоугольника контура против часовой,
+ * первым — тот, с которого начинается сторона, ближайшая к улице (уличный фасад).
+ */
+export function modelFootprint(local: readonly Vec2[], roads: readonly (readonly Vec2[])[]): Vec2[] {
+  let corners = footprintCorners(local);
+  if (signedArea(corners) < 0) corners = [corners[0]!, corners[3]!, corners[2]!, corners[1]!];
+  const center = centroidOf(corners);
+  let best = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+  corners.forEach((a, i) => {
+    const b = corners[(i + 1) % corners.length]!;
+    const mid: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const snap = nearestOnLines(mid, roads);
+    const score = snap && snap.distance < FACADE_TO_STREET_M ? snap.distance : 1000 + (mid[1] - center[1]);
+    if (score < bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return [...corners.slice(best), ...corners.slice(0, best)];
+}
+
+/** Повернуть фасад на соседнюю сторону (контур тот же, начало обхода — со следующего угла). */
+export function turnFacade<T>(footprint: readonly T[]): T[] {
+  return [...footprint.slice(1), footprint[0]!];
+}
+
+/** Где и как стоит модель: середина, поворот оси фасада (рад от востока против часовой), стороны. */
+export function modelPlacement(local: readonly Vec2[]): { center: Vec2; angle: number; width: number; depth: number } {
+  const [a, b, c] = local as [Vec2, Vec2, Vec2];
+  return {
+    center: centroidOf(local.slice(0, 4)),
+    angle: Math.atan2(b[1] - a[1], b[0] - a[0]),
+    width: Math.hypot(b[0] - a[0], b[1] - a[1]),
+    depth: Math.hypot(c[0] - b[0], c[1] - b[1]),
+  };
+}
+
+/** Дом с моделью (footprint — уже прямоугольник modelFootprint); без модели — простой объём. */
+export function withModel(b: EditedBuilding, model: HouseModelRef | undefined, footprint: LonLat[] = b.footprint): EditedBuilding {
+  if (!model) {
+    const { model: _drop, ...rest } = b;
+    return rest;
+  }
+  return { ...b, footprint, model, kind: model.id === 'banya' ? 'shed' : 'house', floors: 1, roof: 'gabled' };
+}
 
 // --- геометрия инструментов (локальные метры) ----------------------------------------
 
