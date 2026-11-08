@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../walk/localFrame';
 import {
+  EDIT_FLOOR_HEIGHT,
   EMPTY_EDITS,
+  SHED_WALL_HEIGHT,
   areaOf,
   centroidOf,
   footprintCorners,
@@ -12,11 +14,13 @@ import {
   removeRoad,
   resizeByCorner,
   rotate,
+  rotateHandle,
   simplifyLine,
   snapEnds,
   stretchRectangle,
   upsertBuilding,
   upsertRoad,
+  wallHeightOf,
   type EditedBuilding,
 } from './edits';
 
@@ -113,6 +117,23 @@ describe('правка контура', () => {
     expect(bigger.some(([x, y]) => Math.abs(x - opposite[0]) < 1e-6 && Math.abs(y - opposite[1]) < 1e-6)).toBe(true);
     const tiny = resizeByCorner(square, index, [-5, -5]);
     expect(areaOf(tiny)).toBeCloseTo(9, 4); // 3 × 3 — минимум
+  });
+
+  it('ручка поворота — снаружи, в 2,5 м от середины первой стороны', () => {
+    const corners: Vec2[] = [
+      [0, 0],
+      [10, 0],
+      [10, 6],
+      [0, 6],
+    ];
+    expect(rotateHandle(corners)).toEqual([5, -2.5]);
+  });
+
+  it('высота стен: сарай низкий, у деревенского дома и магазина цоколь выше', () => {
+    expect(wallHeightOf({ kind: 'shed', floors: 3 }, false)).toBe(SHED_WALL_HEIGHT);
+    expect(wallHeightOf({ kind: 'apartments', floors: 5 }, false)).toBeCloseTo(5 * EDIT_FLOOR_HEIGHT, 6);
+    expect(wallHeightOf({ kind: 'house', floors: 1 }, true)).toBeCloseTo(EDIT_FLOOR_HEIGHT + 0.4, 6);
+    expect(wallHeightOf({ kind: 'house', floors: 1 }, false)).toBeCloseTo(EDIT_FLOOR_HEIGHT, 6);
   });
 });
 

@@ -234,6 +234,9 @@ function onRoof(frame: RoofFrame, sa: number, sb: number): Vec2 {
   ];
 }
 
+/** Цвета заборов: некрашеные доски, серый штакетник, крашеные зелёным и синим, охра, морёное дерево. */
+export const FENCE_COLOR_HEX = ['#8a6a48', '#857f73', '#5f7f4f', '#5b7b97', '#a8874f', '#7a5a3e'];
+
 /** Забор: доски кусками не длиннее 5 м (каждый — на своей высоте земли) и столбы. */
 export const FENCE = { street: 1.45, other: 1.3, thickness: 0.07, piece: 5, postEvery: 2.5, post: 0.12, postHeight: 1.7 };
 

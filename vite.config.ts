@@ -7,7 +7,6 @@ export default defineConfig({
     port: 5173,
   },
   build: {
-    // Cesium — большой пакет; предупреждение о размере чанка здесь ожидаемо.
-    chunkSizeWarningLimit: 6000,
+    chunkSizeWarningLimit: 2000,
   },
 });

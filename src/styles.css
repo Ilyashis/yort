@@ -32,6 +32,26 @@ body,
 .city-viewer {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+}
+
+.city-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* Атрибуция данных (лицензия ODbL требует указывать OpenStreetMap). */
+.city-credits {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  z-index: 1;
+  font-size: 11px;
+  color: rgba(18, 22, 30, 0.75);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  pointer-events: none;
 }
 
 /* --- панели --------------------------------------------------------------- */
@@ -735,11 +755,6 @@ kbd {
   border-color: rgba(245, 165, 36, 0.45);
 }
 
-/* Подписи источников данных Cesium — компактнее и не под панелями. */
-.cesium-viewer-bottom {
-  font-size: 11px;
-}
-
 /* --- редактор (инструменты внизу, как в градостроителях) ------------------------ */
 
 .editor {
@@ -946,6 +961,69 @@ kbd {
 .sound-note {
   margin: 10px 0 0;
   font-size: 12px;
+}
+
+/* --- время суток --------------------------------------------------------------- */
+
+.time-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 300px;
+  max-width: calc(100vw - 32px);
+}
+
+.time-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.time-head b {
+  color: var(--text);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-slider {
+  width: 100%;
+  height: 14px;
+  margin: 10px 0 2px;
+  border-radius: 7px;
+  appearance: none;
+  -webkit-appearance: none;
+  outline-offset: 3px;
+  cursor: pointer;
+}
+
+.time-slider::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  -webkit-appearance: none;
+}
+
+.time-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.time-scale {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- подложка ----------------------------------------------------------------- */

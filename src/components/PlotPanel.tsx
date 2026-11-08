@@ -1,7 +1,6 @@
-import { PLOT_COLORS } from '../cesium/PlotDrawingTool';
 import { useAppStore } from '../store/useAppStore';
 import { formatArea, formatLength } from '../utils/format';
-import { PLOT_LIMITS, plotArea } from '../world/user/plot';
+import { PLOT_COLORS, PLOT_LIMITS, plotArea } from '../world/user/plot';
 
 export function PlotPanel() {
   const status = useAppStore((s) => s.status);

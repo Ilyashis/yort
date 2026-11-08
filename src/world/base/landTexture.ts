@@ -46,7 +46,7 @@ const DIRT_COLOR = '#9b8565';
 
 /** Порядок снизу вверх. Трава (узоры) ложится после мягких заливок, твёрдые покрытия — поверх неё. */
 const SOFT: Paint[] = ['green', 'meadow', 'wood'];
-const HARD: Paint[] = ['garden', 'water', 'pitch', 'parking', 'paving', 'dirt', 'sidewalk', 'road', 'footway'];
+const HARD: Paint[] = ['garden', 'water', 'pitch', 'parking', 'paving', 'dirt', 'sidewalk', 'road', 'footway', 'marking'];
 
 /** Кромки, м: бордюрный камень у дорог и тротуаров, береговая линия, разметка поля. */
 const EDGES: Partial<Record<Paint, { color: string; widthM: number }[]>> = {

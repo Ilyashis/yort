@@ -3,7 +3,6 @@ dist/
 *.tsbuildinfo
 
 # Копируется из node_modules/cesium скриптом scripts/copy-cesium-assets.mjs
-public/cesium/
 
 # Локальные переменные окружения (токены)
 .env

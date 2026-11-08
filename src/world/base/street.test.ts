@@ -4,7 +4,7 @@ import { Collider } from '../walk/collider';
 import { createLocalFrame, insidePolygon, toLocalPolygon, type Vec2 } from '../walk/localFrame';
 import type { GroundFeature } from './environment';
 import { facadeStyle, findStreetFrontBuildings } from './facades';
-import { landmarkObstacle } from './LandmarksLayer';
+import { landmarkObstacle } from './pedestal';
 import { EMPTY_STREETS, orientBenches, placeLamps, roadMarkings, sampleAlong, type StreetsData } from './streetFurniture';
 import type { BaseBuildingFeature, BaseBuildingProperties } from './types';
 

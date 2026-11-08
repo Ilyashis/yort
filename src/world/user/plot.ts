@@ -38,6 +38,13 @@ export interface PlotAnalysis {
   valid: boolean;
 }
 
+/** Цвета участка: пока рисуется, годится и не годится под застройку. */
+export const PLOT_COLORS = {
+  draft: '#f5a524',
+  valid: '#3ecf8e',
+  invalid: '#ff6b6b',
+} as const;
+
 export const PLOT_LIMITS = {
   minAreaM2: 100,
   maxAreaM2: 20_000,

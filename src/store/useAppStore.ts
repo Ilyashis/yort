@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { DEFAULT_VOLUMES, type Volumes } from '../audio/AudioEngine';
-import type { GraphicsQuality } from '../cesium/createViewer';
+import type { GraphicsQuality } from '../three/CityScene';
+import { DEFAULT_TIME } from '../three/dayNight';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
-import type { TerrainKind } from '../cesium/terrain';
+import type { TerrainKind } from '../world/base/heightGrid';
 import { readPref, writePref } from '../utils/prefs';
-import type { BuildingColorMode } from '../world/base/BaseBuildingsLayer';
+import type { BuildingColorMode } from '../world/base/buildingPlan';
 import type { BaseBuildingProperties, BaseBuildingsStats } from '../world/base/types';
-import type { UserBuilding } from '../world/user/UserBuildingsLayer';
+import type { UserBuilding } from '../world/user/userBuildings';
 import {
   defaultSpec,
   generateBuilding,
@@ -66,6 +67,16 @@ function readVolumes(): Volumes {
   }
 }
 
+/** Время суток из браузера (если сохранено и в порядке). */
+function readTime(): number {
+  try {
+    const saved = Number(window.localStorage.getItem('citia:time'));
+    return window.localStorage.getItem('citia:time') !== null && saved >= 0 && saved < 24 ? saved : DEFAULT_TIME;
+  } catch {
+    return DEFAULT_TIME;
+  }
+}
+
 /** Населённый пункт при открытии: из ссылки (?place=…), иначе последний выбранный. */
 function initialTerritoryId(): string {
   try {
@@ -121,6 +132,9 @@ interface AppState {
   viewMode: 'top' | 'tilt';
   /** Качество графики (запоминается в браузере). */
   graphicsQuality: GraphicsQuality;
+  /** Время суток (местное, часы 0..24) и идёт ли оно само (запоминается в браузере). */
+  timeOfDay: number;
+  timeFlowing: boolean;
 
   /** Регистрирует сцена; UI вызывает, чтобы вернуть камеру к территории. */
   flyHome?: () => void;
@@ -146,6 +160,8 @@ interface AppState {
   changeView?: (mode: 'top' | 'tilt') => void;
   setChangeView: (change: ((mode: 'top' | 'tilt') => void) | undefined) => void;
   setGraphicsQuality: (quality: GraphicsQuality) => void;
+  setTimeOfDay: (hours: number) => void;
+  setTimeFlowing: (on: boolean) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setHelpOpen: (open: boolean) => void;
 
@@ -175,6 +191,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   volumes: readVolumes(),
   viewMode: 'tilt',
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
+  timeOfDay: readTime(),
+  timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
   walkMouseLocked: false,
   helpOpen: readPref('help', ['seen', 'new'] as const, 'new') !== 'seen',
 
@@ -223,6 +241,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setGraphicsQuality: (graphicsQuality) => {
     writePref('graphics', graphicsQuality);
     set({ graphicsQuality });
+  },
+  setTimeOfDay: (hours) => {
+    const timeOfDay = ((hours % 24) + 24) % 24;
+    writePref('time', timeOfDay.toFixed(3));
+    set({ timeOfDay });
+  },
+  setTimeFlowing: (timeFlowing) => {
+    writePref('time-flow', timeFlowing ? 'on' : 'off');
+    set({ timeFlowing });
   },
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),
   setHelpOpen: (helpOpen) => {

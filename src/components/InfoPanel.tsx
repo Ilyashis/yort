@@ -1,6 +1,6 @@
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
-import { BUILDING_COLORS } from '../world/base/BaseBuildingsLayer';
+import { BUILDING_COLORS } from '../world/base/buildingPlan';
 
 const percent = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
 

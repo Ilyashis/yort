@@ -234,6 +234,23 @@ export function footprintCorners(points: readonly Vec2[]): Vec2[] {
   return boxCorners(orientedBox(openRing(points)));
 }
 
+/** Ручка поворота: перед серединой первой стороны прямоугольника, на 2,5 м наружу. */
+export function rotateHandle(corners: readonly Vec2[]): Vec2 {
+  const [a, b] = corners as [Vec2, Vec2];
+  const c: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const center = centroidOf(corners);
+  const out: Vec2 = [c[0] - center[0], c[1] - center[1]];
+  const length = Math.hypot(out[0], out[1]) || 1;
+  return [c[0] + (out[0] / length) * 2.5, c[1] + (out[1] / length) * 2.5];
+}
+
+/** Высота стен дома из правки, м: сарай — низкий, у магазина и деревенского дома — цоколь повыше. */
+export function wallHeightOf(b: Pick<EditedBuilding, 'kind' | 'floors'>, village: boolean): number {
+  if (b.kind === 'shed') return SHED_WALL_HEIGHT;
+  const extra = b.kind === 'shop' ? 0.6 : village && b.kind === 'house' ? 0.4 : 0;
+  return b.floors * EDIT_FLOOR_HEIGHT + extra;
+}
+
 function boxCorners(box: ReturnType<typeof orientedBox>): Vec2[] {
   const at = (su: number, sv: number): Vec2 => [
     box.center[0] + box.u[0] * su + box.v[0] * sv,

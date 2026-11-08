@@ -1,5 +1,3 @@
-import './cesium/setup';
-import 'cesium/Build/Cesium/Widgets/widgets.css';
 import './styles.css';
 
 import { StrictMode } from 'react';

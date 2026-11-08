@@ -2,7 +2,7 @@ import { useAppStore } from '../store/useAppStore';
 import { formatArea } from '../utils/format';
 import type { BaseBuildingProperties } from '../world/base/types';
 import { BUILDING_TYPES } from '../world/user/building';
-import { isUserBuildingId, userBuildingId } from '../world/user/UserBuildingsLayer';
+import { isUserBuildingId, userBuildingId } from '../world/user/userBuildings';
 
 function heightSourceText(b: BaseBuildingProperties): string {
   switch (b.heightSource) {

@@ -2,13 +2,10 @@
   "name": "citia",
   "private": true,
   "version": "0.1.0",
-  "description": "AI UFA — прототип цифровой копии Уфы (CesiumJS + OSM)",
+  "description": "AI UFA — прототип цифровой копии Уфы (three.js + OSM)",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/copy-cesium-assets.mjs",
-    "predev": "node scripts/copy-cesium-assets.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-cesium-assets.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -22,15 +19,16 @@
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",
-    "cesium": "^1.140.0",
     "geotiff": "^3.0.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "three": "^0.181.2",
     "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.181.0",
     "@vitejs/plugin-react": "^6.2.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",
