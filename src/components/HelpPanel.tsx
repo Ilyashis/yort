@@ -119,7 +119,6 @@ export function HelpPanel() {
           </dt>
           <dd>ближе / дальше</dd>
           <dt className="help-section">Редактор</dt>
-          <dd />
           <dt>
             <Key>V</Key>
           </dt>

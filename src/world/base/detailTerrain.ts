@@ -44,8 +44,30 @@ const YARD_SHOULDER = 3;
 /** Ровная площадка под домом — на столько шире контура, м; дальше — переход на PAD_SHOULDER м. */
 const PAD_MARGIN = 1;
 const PAD_SHOULDER = 3;
+/** Участки посёлка: на столько метров размывается переход между плоскостями соседей. */
+const PLOT_BLEND = 3;
 
 type XY = [number, number];
+
+/** Скользящее среднее по окну 2·radius + 1 вдоль строк (along) или столбцов, на месте. */
+function boxBlur(field: Float32Array, w: number, h: number, radius: number, along: boolean): void {
+  const n = along ? w : h;
+  const lines = along ? h : w;
+  const line = new Float32Array(n);
+  for (let l = 0; l < lines; l++) {
+    const at = (k: number) => (along ? l * w + k : k * w + l);
+    for (let k = 0; k < n; k++) line[k] = field[at(k)]!;
+    let sum = 0;
+    for (let k = -radius; k <= radius; k++) sum += k >= 0 && k < n ? line[k]! : 0;
+    for (let k = 0; k < n; k++) {
+      field[at(k)] = sum / (2 * radius + 1);
+      const out = k - radius;
+      const into = k + radius + 1;
+      if (out >= 0) sum -= line[out]!;
+      if (into < n) sum += line[into]!;
+    }
+  }
+}
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -222,6 +244,81 @@ export class DetailHeights {
       });
     }
     this.blend(best, YARD_SHOULDER);
+  }
+
+  /**
+   * Участки посёлка вплотную друг к другу: каждый — плоскостью по своему уклону (бугры съёмки — кусты,
+   * кучи, машины — уходят). Сами плоскости размыты на PLOT_BLEND м: у общего забора соседей — плавный
+   * переход, а не ступенька, и за краем участков земля плавно возвращается к съёмке.
+   */
+  flattenPlots(plots: readonly (readonly (readonly [number, number])[])[]): void {
+    const target = new Map<number, number>();
+    for (const plot of plots) {
+      const ring = plot.map(this.toGrid);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      const zs: number[] = [];
+      const nodes: number[] = [];
+      this.visit(ring, 0, (i, px, py, d) => {
+        if (d > 0 || target.has(i)) return;
+        xs.push(px);
+        ys.push(py);
+        zs.push(this.nodeHeight(i));
+        nodes.push(i);
+      });
+      const plane = fitPlane(xs, ys, zs);
+      if (!plane) continue;
+      nodes.forEach((i, k) => target.set(i, plane(xs[k]!, ys[k]!)));
+    }
+    if (!target.size) return;
+    // Плотный кусок сетки вокруг участков: высота плоскостей и «доля участков» — размытием (два прохода окна).
+    const pad = PLOT_BLEND * 3;
+    let c0 = Infinity;
+    let r0 = Infinity;
+    let c1 = -Infinity;
+    let r1 = -Infinity;
+    for (const i of target.keys()) {
+      const c = i % this.width;
+      const r = Math.floor(i / this.width);
+      c0 = Math.min(c0, c);
+      c1 = Math.max(c1, c);
+      r0 = Math.min(r0, r);
+      r1 = Math.max(r1, r);
+    }
+    const rx = Math.max(1, Math.round(PLOT_BLEND / this.cellX));
+    const ry = Math.max(1, Math.round(PLOT_BLEND / this.cellY));
+    c0 = Math.max(0, c0 - Math.ceil(pad / this.cellX));
+    r0 = Math.max(0, r0 - Math.ceil(pad / this.cellY));
+    c1 = Math.min(this.width - 1, c1 + Math.ceil(pad / this.cellX));
+    r1 = Math.min(this.height - 1, r1 + Math.ceil(pad / this.cellY));
+    const w = c1 - c0 + 1;
+    const h = r1 - r0 + 1;
+    const value = new Float32Array(w * h);
+    const share = new Float32Array(w * h);
+    for (const [i, v] of target) {
+      const k = (Math.floor(i / this.width) - r0) * w + ((i % this.width) - c0);
+      value[k] = v;
+      share[k] = 1;
+    }
+    for (let pass = 0; pass < 2; pass++) {
+      for (const field of [value, share]) {
+        boxBlur(field, w, h, rx, true);
+        boxBlur(field, w, h, ry, false);
+      }
+    }
+    const delta = (this.delta ??= new Float32Array(this.width * this.height));
+    this.coverageDirty = true;
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const k = r * w + c;
+        const s = share[k]!;
+        if (s < 1e-3) continue;
+        // Внутри участков — сглаженные плоскости; за краем — плавно назад к съёмке.
+        const i = (r + r0) * this.width + c + c0;
+        const fade = Math.min(1, s / 0.5);
+        delta[i]! += (value[k]! / s - this.nodeHeight(i)) * fade * fade * (3 - 2 * fade);
+      }
+    }
   }
 
   /**

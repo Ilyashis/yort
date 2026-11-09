@@ -27,25 +27,28 @@ import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
 import { ROAD_KINDS, addStroke, replacedOsmIds, toFeature } from '../world/edit/edits';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
-import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
+import { loadEnvironment, polygonsOfGround, type Environment, type TreePoint } from '../world/base/environment';
 import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
 import { BARE_GROUND_COLOR, VILLAGE_GROUND_COLOR } from '../world/base/groundStyle';
 import { decodeTerrainFile, type TerrainFile, type TerrainKind } from '../world/base/heightGrid';
 import { decodeDetailFile, DetailHeights, type DetailTerrainFile } from '../world/base/detailTerrain';
-import { openRing } from '../world/base/roofGeometry';
+import { openRing, signedArea } from '../world/base/roofGeometry';
 import { applySurvey, type SurveyFile } from '../world/base/survey';
 import { computeStats, loadBaseBuildings, loadBuildingParts } from '../world/base/loadBaseBuildings';
 import { assignParts } from '../world/base/parts';
 import { landmarkClearance, landmarkObstacle } from '../world/base/pedestal';
 import { orientBenches, placeLamps, roadMarkings } from '../world/base/streetFurniture';
 import { scatterForest, scatterTrees, scatterYardTrees } from '../world/base/vegetation';
-import { planYards, VILLAGE_HOUSE_TYPES } from '../world/base/yards';
+import { planYards, VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
+import type { BaseBuildingFeature } from '../world/base/types';
+import { planEstates, type EstateInput, type EstatePlan, type Plot } from '../world/village/estates';
+import { EstateLayer } from '../three/EstateLayer';
 import { analyzePlot } from '../world/user/plot';
 import { toObstacle, toProperties, userBuildingId } from '../world/user/userBuildings';
 import { Collider } from '../world/walk/collider';
 import { CAR, type RoadLine } from '../world/drive/car';
 import { MinimapBase, minimapRadius } from '../world/map/minimap';
-import { createLocalFrame, toLocalPolygon, type Vec2 } from '../world/walk/localFrame';
+import { createLocalFrame, toLocalPolygon, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import { StreetIndex } from '../world/walk/streets';
 import { chooseVillageModel, growRect, modelFacadeShift, type VillageHouse } from '../world/village/villagePlan';
 import { VillageModelsLayer } from '../three/VillageModelsLayer';
@@ -103,6 +106,94 @@ async function loadDetail(territory: Territory, base: (lon: number, lat: number)
   } catch {
     return undefined;
   }
+}
+
+/** Здания меньше — хозпостройки (стоят внутри участков), м². */
+const SHED_AREA = 45;
+/** Жилой дом не больше этого; больше — ферма, склад: ничья земля вокруг, м². */
+const HOUSE_AREA = 320;
+
+/** Что знает планировщик посёлка: дома, хозпостройки, ничья земля, улицы и просёлки (локальные метры). */
+function estateInput(features: readonly BaseBuildingFeature[], environment: Environment, frame: LocalFrame): EstateInput {
+  const input: EstateInput & {
+    houses: EstateInput['houses'][number][];
+    sheds: EstateInput['sheds'][number][];
+    blockers: EstateInput['blockers'][number][];
+  } = {
+    houses: [],
+    sheds: [],
+    blockers: [],
+    roads: environment.streets.roads.map((r) => ({
+      coords: r.coords.map(frame.toLocal),
+      width: r.width,
+    })),
+    tracks: environment.streets.paths.map((p) => ({
+      coords: p.coords.map(frame.toLocal),
+      width: p.width,
+    })),
+  };
+  for (const f of features) {
+    const polygons = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    polygons.forEach((rings, i) => {
+      const ring = openRing((rings[0] ?? []).map(frame.toLocal));
+      if (ring.length < 3) return;
+      const area = Math.abs(signedArea(ring));
+      const id = `${f.properties.id}:${i}`;
+      if (VILLAGE_HOUSE_TYPES.has(f.properties.building) && area >= SHED_AREA && area <= HOUSE_AREA) input.houses.push({ id, ring });
+      else if (area < SHED_AREA * 2.5 && !PUBLIC_TYPES.has(f.properties.building)) input.sheds.push({ id, ring });
+      else input.blockers.push({ ring, margin: 2.5 });
+    });
+  }
+  for (const feature of environment.ground) {
+    const water = feature.properties.kind === 'water';
+    const wood = feature.properties.kind === 'green' && feature.properties.cover === 'wood';
+    if (!water && !wood) continue;
+    for (const rings of polygonsOfGround(feature))
+      input.blockers.push({
+        ring: (rings[0] ?? []).map(frame.toLocal),
+        margin: water ? 3 : 0,
+      });
+  }
+  return input;
+}
+
+/** Общественные здания: вокруг них участков нет. */
+const PUBLIC_TYPES = new Set(['school', 'mosque', 'church', 'kindergarten', 'public', 'civic', 'commercial', 'retail', 'industrial', 'hospital', 'office']);
+
+/** Участок посёлка как двор (для редактора: выбор забора, «убрать двор», палисадник). */
+function plotYard(plot: Plot, fences: readonly [Vec2, Vec2][]): Yard {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of plot.ring) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return {
+    houseId: plot.id,
+    corners: [
+      [minX, minY],
+      [maxX, minY],
+      [maxX, maxY],
+      [minX, maxY],
+    ],
+    fence: [...fences],
+    ...(plot.palisade ? { palisade: plot.palisade } : {}),
+    seed: plot.seed,
+  };
+}
+
+/** Дворы из участков посёлка: заборы каждого участка (общий — у обоих соседей). */
+function plotYards(plan: EstatePlan): Yard[] {
+  const fences = new Map<string, [Vec2, Vec2][]>();
+  for (const run of plan.runs) {
+    const segments = run.line.slice(1).map((b, i): [Vec2, Vec2] => [run.line[i]!, b]);
+    for (const id of run.owners) fences.set(id, [...(fences.get(id) ?? []), ...segments]);
+  }
+  return plan.plots.map((plot) => plotYard(plot, fences.get(plot.id) ?? []));
 }
 
 /** 3D-сцена на three.js: загружает Base World и связывает инструменты со стором. */
@@ -200,20 +291,25 @@ export function CityViewer({ territory }: { territory: Territory }) {
         .map((rings) => toLocalPolygon(rings, frame));
       const markings = roadMarkings(environment.streets, frame, roadSurfaces);
       const bareGround = village ? VILLAGE_GROUND_COLOR : BARE_GROUND_COLOR;
+      // «Моя версия» посёлка: земля нарезана на участки вплотную — заборы, ворота, постройки, сады.
+      const estates = village && useAppStore.getState().villagePlan ? planEstates(estateInput(collection.features, environment, frame)) : undefined;
+      if (import.meta.env.DEV) Object.assign(window, { __estates: estates });
       // Деревня: дворы у домов — забор с воротами и огород за домом (в OSM участков нет).
-      const yards = village
-        ? planYards(
-            collection.features
-              .filter((f) => VILLAGE_HOUSE_TYPES.has(f.properties.building))
-              .flatMap((f) =>
-                (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings, i) => ({
-                  id: `${f.properties.id}:${i}`,
-                  ring: (rings[0] ?? []).map(frame.toLocal),
-                })),
-              ),
-            environment.streets.roads.map((r) => ({ coords: r.coords.map(frame.toLocal), width: r.width })),
-          )
-        : [];
+      const yards: Yard[] = estates
+        ? plotYards(estates)
+        : village
+          ? planYards(
+              collection.features
+                .filter((f) => VILLAGE_HOUSE_TYPES.has(f.properties.building))
+                .flatMap((f) =>
+                  (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings, i) => ({
+                    id: `${f.properties.id}:${i}`,
+                    ring: (rings[0] ?? []).map(frame.toLocal),
+                  })),
+                ),
+              environment.streets.roads.map((r) => ({ coords: r.coords.map(frame.toLocal), width: r.width })),
+            )
+          : [];
       /** Точка в палисаднике (с запасом): туда деревья двора не сажаем — у палисадника свой сад. */
       const inPalisade = (point: Vec2) =>
         yards.some(({ palisade: p }) => {
@@ -228,16 +324,26 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // тропинками — полотно, под домами и сараями — ровные площадки. Иначе бугры съёмки в пару десятков
       // сантиметров поднимают дома на высокий цоколь и делают дороги волнистыми.
       if (heights.detail) {
-        heights.detail.flattenYards(yards.map((y) => y.corners.map(frame.toLonLat)));
+        if (estates) heights.detail.flattenPlots(estates.plots.map((p) => p.ring.map(frame.toLonLat)));
+        else heights.detail.flattenYards(yards.map((y) => y.corners.map(frame.toLonLat)));
         heights.detail.flattenRoads([...environment.streets.roads, ...environment.streets.paths]);
         // Площадки — последними: дом у самой дороги не должен съезжать на её обочину.
-        heights.detail.flattenPads(buildingFootprints.map((rings) => openRing(rings[0] ?? [])));
+        heights.detail.flattenPads([
+          ...buildingFootprints.map((rings) => openRing(rings[0] ?? [])),
+          ...(estates?.plots.flatMap((p) => p.outbuildings.map((b) => b.rect.map(frame.toLonLat))) ?? []),
+        ]);
       }
-      const gardens = yards.flatMap((yard) =>
-        yard.garden
-          ? [{ ring: [...yard.garden.corners, yard.garden.corners[0]].map(frame.toLonLat), rows: yard.garden.rows, seed: yard.seed, houseId: yard.houseId }]
-          : [],
-      );
+      const gardens = estates
+        ? estates.plots.flatMap((p) =>
+            p.garden ? [{ ring: [...p.garden.ring, p.garden.ring[0]!].map(frame.toLonLat), rows: p.garden.rows, seed: p.seed, houseId: p.id }] : [],
+          )
+        : yards.flatMap((yard) =>
+            yard.garden
+              ? [{ ring: [...yard.garden.corners, yard.garden.corners[0]].map(frame.toLonLat), rows: yard.garden.rows, seed: yard.seed, houseId: yard.houseId }]
+              : [],
+          );
+      // Подъезды от ворот во двор — утоптанной землёй.
+      const yardDirt = (estates?.plots ?? []).flatMap((p) => (p.driveway ? [{ ring: [...p.driveway, p.driveway[0]!].map(frame.toLonLat), houseId: p.id }] : []));
 
       // Где есть подробный рельеф — густая сетка земли: шаг 2 м (до 2 км²) или 3 м.
       const coverage = heights.detail?.coverage;
@@ -252,7 +358,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       sculpt.strokes = useEditStore.getState().edits.terrain;
       if (sculpt.strokes.length) sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
       const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
-      const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion);
+      const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion, yardDirt);
       owned.push(ground);
       if (import.meta.env.DEV) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
 
@@ -261,14 +367,17 @@ export function CityViewer({ territory }: { territory: Territory }) {
         ...environment.trees,
         ...scatterTrees(environment.ground, environment.trees, [...buildingFootprints, ...landmarks.map((l) => landmarkClearance(l))]),
         // В деревне деревья растут во дворах, а в OSM их там почти не отмечают (в палисадниках — свои деревца).
-        ...(village
-          ? scatterYardTrees(
-              collection.features.flatMap((f) =>
-                (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings, i) => ({ id: `${f.properties.id}:${i}`, rings })),
-              ),
-              environment.ground,
-            ).filter(([lon, lat]) => !inPalisade(frame.toLocal([lon, lat])))
-          : []),
+        // В обустроенном посёлке — сады участков (яблони, вишни) и берёзы у заборов.
+        ...(estates
+          ? estates.plots.flatMap((p) => p.trees.map((t, i): TreePoint => [...frame.toLonLat(t), 4 + ((p.seed >>> i) % 5) * 0.5]))
+          : village
+            ? scatterYardTrees(
+                collection.features.flatMap((f) =>
+                  (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings, i) => ({ id: `${f.properties.id}:${i}`, rings })),
+                ),
+                environment.ground,
+              ).filter(([lon, lat]) => !inPalisade(frame.toLocal([lon, lat])))
+            : []),
       ];
       // Лесные массивы: упрощённые деревья, число ограничено.
       const forestTrees = scatterForest(environment.ground, buildingFootprints);
@@ -283,7 +392,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const details = new DetailsLayer(
         c,
         buildings.shapes(),
-        { frame, isStreetSide: nearNamedStreet(environment.ground, frame, 15), heightAt: localHeight, yards },
+        // Заборы участков посёлка рисует EstateLayer.
+        { frame, isStreetSide: nearNamedStreet(environment.ground, frame, 15), heightAt: localHeight, yards: estates ? [] : yards },
         c.csm,
       );
       owned.push(details);
@@ -343,6 +453,27 @@ export function CityViewer({ territory }: { territory: Territory }) {
       applyVillageModels();
       if (import.meta.env.DEV) Object.assign(window, { __village: villageModels });
 
+      // Посёлок «моя версия»: заборы, ворота и мелочь дворов; постройки дворов — моделями (всегда, а не только
+      // когда дома OSM нарисованы моделями).
+      const estateLayer = estates ? new EstateLayer(c, localHeight, c.csm, estates) : undefined;
+      if (estateLayer) owned.push(estateLayer);
+      const estateHouses: VillageHouse[] = (estates?.plots ?? []).flatMap((p) =>
+        p.outbuildings.map((b) => ({
+          id: b.id,
+          model: b.model,
+          seed: b.seed,
+          rect: b.rect,
+        })),
+      );
+      const estateModels = estateHouses.length ? new VillageModelsLayer(c, frame, localHeight, estateHouses, c.csm, 60) : undefined;
+      if (estateModels) owned.push(estateModels);
+      const outbuildingsOf = new Map((estates?.plots ?? []).map((p) => [p.id, p.outbuildings.map((b) => b.id)]));
+      if (import.meta.env.DEV)
+        Object.assign(window, {
+          __estateLayer: estateLayer,
+          __estateModels: estateModels,
+        });
+
       const trees = new TreesLayer(c, [...parkTrees, ...forestTrees], parkTrees.length, frame, localHeight, c.csm);
       owned.push(trees);
       const furniture = new FurnitureLayer(c, lamps, benches, frame, localHeight, c.csm);
@@ -354,7 +485,22 @@ export function CityViewer({ territory }: { territory: Territory }) {
       store.setStats(computeStats(collection));
 
       // Пьедесталы памятников мешают проходу так же, как здания.
-      const obstacles = [...collection.features, ...landmarks.map(landmarkObstacle)];
+      const outbuildingObstacles: BaseBuildingFeature[] = estateHouses.map((h) => {
+        const ring = h.rect.map(frame.toLonLat);
+        return {
+          type: 'Feature',
+          id: h.id,
+          properties: {
+            id: h.id,
+            building: 'shed',
+            height: h.model === 'outhouse' || h.model === 'well' ? 2.2 : 3,
+            minHeight: 0,
+            heightSource: 'default',
+          },
+          geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]!]] },
+        };
+      });
+      const obstacles = [...collection.features, ...outbuildingObstacles, ...landmarks.map(landmarkObstacle)];
       const collider = new Collider(obstacles, frame);
       // Машине — свой «толстый» коллайдер: кузов — три круга радиусом почти в полмашины.
       const carCollider = new Collider(obstacles, frame, { radius: CAR.collisionRadius, walkUnderHeight: 2.6, maxStep: 0.5 });
@@ -495,6 +641,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
         buildings.setVisible(show);
         details.setVisible(show);
         frontGardens?.setVisible(show);
+        estateLayer?.setVisible(show);
+        estateModels?.setVisible(show);
         trees.setVisible(show);
         applyVillageModels();
       };
@@ -523,7 +671,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(editor);
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
-      const groundFollowers = [buildings, details, villageModels, frontGardens, trees, furniture];
+      const groundFollowers = [buildings, details, villageModels, estateModels, estateLayer, frontGardens, trees, furniture];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
         ground.refreshTerrain(changed);
@@ -571,11 +719,14 @@ export function CityViewer({ territory }: { territory: Territory }) {
         frontGardens?.setHidden(new Set(edits.removedYards), deleted);
         villageModels?.setHidden(replacedOsmIds(edits));
         const yardOwner = (houseId: string) => houseId.slice(0, houseId.lastIndexOf(':'));
+        const hiddenYards = new Set([...edits.removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]);
         ground.setEdits({
           removedRoads: new Set(edits.removedRoads),
           addedRoads: edits.roads.map((r) => ({ kind: r.kind, axis: r.axis })),
-          hiddenGardens: new Set([...edits.removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]),
+          hiddenGardens: hiddenYards,
         });
+        estateLayer?.setHidden(hiddenYards);
+        estateModels?.setHidden(new Set([...hiddenYards].flatMap((id) => outbuildingsOf.get(id) ?? [])));
         editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
         refreshObstacles();
         showSelection();

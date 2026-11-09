@@ -90,6 +90,8 @@ export class VillageModelsLayer {
     private readonly heightAt: (x: number, y: number) => number,
     readonly houses: readonly VillageHouse[],
     csm: CSM,
+    /** Ближе этого — полная модель, м (мелким постройкам дворов хватает меньшего). */
+    private readonly nearDistance = NEAR_M,
   ) {
     this.materials = createHouseMaterials(csm, { surveyColors: true });
     this.group.name = 'village-models';
@@ -288,7 +290,7 @@ export class VillageModelsLayer {
     this.lastCamera.copy(camera);
     for (const entry of this.entries.values()) {
       const distance = entry.center.distanceTo(camera);
-      const near = distance < (entry.near ? NEAR_M + NEAR_HYSTERESIS_M : NEAR_M);
+      const near = distance < (entry.near ? this.nearDistance + NEAR_HYSTERESIS_M : this.nearDistance);
       if (near === entry.near && !force) continue;
       entry.near = near;
       this.dirty.add(entry.kind);

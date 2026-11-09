@@ -41,6 +41,8 @@ export class GroundLayer {
     csm: CSM,
     /** Где рельеф подробный (своя съёмка) — там сетка земли гуще. */
     detailRegion?: DetailRegion,
+    /** Утоптанная земля дворов (подъезды от ворот) — уходит вместе с огородом двора. */
+    private readonly yardDirt: readonly { ring: Ring; houseId?: string }[] = [],
   ) {
     this.model = new GroundModel(features, isCity);
     this.texture = new GroundTexture(this.renderer(), frame, area, city.renderer.capabilities.getMaxAnisotropy());
@@ -133,9 +135,10 @@ export class GroundLayer {
       if (cover) covers[cover].push(...(feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates));
     }
     const gardens = this.gardens.filter((g) => !g.houseId || !this.edits.hiddenGardens.has(g.houseId));
+    const yardDirt = this.yardDirt.filter((d) => !d.houseId || !this.edits.hiddenGardens.has(d.houseId)).map((d) => [d.ring]);
     const bounds = groundBounds(this.model.features) ?? this.areaBounds();
     return new LandTextureRenderer(
-      { byKind, covers, gardens, dirt, style: { bare: this.bareColor, colors: GROUND_COLORS, wood: WOOD_COLOR, meadow: MEADOW_COLOR } },
+      { byKind, covers, gardens, dirt: [...(dirt ?? []), ...yardDirt], style: { bare: this.bareColor, colors: GROUND_COLORS, wood: WOOD_COLOR, meadow: MEADOW_COLOR } },
       bounds,
     );
   }

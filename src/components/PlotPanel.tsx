@@ -122,8 +122,7 @@ export function PlotPanel() {
     <section className="panel plot-panel">
       <h2>Участок</h2>
       <p className="muted">
-        Нарисуйте на карте участок под будущее здание: от {PLOT_LIMITS.minAreaM2} м² до{' '}
-        {formatArea(PLOT_LIMITS.maxAreaM2)}, без пересечений с существующими зданиями.
+        Под будущее здание: от {PLOT_LIMITS.minAreaM2} м² до {formatArea(PLOT_LIMITS.maxAreaM2)}, не задевая существующих.
       </p>
       {builtCount > 0 && (
         <p className="built-note">

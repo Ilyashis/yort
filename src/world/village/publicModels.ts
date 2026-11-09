@@ -538,6 +538,233 @@ function planWell(o: HouseOptions): HousePlan {
   return finish('well', parts, S, S, rect(1.2, 1.2));
 }
 
+/**
+ * Сарай: дощатый, на низком цоколе, широкая двустворчатая дверь на фасаде; крыша — двускатная (фронтон
+ * над дверью, иногда с дверцей сеновала) или односкатная назад. Шифер или профлист.
+ */
+function planShed(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 16000);
+  const W = clamp(o.width ?? 4.5, 3, 8);
+  const D = clamp(o.depth ?? 3.6, 2.5, 8);
+  const wood = dice.pick(['#8a7a64', '#7d6f5c', '#6f6252', '#8a6a48', '#857565', '#7a6a58', '#5f7a5a']);
+  const walls = rectWalls(W, D);
+  const lean = dice.next() < 0.4;
+  const slate = dice.next() < 0.55;
+  const roofColor = slate ? dice.pick(SLATE) : dice.pick(METAL_ROOFS);
+  const roofSurface: Surface = slate ? 'slate' : 'metal';
+  const top = 2.2 + dice.next() * 0.4;
+  const base = 0.15;
+  const parts: HousePart[] = [
+    {
+      type: 'box',
+      center: [0, 0, base / 2],
+      size: [W + 0.12, D + 0.12, base],
+      color: '#9b958b',
+      surface: 'plaster',
+    },
+  ];
+  const trim = shade(wood, 0.78);
+  if (lean) {
+    const back = top - D * 0.28;
+    parts.push(
+      wallBox(walls.front, W / 2, -0.03, base + (top - base) / 2, [W, 0.05, top - base], wood, 'boards'),
+      wallBox(walls.back, W / 2, -0.03, base + (back - base) / 2, [W, 0.05, back - base], wood, 'boards'),
+      wallSlab(
+        walls.right,
+        -0.03,
+        [
+          [0, base],
+          [D, base],
+          [D, back],
+          [0, top],
+        ],
+        0.05,
+        wood,
+        'boards',
+      ),
+      wallSlab(
+        walls.left,
+        -0.03,
+        [
+          [0, base],
+          [D, base],
+          [D, top],
+          [0, back],
+        ],
+        0.05,
+        wood,
+        'boards',
+      ),
+      leanToRoof(
+        [-W / 2 - 0.25, -D / 2 - 0.35, top + 0.05],
+        [W / 2 + 0.25, -D / 2 - 0.35, top + 0.05],
+        [W / 2 + 0.25, D / 2 + 0.25, back + 0.02],
+        [-W / 2 - 0.25, D / 2 + 0.25, back + 0.02],
+        roofColor,
+        roofSurface,
+      ),
+    );
+  } else {
+    parts.push(
+      wallBox(walls.front, W / 2, -0.03, base + (top - base) / 2, [W, 0.05, top - base], wood, 'boards'),
+      wallBox(walls.back, W / 2, -0.03, base + (top - base) / 2, [W, 0.05, top - base], wood, 'boards'),
+      wallBox(walls.right, D / 2, -0.03, base + (top - base) / 2, [D, 0.05, top - base], wood, 'boards'),
+      wallBox(walls.left, D / 2, -0.03, base + (top - base) / 2, [D, 0.05, top - base], wood, 'boards'),
+    );
+    const roof = gableRoof({
+      w: W,
+      d: D,
+      top: top + 0.03,
+      pitch: 24 + dice.next() * 10,
+      side: 0.3,
+      front: 0.35,
+      back: 0.25,
+      color: roofColor,
+      surface: roofSurface,
+    });
+    parts.push(...roof.parts);
+    const gable = {
+      top,
+      ridge: roof.ridge,
+      out: 0,
+      side: 0.3,
+      eave: roof.eave,
+      color: wood,
+      surface: 'boards' as Surface,
+      trim,
+      towel: false,
+    };
+    parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.35 }), ...gableEnd(walls.back, { ...gable, overhang: 0.25 }));
+    // Дверца сеновала во фронтоне.
+    if (roof.ridge - top > 0.9 && dice.next() < 0.5) parts.push(wallBox(walls.front, W / 2, 0.03, top + 0.42, [0.7, 0.04, 0.6], trim, 'boards'));
+  }
+  // Двустворчатая дверь с поперечинами, щель между створками, засов.
+  const dw = Math.min(W - 0.8, 1.6 + dice.next() * 0.6);
+  const dh = Math.min(2.0, top - base - 0.2);
+  const door = shade(wood, 0.86);
+  parts.push(
+    wallBox(walls.front, W / 2, 0.01, base + dh / 2, [dw, 0.04, dh], door, 'boards'),
+    wallBox(walls.front, W / 2, 0.035, base + dh / 2, [0.03, 0.02, dh], '#2a2420'),
+    wallBox(walls.front, W / 2, 0.04, base + dh * 0.25, [dw, 0.03, 0.1], trim, 'wood'),
+    wallBox(walls.front, W / 2, 0.04, base + dh * 0.78, [dw, 0.03, 0.1], trim, 'wood'),
+    wallBox(walls.front, W / 2, 0.07, base + dh * 0.5, [0.5, 0.04, 0.06], '#3a3a3a'),
+  );
+  // Окошко сбоку.
+  if (D > 3 && dice.next() < 0.6) parts.push(wallBox(walls.right, D * 0.55, 0.02, top - 0.6, [0.5, 0.03, 0.4], '#2c343d'));
+  return finish('shed', parts, W, D, rect(W, D), {
+    roof: roofColor,
+    wall: wood,
+  });
+}
+
+/** Теплица: дуги, обтянутые поликарбонатом, деревянное основание, дверь в торце. */
+function planGreenhouse(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 17000);
+  const W = clamp(o.width ?? 3, 2.4, 4);
+  const D = clamp(o.depth ?? 5, 3, 8);
+  const film = dice.pick(['#dbe7e1', '#e3ebe6', '#d3e2e4']);
+  const frame = dice.pick(['#3f6b4f', '#e9ecea', '#5d6a3a', '#6d7174']);
+  const base = 0.22;
+  const R = W / 2;
+  const H = Math.min(2.1, R * 1.35);
+  const N = o.far ? 6 : 10;
+  const arc = (k: number): [number, number] => {
+    const a = (k / N) * Math.PI;
+    return [R * Math.cos(a), base + H * Math.sin(a)];
+  };
+  const parts: HousePart[] = [
+    {
+      type: 'box',
+      center: [0, 0, base / 2],
+      size: [W + 0.08, D + 0.08, base],
+      color: '#8a6a48',
+      surface: 'plaster',
+    },
+  ];
+  for (let k = 0; k < N; k++) {
+    const [x0, z0] = arc(k);
+    const [x1, z1] = arc(k + 1);
+    const mid = ((k + 0.5) / N) * Math.PI;
+    parts.push(
+      slab(
+        [
+          [x0, -D / 2, z0],
+          [x1, -D / 2, z1],
+          [x1, D / 2, z1],
+          [x0, D / 2, z0],
+        ],
+        [Math.cos(mid), 0, Math.sin(mid)],
+        0.02,
+        film,
+      ),
+    );
+  }
+  const endWall = (y: number, face: number) =>
+    slab(
+      Array.from({ length: N + 1 }, (_, k) => [arc(k)[0], y, arc(k)[1]] as [number, number, number]),
+      [0, face, 0],
+      0.02,
+      film,
+    );
+  parts.push(endWall(-D / 2, -1), endWall(D / 2, 1));
+  // Дверь в переднем торце и рамка.
+  parts.push(
+    {
+      type: 'box',
+      center: [0, -D / 2 - 0.02, base + 0.9],
+      size: [0.8, 0.03, 1.8],
+      color: shade(film, 0.93),
+    },
+    {
+      type: 'box',
+      center: [-0.42, -D / 2 - 0.03, base + 0.92],
+      size: [0.05, 0.04, 1.84],
+      color: frame,
+    },
+    {
+      type: 'box',
+      center: [0.42, -D / 2 - 0.03, base + 0.92],
+      size: [0.05, 0.04, 1.84],
+      color: frame,
+    },
+    {
+      type: 'box',
+      center: [0, -D / 2 - 0.03, base + 1.83],
+      size: [0.9, 0.04, 0.05],
+      color: frame,
+    },
+  );
+  if (!o.far) {
+    // Дуги каркаса через метр.
+    const ribs = Math.max(2, Math.round(D));
+    for (let r = 0; r <= ribs; r++) {
+      const y = -D / 2 + (D * r) / ribs;
+      for (let k = 0; k < N; k++) {
+        const [x0, z0] = arc(k);
+        const [x1, z1] = arc(k + 1);
+        parts.push({
+          type: 'cylinder',
+          from: [x0 * 1.01, y, z0 + 0.01],
+          to: [x1 * 1.01, y, z1 + 0.01],
+          radius: 0.02,
+          segments: 4,
+          color: frame,
+          caps: false,
+        });
+      }
+    }
+    // Форточка на скате.
+    parts.push({
+      type: 'box',
+      center: [R * 0.55, D * 0.15, base + H * 0.86],
+      size: [0.04, 0.7, 0.5],
+      angle: 0,
+      color: shade(film, 0.9),
+    });
+  }
+  return finish('greenhouse', parts, W, D, rect(W, D));
+}
+
 // --- каталог ------------------------------------------------------------------------------------
 
 export const PUBLIC_MODELS: HouseModel[] = [
@@ -617,6 +844,28 @@ export const PUBLIC_MODELS: HouseModel[] = [
     width: { min: 3, value: 4.5, max: 7 },
     depth: { min: 1.4, value: 1.8, max: 2.6 },
     plan: withGround(planBusStop),
+  },
+  {
+    id: 'shed',
+    group: 'small',
+    name: 'Сарай',
+    short: 'Сарай',
+    summary: 'доски · хозпостройка',
+    description: 'Дощатый сарай на низком цоколе: широкая двустворчатая дверь, двускатная крыша с дверцей сеновала или односкатная назад, шифер или профлист.',
+    width: { min: 3, value: 4.5, max: 8 },
+    depth: { min: 2.5, value: 3.6, max: 8 },
+    plan: withGround(planShed),
+  },
+  {
+    id: 'greenhouse',
+    group: 'small',
+    name: 'Теплица',
+    short: 'Теплица',
+    summary: 'поликарбонат · огород',
+    description: 'Арочная теплица из поликарбоната на деревянном основании: дуги каркаса, дверь и форточка.',
+    width: { min: 2.4, value: 3, max: 4 },
+    depth: { min: 3, value: 5, max: 8 },
+    plan: withGround(planGreenhouse),
   },
   {
     id: 'outhouse',

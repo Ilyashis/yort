@@ -149,6 +149,8 @@ interface AppState {
   timeFlowing: boolean;
   /** Деревня из моделей: дома OSM нарисованы башкирскими домами (запоминается в браузере). */
   villageModels: boolean;
+  /** Посёлок «моя версия»: участки вплотную с заборами, воротами, постройками и садами (запоминается). */
+  villagePlan: boolean;
   /** Дымка вдали и мягкое размытие дали (запоминаются в браузере). */
   haze: boolean;
   blur: boolean;
@@ -194,6 +196,7 @@ interface AppState {
   setTimeOfDay: (hours: number) => void;
   setTimeFlowing: (on: boolean) => void;
   setVillageModels: (on: boolean) => void;
+  setVillagePlan: (on: boolean) => void;
   setHaze: (on: boolean) => void;
   setBlur: (on: boolean) => void;
   setOutlines: (on: boolean) => void;
@@ -237,6 +240,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   timeOfDay: readTime(),
   timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
   villageModels: readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
+  villagePlan: readPref('village-plan', ['on', 'off'] as const, 'on') === 'on',
   haze: readPref('haze', ['on', 'off'] as const, 'on') === 'on',
   blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
@@ -306,6 +310,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setVillageModels: (villageModels) => {
     writePref('village-models', villageModels ? 'on' : 'off');
     set({ villageModels });
+  },
+  setVillagePlan: (villagePlan) => {
+    writePref('village-plan', villagePlan ? 'on' : 'off');
+    set({ villagePlan });
   },
   setHaze: (haze) => {
     writePref('haze', haze ? 'on' : 'off');

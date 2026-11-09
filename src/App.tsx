@@ -21,11 +21,13 @@ export function App() {
   const territory = useAppStore((s) => findTerritory(s.territoryId) ?? defaultTerritory);
   // Данные съёмки с дрона меняют рельеф и дома — сцену проще собрать заново.
   const surveyOn = useAppStore((s) => s.surveyOn);
+  // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
+  const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
 
   return (
     <main className="app">
       {/* Свой ключ у каждого населённого пункта: при переключении сцена собирается заново. */}
-      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}`} territory={territory} />
+      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}`} territory={territory} />
       {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
       <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
         <div className="intro-title">

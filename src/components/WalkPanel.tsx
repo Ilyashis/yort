@@ -32,7 +32,6 @@ export function WalkPanel() {
   return (
     <section className="panel walk-panel">
       <h2>Прогулка и поездка</h2>
-      <p className="muted">Опуститесь на улицу: пройдитесь пешком или прокатитесь на машине.</p>
       <div className="button-row">
         <button type="button" className="button button-primary" onClick={() => controls?.pickStart('walk')} disabled={disabled}>
           Пешком

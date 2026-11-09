@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import { useAppStore } from '../store/useAppStore';
+import { readPref, writePref } from '../utils/prefs';
 import { BUILDING_COLORS } from '../world/base/buildingPlan';
 
 const percent = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
@@ -17,11 +19,19 @@ export function InfoPanel() {
   const setColorMode = useAppStore((s) => s.setBuildingColorMode);
   const villageModels = useAppStore((s) => s.villageModels);
   const setVillageModels = useAppStore((s) => s.setVillageModels);
+  const villagePlan = useAppStore((s) => s.villagePlan);
+  const setVillagePlan = useAppStore((s) => s.setVillagePlan);
   const survey = useAppStore((s) => s.survey);
   const surveyOn = useAppStore((s) => s.surveyOn);
   const setSurveyOn = useAppStore((s) => s.setSurveyOn);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
+  // Панель можно свернуть до выбора места — сцене больше места (запоминается).
+  const [collapsed, setCollapsed] = useState(() => readPref('info', ['open', 'collapsed'] as const, 'open') === 'collapsed');
+  const toggleCollapsed = () => {
+    writePref('info', collapsed ? 'open' : 'collapsed');
+    setCollapsed(!collapsed);
+  };
 
   const choosePlace = (id: string) => {
     const own = useAppStore.getState().userBuildings.length;
@@ -33,10 +43,19 @@ export function InfoPanel() {
   };
 
   return (
-    <aside className="panel info-panel">
+    <aside className={`panel info-panel${collapsed ? ' info-panel-collapsed' : ''}`}>
       <header>
         <div className="brand">
           AI UFA <span className="badge">прототип</span>
+          <button
+            type="button"
+            className="collapse-button"
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Показать подробности' : 'Свернуть панель'}
+            onClick={toggleCollapsed}
+          >
+            {collapsed ? '▾' : '▴'}
+          </button>
         </div>
         <label className="place-picker">
           <span className="place-picker-label">Населённый пункт</span>
@@ -48,90 +67,101 @@ export function InfoPanel() {
             ))}
           </select>
         </label>
-        <p className="muted">{territory.description}</p>
+        {!collapsed && <p className="muted">{territory.description}</p>}
       </header>
 
-      {status === 'loading' && <p className="status">Загрузка сцены…</p>}
-      {status === 'error' && <p className="status status-error">{error}</p>}
+      {collapsed ? null : (
+        <>
+          {status === 'loading' && <p className="status">Загрузка сцены…</p>}
+          {status === 'error' && <p className="status status-error">{error}</p>}
 
-      {stats && (
-        <dl className="stats">
-          <div>
-            <dt>Зданий</dt>
-            <dd>{stats.total}</dd>
-          </div>
-          <div>
-            <dt>Высота из OSM</dt>
-            <dd>{percent(knownHeight, stats.total)}%</dd>
-          </div>
-          <div>
-            <dt>Рельеф</dt>
-            <dd>{terrain === 'flat' || !terrain ? 'плоский' : terrain === 'drone' ? 'есть, уточнён съёмкой с дрона' : 'есть'}</dd>
-          </div>
-        </dl>
-      )}
+          {stats && (
+            <dl className="stats">
+              <div>
+                <dt>Зданий</dt>
+                <dd>{stats.total}</dd>
+              </div>
+              <div>
+                <dt>Высота из OSM</dt>
+                <dd>{percent(knownHeight, stats.total)}%</dd>
+              </div>
+              <div>
+                <dt>Рельеф</dt>
+                <dd title={terrain === 'drone' ? 'Copernicus DEM, уточнён своей съёмкой с дрона' : undefined}>
+                  {terrain === 'flat' || !terrain ? 'плоский' : terrain === 'drone' ? 'дрон, 1 м' : 'DEM, 30 м'}
+                </dd>
+              </div>
+            </dl>
+          )}
 
-      {survey && (
-        <label className="toggle" title="Своя съёмка с дрона: подробный рельеф, цвета крыш и стен домов, постройки, которых нет в OSM">
-          <input type="checkbox" checked={surveyOn} onChange={(event) => setSurveyOn(event.target.checked)} />
-          <span>
-            Уточнения по съёмке с дрона
-            {surveyOn && (survey.terrain || survey.colored || survey.added) ? (
-              <span className="muted toggle-note">
-                {[
-                  survey.terrain && 'рельеф 1 м',
-                  survey.colored && `цвет крыш у ${survey.colored} ${plural(survey.colored, 'дома', 'домов', 'домов')}`,
-                  survey.added && `${survey.added} ${plural(survey.added, 'новая постройка', 'новые постройки', 'новых построек')}`,
-                ]
-                  .filter(Boolean)
-                  .join(', ')}
+          {survey && (
+            <label className="toggle" title="Своя съёмка с дрона: подробный рельеф, цвета крыш и стен домов, постройки, которых нет в OSM">
+              <input type="checkbox" checked={surveyOn} onChange={(event) => setSurveyOn(event.target.checked)} />
+              <span>
+                Уточнения по съёмке с дрона
+                {surveyOn && (survey.terrain || survey.colored || survey.added) ? (
+                  <span className="muted toggle-note">
+                    {[
+                      survey.terrain && 'рельеф 1 м',
+                      survey.colored && `цвет крыш у ${survey.colored} ${plural(survey.colored, 'дома', 'домов', 'домов')}`,
+                      survey.added && `${survey.added} ${plural(survey.added, 'новая постройка', 'новые постройки', 'новых построек')}`,
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
-          </span>
-        </label>
-      )}
+            </label>
+          )}
 
-      {territory.kind === 'village' && (
-        <label className="toggle" title="Дома из OSM нарисованы башкирскими домами: изба, пятистенок, дом с верандой, вальмовый, кирпичный, баня">
-          <input type="checkbox" checked={villageModels} onChange={(event) => setVillageModels(event.target.checked)} />
-          Башкирские дома-модели вместо простых объёмов
-        </label>
-      )}
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={colorMode === 'data'}
-          onChange={(event) => setColorMode(event.target.checked ? 'data' : 'city')}
-        />
-        Раскрасить по качеству данных о высоте
-      </label>
-      {colorMode === 'data' && (
-        <ul className="legend">
-          <li>
-            <i style={{ background: BUILDING_COLORS.known }} /> высота из OSM (height или этажность)
-          </li>
-          <li>
-            <i style={{ background: BUILDING_COLORS.estimated }} /> высота — оценка по типу здания
-          </li>
-        </ul>
-      )}
+          {territory.kind === 'village' && (
+            <label className="toggle" title="Дома из OSM нарисованы башкирскими домами: изба, пятистенок, дом с верандой, вальмовый, кирпичный, баня">
+              <input type="checkbox" checked={villageModels} onChange={(event) => setVillageModels(event.target.checked)} />
+              Башкирские дома-модели вместо простых объёмов
+            </label>
+          )}
+          {territory.kind === 'village' && (
+            <label
+              className="toggle"
+              title="Моя интерпретация посёлка: земля нарезана на участки вплотную, общий забор по улице, ворота с калиткой, сараи, бани, туалеты, теплицы, сады и огороды; рельеф выровнен под участки"
+            >
+              <input type="checkbox" checked={villagePlan} onChange={(event) => setVillagePlan(event.target.checked)} />
+              <span>
+                Обустроенный посёлок (моя версия)
+                {villagePlan && <span className="muted toggle-note">участки, заборы, ворота, постройки, сады</span>}
+              </span>
+            </label>
+          )}
+          <label className="toggle">
+            <input type="checkbox" checked={colorMode === 'data'} onChange={(event) => setColorMode(event.target.checked ? 'data' : 'city')} />
+            Раскрасить по качеству данных о высоте
+          </label>
+          {colorMode === 'data' && (
+            <ul className="legend">
+              <li>
+                <i style={{ background: BUILDING_COLORS.known }} /> высота из OSM (height или этажность)
+              </li>
+              <li>
+                <i style={{ background: BUILDING_COLORS.estimated }} /> высота — оценка по типу здания
+              </li>
+            </ul>
+          )}
 
-      <p className="hint muted">
-        Левая кнопка — двигать, правая — повернуть и наклонить, колесо — масштаб, WASD — лететь над
-        городом. Клик по зданию — подробности. Все клавиши — кнопка «?» справа внизу.
-      </p>
+          <p className="hint muted">Клик по зданию — подробности. Все клавиши — кнопка «?» справа внизу.</p>
 
-      <button type="button" className="button" onClick={() => flyHome?.()} disabled={!flyHome}>
-        Вернуться к району
-      </button>
+          <button type="button" className="button" onClick={() => flyHome?.()} disabled={!flyHome}>
+            Вернуться к району
+          </button>
 
-      {stats?.osmTimestamp && (
-        <p className="footnote muted">
-          Данные OSM на {new Date(stats.osmTimestamp).toLocaleDateString('ru-RU')}
-          {terrain === 'flat' && ' · рельеф: npm run data:fetch:terrain'}
-          {terrain === 'dem' && ' · рельеф Copernicus DEM'}
-          {terrain === 'drone' && ' · рельеф Copernicus DEM и своя съёмка с дрона'}
-        </p>
+          {stats?.osmTimestamp && (
+            <p className="footnote muted">
+              Данные OSM на {new Date(stats.osmTimestamp).toLocaleDateString('ru-RU')}
+              {terrain === 'flat' && ' · рельеф: npm run data:fetch:terrain'}
+              {terrain === 'dem' && ' · рельеф Copernicus DEM'}
+              {terrain === 'drone' && ' · рельеф Copernicus DEM и своя съёмка с дрона'}
+            </p>
+          )}
+        </>
       )}
     </aside>
   );
