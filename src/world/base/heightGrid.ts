@@ -4,8 +4,8 @@
  * За пределами сетки рельеф плавно переходит к средней высоте, чтобы на краю не было «стены».
  */
 
-/** dem — свой рельеф Copernicus из файла района; flat — без рельефа (файла нет). */
-export type TerrainKind = 'dem' | 'flat';
+/** dem — рельеф Copernicus из файла района; drone — он же, уточнённый своей съёмкой с дрона; flat — без рельефа. */
+export type TerrainKind = 'dem' | 'drone' | 'flat';
 
 export interface HeightGridData {
   /** Границы сетки: узлы лежат точно на краях. */

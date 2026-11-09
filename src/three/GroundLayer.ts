@@ -14,7 +14,7 @@ import type { CityScene } from './CityScene';
 import { GroundTexture, type UnderlayView } from './ground';
 import { NIGHT } from './nightUniforms';
 import { hookMaterial } from './shaderHooks';
-import { createTerrain, type HeightSource, type LocalRect, type Terrain } from './terrain';
+import { createTerrain, type DetailRegion, type HeightSource, type LocalRect, type Terrain } from './terrain';
 
 /** Земля за границей города: выгоревший луг. */
 const OUTSIDE_CITY_COLOR = '#aab783';
@@ -39,15 +39,18 @@ export class GroundLayer {
     private readonly bareColor: string,
     isCity: boolean,
     csm: CSM,
+    /** Где рельеф подробный (своя съёмка) — там сетка земли гуще. */
+    detailRegion?: DetailRegion,
   ) {
     this.model = new GroundModel(features, isCity);
     this.texture = new GroundTexture(this.renderer(), frame, area, city.renderer.capabilities.getMaxAnisotropy());
     hookMaterial(this.texture.material, 'ground', this.texture.hook, csm);
     this.texture.drawBase();
     // Вокруг района — луг: в городе «пустая» земля бежевая (дворы, пустыри), а за городом — трава.
-    this.terrain = createTerrain(grid, frame, area, this.texture.material, isCity ? OUTSIDE_CITY_COLOR : bareColor);
+    this.terrain = createTerrain(grid, frame, area, this.texture.material, isCity ? OUTSIDE_CITY_COLOR : bareColor, detailRegion);
     hookMaterial(this.terrain.outer.material as Material, 'ground-outer', this.texture.underlay.hookOuter, csm);
     city.scene.add(this.terrain.inner, this.terrain.outer);
+    if (this.terrain.detail) city.scene.add(this.terrain.detail);
     city.setGroundSampler((x, z) => this.terrain.heightAt(x, -z));
     this.removeAnimator = city.addAnimator(() => {
       // Ночью пятна света — от фонарей вокруг взгляда; пересчитываем, когда взгляд ушёл на 15 м.
@@ -68,6 +71,11 @@ export class GroundLayer {
   /** Высота земли в локальных метрах. */
   get heightAt(): (x: number, y: number) => number {
     return this.terrain.heightAt;
+  }
+
+  /** Земля в прямоугольнике (локальные метры) поменялась — пересчитать сетку там. */
+  refreshTerrain(area: LocalRect): void {
+    this.terrain.refresh(area);
   }
 
   /** Откуда брать точку взгляда для чётких уровней текстуры (обзор или прогулка). */

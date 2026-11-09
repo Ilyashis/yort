@@ -23,7 +23,7 @@ import type { Yard } from '../world/base/yards';
 import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { BuildingShape } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
-import { MergedBuilder, type MergedMesh } from './merged';
+import { MergedBuilder, type GroundArea, type GroundDelta, type MergedMesh } from './merged';
 
 const RESIDENTIAL = new Set(['apartments', 'residential', 'yes', 'dormitory']);
 const UTILITY = new Set(['garage', 'garages', 'shed', 'service', 'transformer_tower', 'roof', 'construction', 'hut', 'kiosk']);
@@ -171,6 +171,11 @@ export class DetailsLayer {
    * Скрыть детали убранных и изменённых домов и заборы убранных дворов. Двор уходит вместе с домом
    * только если дом удалён (yardOwnersGone), а не сдвинут или перестроен.
    */
+  /** Земля поменялась (кисть рельефа): окна, двери, заборы в area — вместе с ней. */
+  shiftGround(delta: GroundDelta, area: GroundArea): void {
+    this.merged?.shiftGround(delta, area);
+  }
+
   setHidden(buildings: ReadonlySet<string>, yards: ReadonlySet<string>, yardOwnersGone: ReadonlySet<string>): void {
     this.lastHidden = [buildings, yards, yardOwnersGone];
     const changed = this.merged?.setHidden((owner) => {

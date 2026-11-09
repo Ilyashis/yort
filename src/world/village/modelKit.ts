@@ -3,6 +3,7 @@
 import {
   Dice,
   doorParts,
+  toneOf,
   windowParts,
   type Canopy,
   type HousePart,
@@ -66,7 +67,19 @@ export function leanCanopy(top: number, pitch: number, wallOut: number, overhang
   return { kind: 'lean', high, low };
 }
 
-export function finish(id: HouseModelId, parts: HousePart[], width: number, depth: number, footprint: [number, number][]): HousePlan {
+/**
+ * Готовый план дома. paint — основные цвета кровли и стен: детали этих цветов (и их оттенков) помечаются,
+ * чтобы потом заменить цвет снятым с дрона.
+ */
+export function finish(
+  id: HouseModelId,
+  parts: HousePart[],
+  width: number,
+  depth: number,
+  footprint: [number, number][],
+  paint?: { roof?: string; wall?: string },
+): HousePlan {
+  if (paint) markPaint(parts, paint);
   let height = 0;
   for (const p of parts) {
     if (p.type === 'box' || p.type === 'glass' || p.type === 'sign') height = Math.max(height, p.center[2] + p.size[2] / 2);
@@ -134,4 +147,20 @@ export function sinkToGround(plan: HousePlan, below: number | undefined): HouseP
 /** План модели с фундаментом на склоне (options.foundation). */
 export function withGround(planner: (o: HouseOptions) => HousePlan): (o?: HouseOptions) => HousePlan {
   return (o = {}) => sinkToGround(planner(o), o.foundation);
+}
+
+/** Пометить детали кровли и стен (по цвету и его оттенкам). Стёкла, таблички и чужие цвета не трогаем. */
+export function markPaint(parts: HousePart[], paint: { roof?: string; wall?: string }): void {
+  for (const p of parts) {
+    if (p.type === 'glass' || p.type === 'sign') continue;
+    for (const role of ['roof', 'wall'] as const) {
+      const base = paint[role];
+      if (!base) continue;
+      const tone = toneOf(p.color, base);
+      if (tone !== undefined) {
+        p.paint = { role, tone };
+        break;
+      }
+    }
+  }
 }

@@ -1,4 +1,4 @@
-// Правки пользователя поверх Base World: добавленные, изменённые и убранные дома, дороги, заборы.
+// Правки пользователя поверх Base World: добавленные, изменённые и убранные дома, дороги, заборы, рельеф.
 // Данные OSM не меняются — правки хранятся отдельно и накладываются при отрисовке.
 // Здесь только чистые функции: модель, геометрия инструментов, упрощение линий.
 
@@ -7,6 +7,7 @@ import type { Vec2 } from '../walk/localFrame';
 import { distanceToSegment } from '../walk/localFrame';
 import { openRing, orientedBox, signedArea } from '../base/roofGeometry';
 import { findHouseModel, type HouseModelId } from '../village/houseModels';
+import { parseStroke, type SculptStroke } from '../base/sculpt';
 
 export type LonLat = [number, number];
 
@@ -61,6 +62,8 @@ export interface Edits {
   fences: EditedFence[];
   /** Дворы (по id дома), чьи заборы убраны. */
   removedYards: string[];
+  /** Мазки кисти рельефа — по порядку. */
+  terrain: SculptStroke[];
 }
 
 export const EMPTY_EDITS: Edits = {
@@ -70,6 +73,7 @@ export const EMPTY_EDITS: Edits = {
   removedRoads: [],
   fences: [],
   removedYards: [],
+  terrain: [],
 };
 
 export const ROAD_KINDS: Record<EditRoadKind, { label: string; width: number }> = {
@@ -127,6 +131,10 @@ export function addFence(edits: Edits, fence: EditedFence): Edits {
   return { ...edits, fences: [...edits.fences, fence] };
 }
 
+export function addStroke(edits: Edits, stroke: SculptStroke): Edits {
+  return { ...edits, terrain: [...edits.terrain, stroke] };
+}
+
 export function removeFence(edits: Edits, id: string): Edits {
   if (edits.fences.some((f) => f.id === id)) return { ...edits, fences: edits.fences.filter((f) => f.id !== id) };
   return edits.removedYards.includes(id) ? edits : { ...edits, removedYards: [...edits.removedYards, id] };
@@ -144,7 +152,8 @@ export function isEmpty(edits: Edits): boolean {
     !edits.roads.length &&
     !edits.removedRoads.length &&
     !edits.fences.length &&
-    !edits.removedYards.length
+    !edits.removedYards.length &&
+    !edits.terrain.length
   );
 }
 
@@ -179,6 +188,9 @@ export function parseEdits(value: unknown): Edits | undefined {
       .map((f) => ({ ...f, line: points(f.line) }))
       .filter((f) => f.line.length >= 2),
     removedYards: strings(v.removedYards),
+    terrain: arr<unknown>(v.terrain)
+      .map(parseStroke)
+      .filter((s): s is SculptStroke => !!s),
   };
 }
 

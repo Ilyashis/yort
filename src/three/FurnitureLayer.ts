@@ -25,7 +25,7 @@ import type { Placed } from '../world/base/streetFurniture';
 import type { LonLat } from '../world/user/plot';
 import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
-import { MergedBuilder, type MergedMesh } from './merged';
+import { MergedBuilder, type GroundArea, type GroundDelta, type MergedMesh } from './merged';
 import { NIGHT } from './nightUniforms';
 import type { ShaderHook } from './shaderHooks';
 
@@ -141,6 +141,27 @@ export class FurnitureLayer {
     }
     if (changed) this.city.requestRender();
     return changed;
+  }
+
+  /** Земля поменялась (кисть рельефа): фонари и скамейки в area — вместе с ней, и свечение фонарей тоже. */
+  shiftGround(delta: GroundDelta, area: GroundArea): void {
+    this.merged?.shiftGround(delta, area);
+    this.glass?.shiftGround(delta, area);
+    if (this.glow) {
+      const position = this.glow.geometry.getAttribute('position') as BufferAttribute;
+      const array = position.array as Float32Array;
+      let changed = false;
+      for (let v = 0; v < position.count; v++) {
+        const x = array[v * 3]!;
+        const y = -array[v * 3 + 2]!;
+        if (x < area.x0 || x > area.x1 || y < area.y0 || y > area.y1) continue;
+        const d = delta(x, y);
+        if (!d) continue;
+        array[v * 3 + 1]! += d;
+        changed = true;
+      }
+      if (changed) position.needsUpdate = true;
+    }
   }
 
   destroy(): void {

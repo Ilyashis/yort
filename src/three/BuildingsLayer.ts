@@ -24,6 +24,7 @@ import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { createFacadeMaterial, createRoofMaterial } from './facadeShader';
 import { MeshBuilder } from './meshBuilder';
+import { ownerBoxes, shiftOwners, type GroundArea, type GroundDelta } from './merged';
 import { FOOTING_DEPTH, siteOnSlope, type Site } from '../world/base/siting';
 
 /** Форма объёма для слоя деталей (балконы, подъезды, трубы). */
@@ -278,6 +279,24 @@ export class BuildingsLayer {
     for (const id of changed) this.applyVisibility(id);
     if (changed.length) this.city.requestRender();
   }
+
+  /** Земля поменялась (кисть рельефа): дома в area — вместе с ней (по вершинам: стены остаются вертикальными). */
+  shiftGround(delta: GroundDelta, area: GroundArea): void {
+    if (!this.groundIndex) {
+      const walls = new Map([...this.byId].map(([id, o]) => [id, o.walls] as const));
+      const roofs = new Map([...this.byId].map(([id, o]) => [id, o.roofs] as const));
+      this.groundIndex = [
+        { mesh: this.walls, ranges: walls, boxes: ownerBoxes(walls, this.wallPositions), original: this.wallPositions },
+        { mesh: this.roofs, ranges: roofs, boxes: ownerBoxes(roofs, this.roofPositions), original: this.roofPositions },
+      ];
+    }
+    for (const { mesh, ranges, boxes, original } of this.groundIndex) {
+      const attribute = mesh.geometry.getAttribute('position') as BufferAttribute;
+      if (shiftOwners(ranges, boxes, original, attribute.array as Float32Array, (id) => this.isHidden(id), delta, area)) attribute.needsUpdate = true;
+    }
+  }
+
+  private groundIndex?: { mesh: Mesh; ranges: Map<string, [number, number][]>; boxes: Map<string, GroundArea>; original: Float32Array }[];
 
   private isHidden(id: string): boolean {
     return this.hidden.has(id) || this.replaced.has(id);

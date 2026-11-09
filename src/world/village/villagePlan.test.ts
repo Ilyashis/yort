@@ -22,6 +22,14 @@ describe('модели для домов деревни', () => {
     expect(chooseVillageModel('a', rect(4, 6), [street])?.model).toBe('banya');
   });
 
+  it('сарай и гараж любого размера — хозпостройка, школа и мечеть — не изба', () => {
+    expect(chooseVillageModel('s', rect(7, 9), [street], 'shed')?.model).toBe('banya');
+    expect(chooseVillageModel('g', rect(6, 8), [street], 'garage')?.model).toBe('banya');
+    expect(chooseVillageModel('h', rect(7, 9), [street], 'house')?.model).not.toBe('banya');
+    expect(chooseVillageModel('k', rect(9, 12), [street], 'school')).toBeUndefined();
+    expect(chooseVillageModel('m', rect(9, 12), [street], 'mosque')).toBeUndefined();
+  });
+
   it('узким торцом к улице — дома с фронтоном на улицу', () => {
     for (let i = 0; i < 30; i++) {
       const house = chooseVillageModel(`n${i}`, rect(7, 10), [street])!;

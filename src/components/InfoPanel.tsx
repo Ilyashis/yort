@@ -17,6 +17,9 @@ export function InfoPanel() {
   const setColorMode = useAppStore((s) => s.setBuildingColorMode);
   const villageModels = useAppStore((s) => s.villageModels);
   const setVillageModels = useAppStore((s) => s.setVillageModels);
+  const survey = useAppStore((s) => s.survey);
+  const surveyOn = useAppStore((s) => s.surveyOn);
+  const setSurveyOn = useAppStore((s) => s.setSurveyOn);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
 
@@ -63,9 +66,29 @@ export function InfoPanel() {
           </div>
           <div>
             <dt>Рельеф</dt>
-            <dd>{terrain === 'flat' || !terrain ? 'плоский' : 'есть'}</dd>
+            <dd>{terrain === 'flat' || !terrain ? 'плоский' : terrain === 'drone' ? 'есть, уточнён съёмкой с дрона' : 'есть'}</dd>
           </div>
         </dl>
+      )}
+
+      {survey && (
+        <label className="toggle" title="Своя съёмка с дрона: подробный рельеф, цвета крыш и стен домов, постройки, которых нет в OSM">
+          <input type="checkbox" checked={surveyOn} onChange={(event) => setSurveyOn(event.target.checked)} />
+          <span>
+            Уточнения по съёмке с дрона
+            {surveyOn && (survey.terrain || survey.colored || survey.added) ? (
+              <span className="muted toggle-note">
+                {[
+                  survey.terrain && 'рельеф 1 м',
+                  survey.colored && `цвет крыш у ${survey.colored} ${plural(survey.colored, 'дома', 'домов', 'домов')}`,
+                  survey.added && `${survey.added} ${plural(survey.added, 'новая постройка', 'новые постройки', 'новых построек')}`,
+                ]
+                  .filter(Boolean)
+                  .join(', ')}
+              </span>
+            ) : null}
+          </span>
+        </label>
       )}
 
       {territory.kind === 'village' && (
@@ -107,8 +130,18 @@ export function InfoPanel() {
           Данные OSM на {new Date(stats.osmTimestamp).toLocaleDateString('ru-RU')}
           {terrain === 'flat' && ' · рельеф: npm run data:fetch:terrain'}
           {terrain === 'dem' && ' · рельеф Copernicus DEM'}
+          {terrain === 'drone' && ' · рельеф Copernicus DEM и своя съёмка с дрона'}
         </p>
       )}
     </aside>
   );
+}
+
+/** Русское окончание по числу: 1 дом, 2 дома, 5 домов (для «у N …» — родительный: 1 дома, 2 домов). */
+function plural(n: number, one: string, few: string, many: string): string {
+  const d = n % 10;
+  const dd = n % 100;
+  if (d === 1 && dd !== 11) return one;
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return few;
+  return many;
 }

@@ -41,6 +41,15 @@ export const SURFACE_CODES: Record<Surface, number> = {
   logs: 13,
 };
 
+/**
+ * Чем деталь окрашена в доме: кровля или стены и оттенок от основного цвета (конёк темнее кровли и т. п.).
+ * По этой метке цвет можно заменить снятым с дрона, не пересобирая модель.
+ */
+export interface Paint {
+  role: 'roof' | 'wall';
+  tone: number;
+}
+
 /** Ящик: центр, размеры [вдоль, поперёк, высота], поворот вокруг вертикали (рад от оси x против часовой). */
 export interface BoxPart {
   type: 'box';
@@ -49,6 +58,7 @@ export interface BoxPart {
   angle?: number;
   color: string;
   surface?: Surface;
+  paint?: Paint;
 }
 
 /** Цилиндр или усечённый конус от from до to (бревно, труба, стена юрты). */
@@ -64,6 +74,7 @@ export interface CylinderPart {
   surface?: Surface;
   /** Торцы: цвет (у брёвен — светлее, с годовыми кольцами); false — без торцов. */
   caps?: string | false;
+  paint?: Paint;
 }
 
 /** Плоская плита: многоугольник в одной плоскости (лицевая сторона — по обходу) и толщина внутрь. */
@@ -73,6 +84,7 @@ export interface SlabPart {
   thickness: number;
   color: string;
   surface?: Surface;
+  paint?: Paint;
 }
 
 /** Стекло окна: ящик, как BoxPart; lit — с какой «доли вечера» горит свет, curtain — тюль. */
@@ -107,6 +119,7 @@ export interface BlobPart {
   color: string;
   /** Детальность: 0 — 20 граней (мелочь и даль), 1 — 80 граней. */
   detail?: 0 | 1;
+  paint?: Paint;
 }
 
 export type HousePart = BoxPart | CylinderPart | SlabPart | GlassPart | SignPart | BlobPart;
@@ -138,6 +151,22 @@ const rgbToHex = (rgb: number[]) => `#${rgb.map((v) => Math.round(Math.min(255, 
 /** Цвет светлее (k > 1) или темнее (k < 1). */
 export function shade(hex: string, k: number): string {
   return rgbToHex(hexToRgb(hex).map((v) => v * k));
+}
+
+/**
+ * Оттенок цвета color относительно base: k, если color ≈ base × k по всем каналам (k от 0,6 до 1,3), иначе undefined.
+ * Так узнаём «тот же цвет, только темнее/светлее» — конёк кровли, тёмные доски фронтона из бревна стен.
+ */
+export function toneOf(color: string, base: string): number | undefined {
+  if (!/^#[0-9a-f]{6}$/i.test(color) || !/^#[0-9a-f]{6}$/i.test(base)) return undefined;
+  const c = hexToRgb(color);
+  const b = hexToRgb(base);
+  const sum = b[0] + b[1] + b[2];
+  if (sum < 30) return color.toLowerCase() === base.toLowerCase() ? 1 : undefined;
+  const k = (c[0] + c[1] + c[2]) / sum;
+  if (k < 0.6 || k > 1.3) return undefined;
+  // Каждый канал должен совпасть с base × k (с учётом округления до 0..255).
+  return c.every((v, i) => Math.abs(v - Math.min(255, b[i]! * k)) <= 4) ? Number(k.toFixed(3)) : undefined;
 }
 
 export function mixColor(a: string, b: string, t: number): string {

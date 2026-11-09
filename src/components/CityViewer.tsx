@@ -16,6 +16,7 @@ import { GroundLayer } from '../three/GroundLayer';
 import { LandmarksLayer } from '../three/LandmarksLayer';
 import { EditLayer } from '../three/EditLayer';
 import { EditorTool } from '../three/EditorTool';
+import { TerrainBrush } from '../three/TerrainBrush';
 import { OverviewControls } from '../three/OverviewControls';
 import { PlotTool } from '../three/PlotTool';
 import { UserBuildingsLayer } from '../three/UserBuildingsLayer';
@@ -24,11 +25,15 @@ import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
-import { ROAD_KINDS, replacedOsmIds, toFeature } from '../world/edit/edits';
+import { ROAD_KINDS, addStroke, replacedOsmIds, toFeature } from '../world/edit/edits';
+import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import { loadEnvironment, polygonsOfGround } from '../world/base/environment';
 import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
 import { BARE_GROUND_COLOR, VILLAGE_GROUND_COLOR } from '../world/base/groundStyle';
 import { decodeTerrainFile, type TerrainFile, type TerrainKind } from '../world/base/heightGrid';
+import { decodeDetailFile, DetailHeights, type DetailTerrainFile } from '../world/base/detailTerrain';
+import { openRing } from '../world/base/roofGeometry';
+import { applySurvey, type SurveyFile } from '../world/base/survey';
 import { computeStats, loadBaseBuildings, loadBuildingParts } from '../world/base/loadBaseBuildings';
 import { assignParts } from '../world/base/parts';
 import { landmarkClearance, landmarkObstacle } from '../world/base/pedestal';
@@ -47,18 +52,57 @@ import { VillageModelsLayer } from '../three/VillageModelsLayer';
 import { FrontGardensLayer, type GardenSite } from '../three/FrontGardensLayer';
 
 /** Рельеф района: сетка DEM из terrain.json; нет файла — плоская земля. */
-async function loadHeights(territory: Territory): Promise<{ heightAt: (lon: number, lat: number) => number; kind: TerrainKind; credit?: string }> {
+async function loadHeights(territory: Territory, survey: boolean): Promise<{ heightAt: (lon: number, lat: number) => number; kind: TerrainKind; credit?: string; detail?: DetailHeights }> {
   try {
     const response = await fetch(territoryDataUrl(territory, 'terrain.json'));
     if (response.ok) {
       const file = (await response.json()) as TerrainFile;
       const grid = decodeTerrainFile(file);
-      return { heightAt: (lon, lat) => grid.heightAt(lon, lat), kind: 'dem', credit: file.metadata.credit };
+      const base = (lon: number, lat: number) => grid.heightAt(lon, lat);
+      // Своя съёмка с дрона (если есть): подробный рельеф поверх Copernicus.
+      const detail = survey ? await loadDetail(territory, base) : undefined;
+      if (detail) {
+        return { heightAt: (lon, lat) => detail.heights.heightAt(lon, lat), kind: 'drone', credit: `${file.metadata.credit} · ${detail.credit}`, detail: detail.heights };
+      }
+      return { heightAt: base, kind: 'dem', credit: file.metadata.credit };
     }
   } catch (error) {
     console.warn('[terrain] не удалось загрузить terrain.json, рельеф будет плоским', error);
   }
   return { heightAt: () => 0, kind: 'flat' };
+}
+
+/** Есть ли файл данных района (без скачивания: запрос HEAD; сервер разработки на нет файла отдаёт HTML). */
+async function dataExists(territory: Territory, name: string): Promise<boolean> {
+  try {
+    const response = await fetch(territoryDataUrl(territory, name), { method: 'HEAD' });
+    return response.ok && !!response.headers.get('content-type')?.includes('json');
+  } catch {
+    return false;
+  }
+}
+
+/** Находки по съёмке с дрона (survey.json): цвета домов и новые постройки; нет файла — нет и находок. */
+async function loadSurvey(territory: Territory): Promise<SurveyFile | undefined> {
+  try {
+    const response = await fetch(territoryDataUrl(territory, 'survey.json'));
+    if (!response.ok || !response.headers.get('content-type')?.includes('json')) return undefined;
+    return (await response.json()) as SurveyFile;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Подробный рельеф terrain-detail.json — по своей съёмке с дрона; нет файла — нет и уточнения. */
+async function loadDetail(territory: Territory, base: (lon: number, lat: number) => number): Promise<{ heights: DetailHeights; credit: string } | undefined> {
+  try {
+    const response = await fetch(territoryDataUrl(territory, 'terrain-detail.json'));
+    if (!response.ok || !response.headers.get('content-type')?.includes('json')) return undefined;
+    const file = (await response.json()) as DetailTerrainFile;
+    return { heights: new DetailHeights(decodeDetailFile(file), base), credit: file.metadata.credit };
+  } catch {
+    return undefined;
+  }
 }
 
 /** 3D-сцена на three.js: загружает Base World и связывает инструменты со стором. */
@@ -77,7 +121,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
     async function init() {
       store.setStatus('loading');
-      const heights = await loadHeights(territory);
+      const surveyOn = useAppStore.getState().surveyOn;
+      const heights = await loadHeights(territory, surveyOn);
       if (disposed) return;
       store.setTerrain(heights.kind);
       setCredit(heights.credit);
@@ -89,7 +134,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const [x0, y0] = frame.toLocal([west, south]);
       const [x1, y1] = frame.toLocal([east, north]);
       const area = { x0, y0, x1, y1 };
-      const localHeight = (x: number, y: number) => heights.heightAt(...frame.toLonLat([x, y]));
+      // Рельеф: общий (и съёмка с дрона) плюс ручные правки кистью — их поле подставляется, когда загружены правки.
+      const sculpt: { field: SculptField; strokes: readonly SculptStroke[] } = { field: new SculptField(), strokes: [] };
+      /** Земля без ручных правок (кисть считает от неё). */
+      const ground0 = (x: number, y: number) => heights.heightAt(...frame.toLonLat([x, y]));
+      const localHeight = (x: number, y: number) => ground0(x, y) + sculpt.field.offsetAt(x, y);
 
       const c = new CityScene(container!, { lat: (south + north) / 2, lon: (west + east) / 2 });
       city = c;
@@ -126,12 +175,22 @@ export function CityViewer({ territory }: { territory: Territory }) {
       setIntroView(c, territory, frame, localHeight);
       store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5));
 
-      const [collection, buildingParts, environment] = await Promise.all([
+      const [osmCollection, buildingParts, environment, surveyFile] = await Promise.all([
         loadBaseBuildings(territory),
         loadBuildingParts(territory),
         loadEnvironment(territory),
+        loadSurvey(territory),
       ]);
       if (disposed) return;
+      // Находки по съёмке с дрона: цвета домов и постройки, которых нет в OSM.
+      const surveyApplied = surveyOn && surveyFile ? applySurvey(osmCollection, surveyFile) : undefined;
+      const collection = surveyApplied?.collection ?? osmCollection;
+      // Есть ли у района съёмка (даже если она сейчас выключена — чтобы её можно было включить).
+      const hasSurvey = !!surveyFile || !!heights.detail || (!surveyOn && (await dataExists(territory, 'terrain-detail.json')));
+      if (disposed) return;
+      store.setSurvey(
+        hasSurvey ? { terrain: !!heights.detail, colored: surveyApplied?.stats.colored ?? 0, added: surveyApplied?.stats.added ?? 0 } : undefined,
+      );
 
       const buildingFootprints = collection.features.flatMap((f) => (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates));
       const localBuildings = buildingFootprints.map((rings) => toLocalPolygon(rings, frame));
@@ -165,13 +224,35 @@ export function CityViewer({ territory }: { territory: Territory }) {
           const u = -dx * p.toStreet[1] + dy * p.toStreet[0];
           return Math.abs(u) <= p.width / 2 + 1 && v >= -1 && v <= p.depth + 1.5;
         });
+      // Подробный рельеф (съёмка с дрона) — под жизнь деревни: двор — плоскостью по уклону, под дорогами и
+      // тропинками — полотно, под домами и сараями — ровные площадки. Иначе бугры съёмки в пару десятков
+      // сантиметров поднимают дома на высокий цоколь и делают дороги волнистыми.
+      if (heights.detail) {
+        heights.detail.flattenYards(yards.map((y) => y.corners.map(frame.toLonLat)));
+        heights.detail.flattenRoads([...environment.streets.roads, ...environment.streets.paths]);
+        // Площадки — последними: дом у самой дороги не должен съезжать на её обочину.
+        heights.detail.flattenPads(buildingFootprints.map((rings) => openRing(rings[0] ?? [])));
+      }
       const gardens = yards.flatMap((yard) =>
         yard.garden
           ? [{ ring: [...yard.garden.corners, yard.garden.corners[0]].map(frame.toLonLat), rows: yard.garden.rows, seed: yard.seed, houseId: yard.houseId }]
           : [],
       );
 
-      const ground = new GroundLayer(c, heights, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm);
+      // Где есть подробный рельеф — густая сетка земли: шаг 2 м (до 2 км²) или 3 м.
+      const coverage = heights.detail?.coverage;
+      let detailRegion: { rect: { x0: number; y0: number; x1: number; y1: number }; subdivide: number } | undefined;
+      if (coverage) {
+        const [dx0, dy0] = frame.toLocal([coverage.west, coverage.south]);
+        const [dx1, dy1] = frame.toLocal([coverage.east, coverage.north]);
+        detailRegion = { rect: { x0: dx0, y0: dy0, x1: dx1, y1: dy1 }, subdivide: (dx1 - dx0) * (dy1 - dy0) <= 2e6 ? 3 : 2 };
+      }
+      // Правки места (и мазки кисти рельефа) — до постройки слоёв: всё встаёт на уже поправленную землю.
+      useEditStore.getState().load(territory.id);
+      sculpt.strokes = useEditStore.getState().edits.terrain;
+      if (sculpt.strokes.length) sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
+      const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
+      const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion);
       owned.push(ground);
       if (import.meta.env.DEV) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
 
@@ -215,8 +296,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
             if (parts.byBuilding.get(f.properties.id)?.length) return [];
             if (f.geometry.type === 'MultiPolygon' && f.geometry.coordinates.length > 1) return [];
             const ring = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0];
-            const house = ring && chooseVillageModel(f.properties.id, ring.map(frame.toLocal), roadLines);
-            return house ? [house] : [];
+            const house = ring && chooseVillageModel(f.properties.id, ring.map(frame.toLocal), roadLines, f.properties.building);
+            // Цвета кровли и стен — из OSM или по съёмке с дрона (если есть).
+            const roof = f.properties.roofColour;
+            const wall = f.properties.colour;
+            return house ? [roof || wall ? { ...house, colors: { roof, wall } } : house] : [];
           })
         : [];
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
@@ -421,7 +505,6 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
       // Редактор: свои и изменённые дома, дороги и заборы поверх Base World (как в градостроителях).
       const editStore = useEditStore.getState();
-      editStore.load(territory.id);
       const editLayer = new EditLayer(c, frame, localHeight, village);
       owned.push(editLayer);
       const editor = new EditorTool({
@@ -438,11 +521,46 @@ export function CityViewer({ territory }: { territory: Territory }) {
         models: villageModels,
       });
       owned.push(editor);
+
+      // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
+      const groundFollowers = [buildings, details, villageModels, frontGardens, trees, furniture];
+      const followGround = (change: SculptChange) => {
+        const changed = changeRect(change);
+        ground.refreshTerrain(changed);
+        const delta = (x: number, y: number) => changeAt(change, x, y);
+        for (const layer of groundFollowers) layer?.shiftGround(delta, changed);
+        c.requestRender();
+      };
+      const brush = new TerrainBrush({
+        city: c,
+        controls: overview,
+        heightAt: localHeight,
+        toLonLat: frame.toLonLat,
+        onDab: (b, center) => followGround(sculpt.field.dab(b, center, ground0)),
+        onStroke: (stroke) => {
+          const { edits, commit } = useEditStore.getState();
+          const next = addStroke(edits, stroke);
+          sculpt.strokes = next.terrain;
+          commit(next);
+        },
+      });
+      owned.push(brush);
+      /** Мазки в правках поменялись не кистью (отмена, повтор, файл правок) — повторить их и сдвинуть землю. */
+      const syncTerrain = () => {
+        const { terrain } = useEditStore.getState().edits;
+        if (terrain === sculpt.strokes) return;
+        const next = replayStrokes(terrain, frame.toLocal, ground0);
+        const changes = sculpt.field.changesTo(next);
+        sculpt.field = next;
+        sculpt.strokes = terrain;
+        for (const change of changes) followGround(change);
+      };
       editStore.setResolver((id) => editor.resolve(id));
       editStore.setModelApplier((b, model) => editor.applyModel(b, model));
 
       /** Правки → сцена: что скрыть из OSM, что дорисовать, кто мешает пешеходу. */
       const applyEdits = () => {
+        syncTerrain();
         const { edits, selection } = useEditStore.getState();
         const removed = new Set(edits.removedBuildings);
         // Удалённые (а не сдвинутые или перестроенные) дома уходят вместе с двором и огородом.

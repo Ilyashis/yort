@@ -229,7 +229,7 @@ function planIzba(o: HouseOptions = {}): HousePlan {
   const cx = W * 0.14;
   const cy = D * 0.1;
   parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
-  return finish('izba', parts, W, D, rect(W + 2 * r, D + 2 * r));
+  return finish('izba', parts, W, D, rect(W + 2 * r, D + 2 * r), { roof: look.roof, wall: look.log });
 }
 
 /** Пятистенок: длинный сруб с поперечной стеной (её брёвна торчат на боках), сени и крыльцо со двора. */
@@ -326,7 +326,7 @@ function planPyatistenok(o: HouseOptions = {}): HousePlan {
   const cx = -W * 0.16;
   const cy = cross - D / 2 + 1.2;
   parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
-  return finish('pyatistenok', parts, W, D, rect(W + 2 * r, D + 2 * r));
+  return finish('pyatistenok', parts, W, D, rect(W + 2 * r, D + 2 * r), { roof: look.roof, wall: look.log });
 }
 
 // --- обшитые дома --------------------------------------------------------------------------------
@@ -508,7 +508,7 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
   const cx = -W * 0.15;
   const cy = D * 0.08;
   parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
-  return finish('veranda', parts, W, D, rect(W + t, D + t));
+  return finish('veranda', parts, W, D, rect(W + t, D + t), { roof: look.roof, wall: look.wall });
 }
 
 /** Слуховое окно-«светёлка» на переднем скате вальмовой крыши: стенка с окном, щёчки, двускатный козырёк. */
@@ -658,7 +658,7 @@ function planHipped(o: HouseOptions = {}): HousePlan {
   const cx = W * 0.18;
   const cy = D * 0.12;
   parts.push(...chimney(cx, cy, top - 0.3, roof.heightAt(cx, cy) + 0.75, '#a4523b'));
-  return finish('hipped', parts, W, D, rect(W + t, D + t));
+  return finish('hipped', parts, W, D, rect(W + t, D + t), { roof: look.roof, wall: look.wall });
 }
 
 /** Кирпичный дом (90–2010-е): вальмовая крыша из металла, большие белые окна, светлый декор кирпичом. */
@@ -728,7 +728,7 @@ function planBrick(o: HouseOptions = {}): HousePlan {
   const cx = -W * 0.2;
   const cy = D * 0.15;
   parts.push(...chimney(cx, cy, top - 0.3, roof.heightAt(cx, cy) + 0.8, decor));
-  return finish('brick', parts, W, D, rect(W + t, D + t));
+  return finish('brick', parts, W, D, rect(W + t, D + t), { roof: roofColor, wall: brick });
 }
 
 // --- баня и юрта --------------------------------------------------------------------------------
@@ -783,7 +783,7 @@ function planBanya(o: HouseOptions = {}): HousePlan {
       });
     }
   }
-  return finish('banya', parts, W, D, rect(W + 2 * r, D + 2 * r));
+  return finish('banya', parts, W, D, rect(W + 2 * r, D + 2 * r), { roof: roofColor, wall: log });
 }
 
 /** Юрта (тирмә): войлок на решётчатых стенах, купол с шаңыраҡом, орнаментный пояс, расписная дверь. */

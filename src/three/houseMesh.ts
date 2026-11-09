@@ -49,6 +49,10 @@ class Buffers {
   readonly normal: number[] = [];
   readonly color: number[] = [];
   readonly extra: number[] = [];
+  /** Метка окраски у каждой вершины: [роль (0 — нет, 1 — кровля, 2 — стены), оттенок]. */
+  readonly paint: number[] = [];
+  /** Метка текущей детали (задаётся перед её треугольниками). */
+  current: [number, number] = [0, 1];
   constructor(readonly extraSize: number) {}
 
   /** Треугольник: обход выправляется по нормали n (лицо — наружу). */
@@ -71,6 +75,7 @@ class Buffers {
       this.normal.push(q[0], q[2], -q[1]);
       this.color.push(color.r, color.g, color.b);
       this.extra.push(...ex[i]!);
+      this.paint.push(this.current[0], this.current[1]);
     }
   }
 
@@ -80,6 +85,7 @@ class Buffers {
     g.setAttribute('normal', new BufferAttribute(new Float32Array(this.normal), 3));
     g.setAttribute('color', new BufferAttribute(new Float32Array(this.color), 3));
     g.setAttribute(extraName, new BufferAttribute(new Float32Array(this.extra), this.extraSize));
+    g.setAttribute('paint', new BufferAttribute(new Float32Array(this.paint), 2));
     g.computeBoundingSphere();
     return g;
   }
@@ -357,11 +363,38 @@ vec3 citiaSurface(vec3 c, vec3 sf) {
 
 const surfaceHook: ShaderHook = (shader) => {
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute vec3 surface;\nvarying vec3 vSurface;')
-    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSurface = surface;');
+    .replace(
+      '#include <common>',
+      `#include <common>
+attribute vec3 surface;
+varying vec3 vSurface;
+#ifdef CITIA_SURVEY
+attribute vec2 paint;
+attribute vec3 surveyRoof;
+attribute vec3 surveyWall;
+varying vec4 vRepaint;
+#endif`,
+    )
+    .replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+vSurface = surface;
+#ifdef CITIA_SURVEY
+// Цвет по съёмке: кровля или стены этого дома (с оттенком детали); w < 0 — оставить цвет модели.
+vec3 citiaRepaint = paint.x > 0.5 && paint.x < 1.5 ? surveyRoof : (paint.x > 1.5 ? surveyWall : vec3(-1.0));
+vRepaint = citiaRepaint.r >= 0.0 ? vec4(citiaRepaint * paint.y, 1.0) : vec4(0.0, 0.0, 0.0, -1.0);
+#endif`,
+    );
   shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', `#include <common>\n${SURFACE_GLSL}`)
-    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = citiaSurface(diffuseColor.rgb, vSurface);')
+    .replace('#include <common>', `#include <common>\n${SURFACE_GLSL}\n#ifdef CITIA_SURVEY\nvarying vec4 vRepaint;\n#endif`)
+    .replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+#ifdef CITIA_SURVEY
+if (vRepaint.w > 0.0) diffuseColor.rgb = vRepaint.rgb;
+#endif
+diffuseColor.rgb = citiaSurface(diffuseColor.rgb, vSurface);`,
+    )
     .replace(
       '#include <metalnessmap_fragment>',
       `#include <metalnessmap_fragment>
@@ -415,9 +448,18 @@ export interface HouseMaterials {
   dispose(): void;
 }
 
-export function createHouseMaterials(csm: CSM | undefined): HouseMaterials {
+/**
+ * Материалы домов. surveyColors — у каждого экземпляра (InstancedMesh) свои цвета кровли и стен
+ * (атрибуты surveyRoof, surveyWall; −1 — оставить цвет модели): так дома красятся по съёмке с дрона.
+ */
+export function createHouseMaterials(csm: CSM | undefined, options: { surveyColors?: boolean } = {}): HouseMaterials {
   const solid = new MeshStandardMaterial({ vertexColors: true, roughness: 0.84, metalness: 0 });
-  hookMaterial(solid, 'village-house', surfaceHook, csm);
+  // У MeshStandardMaterial уже есть defines (STANDARD) — дополняем, а не заменяем.
+  if (options.surveyColors) {
+    const m = solid as unknown as { defines?: Record<string, string> };
+    m.defines = { ...(m.defines ?? {}), CITIA_SURVEY: '' };
+  }
+  hookMaterial(solid, options.surveyColors ? 'village-house-survey' : 'village-house', surfaceHook, csm);
   const glass = new MeshStandardMaterial({ vertexColors: true, roughness: 0.06, metalness: 0.45, envMapIntensity: 1.3 });
   hookMaterial(glass, 'village-glass', glassHook, csm);
   const signs = new Map<string, MeshStandardMaterial>();
@@ -580,6 +622,8 @@ function addBlob(buf: Buffers, p: BlobPart): void {
 }
 
 function addPart(solid: Buffers, glass: Buffers, part: HousePart): void {
+  const paint = 'paint' in part ? part.paint : undefined;
+  solid.current = paint ? [paint.role === 'roof' ? 1 : 2, paint.tone] : [0, 1];
   if (part.type === 'box') addBox(solid, part);
   else if (part.type === 'blob') addBlob(solid, part);
   else if (part.type === 'cylinder') addCylinder(solid, part);

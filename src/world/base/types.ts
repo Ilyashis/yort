@@ -27,6 +27,8 @@ export interface BaseBuildingProperties {
   /** Цвет фасада (building:colour) и материал стен (building:material) из OSM. */
   colour?: string;
   material?: string;
+  /** Постройка найдена по своей съёмке с дрона (в OSM её нет). */
+  source?: 'drone';
 }
 
 export type Ring = [number, number][];

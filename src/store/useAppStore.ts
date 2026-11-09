@@ -154,6 +154,10 @@ interface AppState {
   blur: boolean;
   /** Контуры, как на рисунке. */
   outlines: boolean;
+  /** Уточнения по своей съёмке с дрона: рельеф, цвета домов, новые постройки (запоминается в браузере). */
+  surveyOn: boolean;
+  /** Что из съёмки есть у этого района (undefined — съёмки нет). */
+  survey?: { terrain: boolean; colored: number; added: number };
   /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
   driveHud: DriveHudState;
   driveView: DriveView;
@@ -193,6 +197,8 @@ interface AppState {
   setHaze: (on: boolean) => void;
   setBlur: (on: boolean) => void;
   setOutlines: (on: boolean) => void;
+  setSurveyOn: (on: boolean) => void;
+  setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setDriveControls: (controls: DriveControls | undefined) => void;
   setDriveHud: (hud: DriveHudState) => void;
@@ -234,6 +240,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   haze: readPref('haze', ['on', 'off'] as const, 'on') === 'on',
   blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
+  surveyOn: readPref('survey', ['on', 'off'] as const, 'on') === 'on',
   walkMouseLocked: false,
   driveHud: { speed: 0, gear: 'N' },
   driveView: 'chase',
@@ -312,6 +319,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('outlines', outlines ? 'on' : 'off');
     set({ outlines });
   },
+  setSurveyOn: (surveyOn) => {
+    writePref('survey', surveyOn ? 'on' : 'off');
+    set({ surveyOn });
+  },
+  setSurvey: (survey) => set({ survey }),
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),
   setDriveControls: (driveControls) => set({ driveControls }),
   setDriveHud: (driveHud) => {

@@ -11,7 +11,7 @@ import { rotatePartsZ, type HousePart, type Vec3 } from '../world/village/houseP
 import type { Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { buildHouseGeometries, createHouseMaterials, type HouseMaterials } from './houseMesh';
-import { MergedMesh } from './merged';
+import { MergedMesh, type GroundArea, type GroundDelta } from './merged';
 
 export interface GardenSite {
   /** Владелец — двор (id дома во дворе): палисадник прячется вместе с ним. */
@@ -135,6 +135,12 @@ export class FrontGardensLayer {
     this.group.remove(m.mesh);
     // Материал общий для всех кусков — освобождаем только геометрию.
     m.mesh.geometry.dispose();
+  }
+
+  /** Земля поменялась (кисть рельефа): палисадники в area — вместе с ней (ещё не собранные соберутся по новой земле). */
+  shiftGround(delta: GroundDelta, area: GroundArea): void {
+    for (const chunk of this.chunks) chunk.mesh?.shiftGround(delta, area);
+    this.far?.shiftGround(delta, area);
   }
 
   /** Ближние куски — подробно, их часть дальней сетки прячем. Проверяем, когда камера сдвинулась на RECHECK. */

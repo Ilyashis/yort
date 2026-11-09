@@ -22,6 +22,7 @@ import { planTree, type TreeShape } from '../world/base/treeParts';
 import type { LonLat } from '../world/user/plot';
 import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
+import type { GroundArea, GroundDelta } from './merged';
 import { hookMaterial } from './shaderHooks';
 
 const UP = new Vector3(0, 1, 0);
@@ -120,6 +121,27 @@ export class TreesLayer {
     });
     for (const mesh of touched) mesh.instanceMatrix.needsUpdate = true;
     if (touched.size) this.city.requestRender();
+  }
+
+  /** Земля поменялась (кисть рельефа): деревья в area — вверх или вниз вместе с ней. */
+  shiftGround(delta: GroundDelta, area: GroundArea): void {
+    const touched = new Set<InstancedMesh>();
+    this.parts.forEach((list, i) => {
+      for (const [shape, k] of list) {
+        const matrix = this.matrices.get(shape)![k]!;
+        const x = matrix.elements[12]!;
+        const y = -matrix.elements[14]!;
+        if (x < area.x0 || x > area.x1 || y < area.y0 || y > area.y1) continue;
+        const d = delta(x, y);
+        if (!d) continue;
+        matrix.elements[13]! += d;
+        if (this.hidden[i]) continue;
+        const mesh = this.meshes.get(shape)!;
+        mesh.setMatrixAt(k, matrix);
+        touched.add(mesh);
+      }
+    });
+    for (const mesh of touched) mesh.instanceMatrix.needsUpdate = true;
   }
 
   setVisible(visible: boolean): void {

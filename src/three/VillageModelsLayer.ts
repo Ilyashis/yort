@@ -13,7 +13,7 @@
 //   house(id), rectLonLat(id), houses — какая модель у дома и где её прямоугольник;
 //   triangles, destroy().
 
-import { Color, Group, InstancedMesh, Matrix4, Quaternion, Vector3, type BufferGeometry, type Intersection, type Material, type Object3D } from 'three';
+import { Color, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type BufferGeometry, type Intersection, type Material, type Object3D } from 'three';
 import type { CSM } from 'three/addons/csm/CSM.js';
 import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 import { modelPlacement, type LonLat } from '../world/edit/edits';
@@ -23,6 +23,7 @@ import { fitPreset, type VillageHouse } from '../world/village/villagePlan';
 import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { toThree } from './coords';
+import type { GroundArea, GroundDelta } from './merged';
 import { buildHouseGeometries, createHouseMaterials, type HouseMaterials } from './houseMesh';
 
 /** Ближе этого к камере — полная модель, дальше — упрощённая, м (с запасом, чтобы не мигало). */
@@ -48,7 +49,20 @@ interface Entry {
   near: boolean;
   /** Фундаменты под цоколями (на склоне). */
   foundations: Matrix4[];
+  /** Цоколи модели (под ними — фундаменты) и уровень пола: при правке земли дом садится на склон заново. */
+  plinths: BoxPart[];
+  floor: number;
+  /** Свои цвета кровли и стен (линейные RGB) или −1 — цвет модели. */
+  roof: [number, number, number];
+  wall: [number, number, number];
 }
+
+const KEEP: [number, number, number] = [-1, -1, -1];
+const linear = (hex: string | undefined): [number, number, number] => {
+  if (!hex || !/^#[0-9a-f]{6}$/i.test(hex)) return KEEP;
+  const c = new Color(hex);
+  return [c.r, c.g, c.b];
+};
 
 export class VillageModelsLayer {
   private readonly group = new Group();
@@ -73,11 +87,11 @@ export class VillageModelsLayer {
   constructor(
     private readonly city: CityScene,
     private readonly frame: LocalFrame,
-    heightAt: (x: number, y: number) => number,
+    private readonly heightAt: (x: number, y: number) => number,
     readonly houses: readonly VillageHouse[],
     csm: CSM,
   ) {
-    this.materials = createHouseMaterials(csm);
+    this.materials = createHouseMaterials(csm, { surveyColors: true });
     this.group.name = 'village-models';
 
     // Дома — по видам: модель × размер × окраска.
@@ -112,25 +126,29 @@ export class VillageModelsLayer {
         (p): p is BoxPart => p.type === 'box' && p.surface === 'plaster' && Math.abs(p.center[2] - p.size[2] / 2) < 0.03,
       );
       list.forEach(({ house: h, matrix, floor, low, center }, slot) => {
-        const entry: Entry = { id: h.id, kind, matrix, center, near: true, foundations: [] };
+        const entry: Entry = {
+          id: h.id,
+          kind,
+          matrix,
+          center,
+          near: true,
+          foundations: [],
+          plinths,
+          floor,
+          roof: linear(h.colors?.roof),
+          wall: linear(h.colors?.wall),
+        };
         this.entries.set(h.id, entry);
         kind.entries.push(entry);
         // Пока — все дома во всех мешах вида: так считаются границы для отсечения.
-        for (const mesh of [...kind.near, ...kind.far]) mesh.setMatrixAt(slot, matrix);
-        // Фундамент под каждым цоколем дома на склоне (цвет — как у цоколя).
-        const drop = floor - low;
-        if (drop < 0.03) return;
-        const bottom = -drop - FOOTING_DEPTH;
-        for (const p of plinths) {
-          const local = new Matrix4().compose(
-            new Vector3(p.center[0], (bottom + 0.05) / 2, -p.center[1]),
-            new Quaternion(),
-            new Vector3(p.size[0], 0.05 - bottom, p.size[1]),
-          );
-          entry.foundations.push(matrix.clone().multiply(local));
-          foundationColors.push(p.color);
-          foundationCount += 1;
+        for (const mesh of [...kind.near, ...kind.far]) {
+          mesh.setMatrixAt(slot, matrix);
+          setRepaint(mesh, slot, entry);
         }
+        // Фундамент под каждым цоколем (цвет — как у цоколя); на ровном он весь в земле, на склоне — виден.
+        entry.foundations = foundationMatrices(matrix, plinths, floor - low);
+        for (const p of plinths) foundationColors.push(p.color);
+        foundationCount += plinths.length;
       });
     }
     if (foundationCount) {
@@ -164,6 +182,26 @@ export class VillageModelsLayer {
     for (const id of new Set([...before, ...ids])) {
       const entry = this.entries.get(id);
       if (entry && before.has(id) !== ids.has(id)) this.dirty.add(entry.kind);
+    }
+    if (this.flush()) this.city.requestRender();
+  }
+
+  /** Земля поменялась (кисть рельефа): дома в area садятся на склон заново — как при загрузке. */
+  shiftGround(_delta: GroundDelta, area: GroundArea): void {
+    for (const entry of this.entries.values()) {
+      const rect = this.byId.get(entry.id)!.rect;
+      if (rect.every(([x]) => x < area.x0) || rect.every(([x]) => x > area.x1) || rect.every(([, y]) => y < area.y0) || rect.every(([, y]) => y > area.y1)) {
+        continue;
+      }
+      const site = siteOnSlope(rect, this.heightAt);
+      const d = site.floor - entry.floor;
+      if (Math.abs(d) < 1e-4 && !entry.plinths.length) continue;
+      entry.floor = site.floor;
+      entry.matrix.elements[13]! += d;
+      entry.center.y += d;
+      entry.foundations = foundationMatrices(entry.matrix, entry.plinths, site.floor - site.low);
+      // Вид дома — переложить заново (вместе с ним перекладываются и фундаменты).
+      this.dirty.add(entry.kind);
     }
     if (this.flush()) this.city.requestRender();
   }
@@ -223,6 +261,11 @@ export class VillageModelsLayer {
         continue;
       }
       this.geometries.push(geometry);
+      // Цвета кровли и стен у каждого экземпляра (−1 — цвет модели).
+      if (material === this.materials.solid) {
+        geometry.setAttribute('surveyRoof', new InstancedBufferAttribute(new Float32Array(count * 3).fill(-1), 3));
+        geometry.setAttribute('surveyWall', new InstancedBufferAttribute(new Float32Array(count * 3).fill(-1), 3));
+      }
       out.push(this.addMesh(new InstancedMesh(geometry, material, count)));
     }
     return out;
@@ -270,10 +313,15 @@ export class VillageModelsLayer {
           owners.length = 0;
           list.forEach((e, i) => {
             mesh.setMatrixAt(i, e.matrix);
+            setRepaint(mesh, i, e);
             owners[i] = e.id;
           });
           mesh.count = list.length;
           mesh.instanceMatrix.needsUpdate = true;
+          for (const name of ['surveyRoof', 'surveyWall']) {
+            const attribute = mesh.geometry.getAttribute(name);
+            if (attribute) attribute.needsUpdate = true;
+          }
         }
       }
     }
@@ -300,4 +348,20 @@ export class VillageModelsLayer {
     }
     return true;
   }
+}
+
+/** Цвета кровли и стен дома — в экземпляр slot меша (если у меша они есть). */
+function setRepaint(mesh: InstancedMesh, slot: number, entry: Entry): void {
+  const roof = mesh.geometry.getAttribute('surveyRoof') as InstancedBufferAttribute | undefined;
+  const wall = mesh.geometry.getAttribute('surveyWall') as InstancedBufferAttribute | undefined;
+  roof?.setXYZ(slot, ...entry.roof);
+  wall?.setXYZ(slot, ...entry.wall);
+}
+
+/** Фундаменты под цоколями дома (матрица дома matrix): от низа цоколя до drop + FOOTING_DEPTH ниже пола. */
+function foundationMatrices(matrix: Matrix4, plinths: readonly BoxPart[], drop: number): Matrix4[] {
+  const bottom = -Math.max(drop, 0) - FOOTING_DEPTH;
+  return plinths.map((p) =>
+    matrix.clone().multiply(new Matrix4().compose(new Vector3(p.center[0], (bottom + 0.05) / 2, -p.center[1]), new Quaternion(), new Vector3(p.size[0], 0.05 - bottom, p.size[1]))),
+  );
 }

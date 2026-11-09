@@ -5,6 +5,7 @@ import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { EMPTY_EDITS, ROAD_KINDS, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
+import { SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptMode } from '../world/base/sculpt';
 
 const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: ReactNode }[] = [
   {
@@ -35,7 +36,16 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
     hint: 'Ведите линию по земле — по ней встанет забор со столбами.',
     icon: <path d="M3 17V6l2-2 2 2v11M9 17V6l2-2 2 2v11M15 17V6l2-2 2 2v11M2 9h18M2 14h18" />,
   },
+  {
+    tool: 'terrain',
+    label: 'Рельеф',
+    key: 'G',
+    hint: 'Ведите кистью по земле с зажатой кнопкой; [ и ] — меньше и больше кисть.',
+    icon: <path d="M1 16l5-7 3 4 4-7 6 10zM2 18h16" />,
+  },
 ];
+
+const SCULPT_ORDER: SculptMode[] = ['raise', 'lower', 'flatten', 'smooth'];
 
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
 const NOTICE_MS = 3200;
@@ -54,6 +64,8 @@ export function EditorToolbar() {
   const setRoadKind = useEditStore((s) => s.setRoadKind);
   const houseModel = useEditStore((s) => s.houseModel);
   const setHouseModel = useEditStore((s) => s.setHouseModel);
+  const sculpt = useEditStore((s) => s.sculpt);
+  const setSculpt = useEditStore((s) => s.setSculpt);
   const canUndo = useEditStore((s) => s.past.length > 0);
   const canRedo = useEditStore((s) => s.future.length > 0);
   const undo = useEditStore((s) => s.undo);
@@ -79,7 +91,13 @@ export function EditorToolbar() {
   if (mode !== 'explore' || !ready) return null;
   const active = TOOLS.find((t) => t.tool === tool);
   const count =
-    edits.buildings.length + edits.removedBuildings.length + edits.roads.length + edits.removedRoads.length + edits.fences.length + edits.removedYards.length;
+    edits.buildings.length +
+    edits.removedBuildings.length +
+    edits.roads.length +
+    edits.removedRoads.length +
+    edits.fences.length +
+    edits.removedYards.length +
+    edits.terrain.length;
 
   const exportEdits = () => {
     const blob = new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' });
@@ -120,7 +138,9 @@ export function EditorToolbar() {
           <div className="editor-hint">
             {active.tool === 'house' && houseModel
               ? `Клик по земле — поставить «${findHouseModel(houseModel)?.name}» фасадом к ближайшей улице; растяните — дом встанет по размеру.`
-              : active.hint}
+              : active.tool === 'terrain'
+                ? `${SCULPT_MODES[sculpt.mode].hint} [ и ] — размер кисти.`
+                : active.hint}
           </div>
         )
       )}
@@ -160,6 +180,43 @@ export function EditorToolbar() {
               ))}
             </div>
           )}
+        </div>
+      )}
+      {tool === 'terrain' && (
+        <div className="editor-models">
+          <div className="segmented editor-kinds" role="group" aria-label="Кисть рельефа">
+            {SCULPT_ORDER.map((m) => (
+              <button key={m} type="button" className={sculpt.mode === m ? 'active' : ''} onClick={() => setSculpt({ mode: m })}>
+                {SCULPT_MODES[m].label}
+              </button>
+            ))}
+          </div>
+          <div className="panel editor-sliders">
+            <label>
+              <span>Размер</span>
+              <input
+                type="range"
+                min={SCULPT_RADIUS.min}
+                max={SCULPT_RADIUS.max}
+                step={1}
+                value={sculpt.radius}
+                onChange={(e) => setSculpt({ radius: Number(e.target.value) })}
+              />
+              <output>{sculpt.radius} м</output>
+            </label>
+            <label>
+              <span>Сила</span>
+              <input
+                type="range"
+                min={SCULPT_STRENGTH.min}
+                max={SCULPT_STRENGTH.max}
+                step={0.05}
+                value={sculpt.strength}
+                onChange={(e) => setSculpt({ strength: Number(e.target.value) })}
+              />
+              <output>{Math.round(sculpt.strength * 100)}%</output>
+            </label>
+          </div>
         </div>
       )}
       {tool === 'road' && (

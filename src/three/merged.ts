@@ -125,8 +125,96 @@ export class MergedMesh {
     return changed;
   }
 
+  /**
+   * Земля поменялась (кисть рельефа): вершины владельцев в area (локальные метры) — вверх или вниз на
+   * delta(x, y) в своей точке. Стены и столбы остаются вертикальными: у вершин одной вертикали — одна прибавка.
+   */
+  shiftGround(delta: GroundDelta, area: GroundArea): boolean {
+    const boxes = (this.boxes ??= ownerBoxes(this.ranges, this.original));
+    const attribute = this.mesh.geometry.getAttribute('position') as BufferAttribute;
+    const changed = shiftOwners(this.ranges, boxes, this.original, attribute.array as Float32Array, (owner) => this.hidden.has(owner), delta, area);
+    if (changed) attribute.needsUpdate = true;
+    return changed;
+  }
+
+  private boxes?: Map<string, GroundArea>;
+
   dispose(): void {
     this.mesh.geometry.dispose();
     (this.mesh.material as MeshStandardMaterial).dispose();
   }
+}
+
+/** Прибавка к высоте земли в точке (локальные метры: x — восток, y — север), м. */
+export type GroundDelta = (x: number, y: number) => number;
+/** Прямоугольник в локальных метрах. */
+export interface GroundArea {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** Границы вершин каждого владельца (локальные метры) — чтобы при правке земли трогать только тех, кто рядом. */
+export function ownerBoxes(ranges: ReadonlyMap<string, readonly [number, number][]>, positions: Float32Array): Map<string, GroundArea> {
+  const out = new Map<string, GroundArea>();
+  for (const [owner, list] of ranges) {
+    const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const [start, count] of list) {
+      for (let v = start; v < start + count; v++) {
+        const x = positions[v * 3]!;
+        const y = -positions[v * 3 + 2]!;
+        if (x < box.x0) box.x0 = x;
+        if (x > box.x1) box.x1 = x;
+        if (y < box.y0) box.y0 = y;
+        if (y > box.y1) box.y1 = y;
+      }
+    }
+    out.set(owner, box);
+  }
+  return out;
+}
+
+/**
+ * Сдвиг по земле для геометрии «владельцы × диапазоны вершин» с копией исходных вершин original (из неё
+ * возвращают спрятанных): правим original, а живые вершины переписываем из неё (спрятанные — снова в точку).
+ */
+export function shiftOwners(
+  ranges: ReadonlyMap<string, readonly [number, number][]>,
+  boxes: ReadonlyMap<string, GroundArea>,
+  original: Float32Array,
+  live: Float32Array,
+  hidden: (owner: string) => boolean,
+  delta: GroundDelta,
+  area: GroundArea,
+): boolean {
+  let changed = false;
+  for (const [owner, list] of ranges) {
+    const box = boxes.get(owner);
+    if (!box || box.x1 < area.x0 || box.x0 > area.x1 || box.y1 < area.y0 || box.y0 > area.y1) continue;
+    let moved = false;
+    for (const [start, count] of list) {
+      for (let v = start; v < start + count; v++) {
+        const x = original[v * 3]!;
+        const y = -original[v * 3 + 2]!;
+        if (x < area.x0 || x > area.x1 || y < area.y0 || y > area.y1) continue;
+        const d = delta(x, y);
+        if (!d) continue;
+        original[v * 3 + 1]! += d;
+        moved = true;
+      }
+    }
+    if (!moved) continue;
+    changed = true;
+    const hide = hidden(owner);
+    for (const [start, count] of list) {
+      for (let v = start; v < start + count; v++) {
+        const src = hide ? start : v;
+        live[v * 3] = original[src * 3]!;
+        live[v * 3 + 1] = original[src * 3 + 1]!;
+        live[v * 3 + 2] = original[src * 3 + 2]!;
+      }
+    }
+  }
+  return changed;
 }

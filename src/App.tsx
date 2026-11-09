@@ -19,11 +19,13 @@ export function App() {
   const building = useAppStore((s) => !!s.builder);
   const loading = useAppStore((s) => s.status === 'loading');
   const territory = useAppStore((s) => findTerritory(s.territoryId) ?? defaultTerritory);
+  // Данные съёмки с дрона меняют рельеф и дома — сцену проще собрать заново.
+  const surveyOn = useAppStore((s) => s.surveyOn);
 
   return (
     <main className="app">
       {/* Свой ключ у каждого населённого пункта: при переключении сцена собирается заново. */}
-      <CityViewer key={territory.id} territory={territory} />
+      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}`} territory={territory} />
       {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
       <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
         <div className="intro-title">

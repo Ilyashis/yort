@@ -64,7 +64,7 @@ const ALIGN_TO_STREET_M = 60;
 const MIN_HOUSE_SIDE = 3;
 /** Дом-модель кликом у дороги: фасад не ближе этого к оси улицы, м (полдороги и палисадник). */
 const FACADE_SETBACK_M = 6.5;
-const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence' };
+const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence', KeyG: 'terrain' };
 
 /** Точка экрана (координаты клиента, px). */
 type ScreenPoint = [number, number];

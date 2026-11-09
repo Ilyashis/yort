@@ -1,9 +1,19 @@
 import { create } from 'zustand';
 import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseModelRef } from '../world/edit/edits';
 import type { HouseModelId } from '../world/village/houseModels';
+import type { SculptMode } from '../world/base/sculpt';
 
-/** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией. */
-export type EditTool = 'select' | 'house' | 'road' | 'fence';
+/** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
+export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'terrain';
+
+/** Настройки кисти рельефа. */
+export interface SculptSettings {
+  mode: SculptMode;
+  /** Радиус, м. */
+  radius: number;
+  /** Сила, 0.05…1. */
+  strength: number;
+}
 
 export type Selection =
   | { type: 'building'; id: string }
@@ -42,6 +52,8 @@ interface EditState {
   roadKind: EditRoadKind;
   /** Модель для инструмента «Дом» (изба, кирпичный…); нет — простой объём растяжкой. */
   houseModel?: HouseModelId;
+  /** Кисть для инструмента «Рельеф». */
+  sculpt: SculptSettings;
   /** Короткое сообщение внизу экрана (почему нельзя поставить дом и т. п.). */
   notice?: { text: string; at: number };
   /** Дом для правки по id: уже изменённый или дом OSM в виде правки (регистрирует сцена). */
@@ -55,6 +67,7 @@ interface EditState {
   select: (selection: Selection | undefined) => void;
   setRoadKind: (kind: EditRoadKind) => void;
   setHouseModel: (model: HouseModelId | undefined) => void;
+  setSculpt: (patch: Partial<SculptSettings>) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -71,6 +84,7 @@ export const useEditStore = create<EditState>()((set, get) => ({
   past: [],
   future: [],
   roadKind: 'lane',
+  sculpt: { mode: 'raise', radius: 8, strength: 0.5 },
 
   load: (territoryId) =>
     set({ territoryId, edits: loadEdits(territoryId), past: [], future: [], selection: undefined, tool: undefined }),
@@ -78,6 +92,7 @@ export const useEditStore = create<EditState>()((set, get) => ({
   select: (selection) => set({ selection }),
   setRoadKind: (roadKind) => set({ roadKind }),
   setHouseModel: (houseModel) => set({ houseModel }),
+  setSculpt: (patch) => set({ sculpt: { ...get().sculpt, ...patch } }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();

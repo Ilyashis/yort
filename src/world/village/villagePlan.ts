@@ -17,6 +17,8 @@ export interface VillageHouse {
   seed: number;
   /** Прямоугольник под модель: локальные метры, против часовой, первая сторона — уличный фасад. */
   rect: Vec2[];
+  /** Цвета кровли и стен (#rrggbb) — из OSM (roof:colour, building:colour) или по съёмке с дрона. */
+  colors?: { roof?: string; wall?: string };
 }
 
 /** Вариантов окраски у каждой модели в деревне: меньше вариантов — меньше разных геометрий. */
@@ -39,8 +41,23 @@ function fits(id: HouseModelId, width: number, depth: number): boolean {
   );
 }
 
-/** Модель для дома OSM (контур — локальные метры) или undefined — оставить простым объёмом. */
-export function chooseVillageModel(id: string, outline: readonly Vec2[], roads: readonly (readonly Vec2[])[]): VillageHouse | undefined {
+/** Типы building=* OSM, которым годятся жилые модели (в деревнях почти всё — просто building=yes). */
+const HOUSE_TYPES = new Set(['yes', 'house', 'detached', 'residential', 'semidetached_house', 'bungalow', 'farm']);
+/** Хозпостройки — сараи, гаражи, бани, в том числе найденные по съёмке с дрона: только баня, не жилой дом. */
+const OUTBUILDING_TYPES = new Set(['shed', 'garage', 'garages', 'barn', 'hut', 'cabin', 'farm_auxiliary', 'service', 'sauna']);
+
+/**
+ * Модель для дома OSM (контур — локальные метры) или undefined — оставить простым объёмом.
+ * building — тег building=* (школа, мечеть, магазин — не изба: простым объёмом).
+ */
+export function chooseVillageModel(
+  id: string,
+  outline: readonly Vec2[],
+  roads: readonly (readonly Vec2[])[],
+  building = 'yes',
+): VillageHouse | undefined {
+  const outbuilding = OUTBUILDING_TYPES.has(building);
+  if (!outbuilding && !HOUSE_TYPES.has(building)) return undefined;
   const ring = openRing(outline);
   if (ring.length < 3) return undefined;
   const area = areaOf(ring);
@@ -52,7 +69,7 @@ export function chooseVillageModel(id: string, outline: readonly Vec2[], roads: 
   const rect = modelFootprint(ring, roads);
   const { width, depth } = modelPlacement(rect);
   const seed = 1 + (hashString(`${id}:variant`) % VILLAGE_VARIANTS);
-  if (area < OUTBUILDING_AREA) return { id, model: 'banya', seed, rect };
+  if (outbuilding || area < OUTBUILDING_AREA) return { id, model: 'banya', seed, rect };
 
   // Торцом к улице — дома с фронтоном на улицу; длинной стороной — дома с длинным фасадом.
   const gableToStreet = width <= depth * 1.08;
