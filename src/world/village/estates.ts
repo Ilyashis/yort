@@ -139,7 +139,7 @@ const HOUSE_AREA: [number, number] = [45, 320];
 /** Запас растра вокруг домов, м. */
 const MARGIN = 70;
 /** Упрощение границ: отклонение не больше, м. */
-const SIMPLIFY = 0.8;
+const SIMPLIFY = 3.5;
 
 const BLOCK = 1;
 const ROADSIDE = 2;

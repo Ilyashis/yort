@@ -1,65 +1,45 @@
-import { BuilderPanel } from './components/BuilderPanel';
-import { BuildingCard } from './components/BuildingCard';
-import { CityViewer } from './components/CityViewer';
-import { CornerControls } from './components/CornerControls';
+import { useEffect, useRef, useState } from 'react';
+import { Engine } from './engine/Engine';
+import { useStore } from './state/store';
 import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
-import { HelpPanel } from './components/HelpPanel';
-import { InfoPanel } from './components/InfoPanel';
-import { PlotPanel } from './components/PlotPanel';
-import { DriveHud } from './components/DriveHud';
-import { Minimap } from './components/Minimap';
-import { WalkHud } from './components/WalkHud';
-import { WalkPanel } from './components/WalkPanel';
-import { defaultTerritory, findTerritory } from './config/territory';
-import { isOnStreet, useAppStore } from './store/useAppStore';
+import { Minimap } from './ui/Minimap';
+import { BuildingCard, Dock, Help, Hud, Loader, PlaceBar, TimePanel, Tools } from './ui/Panels';
 
 export function App() {
-  const mode = useAppStore((s) => s.mode);
-  const building = useAppStore((s) => !!s.builder);
-  const loading = useAppStore((s) => s.status === 'loading');
-  const territory = useAppStore((s) => findTerritory(s.territoryId) ?? defaultTerritory);
-  // Данные съёмки с дрона меняют рельеф и дома — сцену проще собрать заново.
-  const surveyOn = useAppStore((s) => s.surveyOn);
-  // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
-  const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [engine, setEngine] = useState<Engine | null>(null);
+  const mode = useStore((s) => s.mode);
+  const loading = useStore((s) => s.loading);
+
+  useEffect(() => {
+    try {
+      const instance = new Engine(canvas.current!);
+      setEngine(instance);
+      return () => instance.dispose();
+    } catch (error) {
+      console.error(error);
+      useStore.getState().set({ loading: null, error: 'Браузер не дал доступ к WebGL — 3D-сцену показать не получится. Перезапустите браузер или включите аппаратное ускорение.' });
+    }
+  }, []);
 
   return (
-    <main className="app">
-      {/* Свой ключ у каждого населённого пункта: при переключении сцена собирается заново. */}
-      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}`} territory={territory} />
-      {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
-      <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
-        <div className="intro-title">
-          AI UFA
-          <span>Загружаем: {territory.shortName}…</span>
-        </div>
-      </div>
-      {isOnStreet(mode) ? (
+    <div className={`app mode-${mode}`}>
+      <canvas ref={canvas} className="scene" />
+      <PlaceBar />
+      {mode === 'overview' ? <BuildingCard /> : engine && !loading && <Minimap engine={engine} />}
+      {mode === 'overview' && !loading && (
         <>
-          {mode === 'drive' ? <DriveHud /> : <WalkHud />}
-          <Minimap />
-        </>
-      ) : (
-        <>
-          <div className="sidebar">
-            <InfoPanel />
-            {building ? (
-              <BuilderPanel />
-            ) : (
-              <>
-                <WalkPanel />
-                <PlotPanel />
-              </>
-            )}
-          </div>
-          <BuildingCard />
           <EditPanel />
           <EditorToolbar />
         </>
       )}
-      <HelpPanel />
-      <CornerControls />
-    </main>
+      <Hud />
+      <Tools />
+      <Dock />
+      <TimePanel />
+      <Help />
+      <Loader />
+    </div>
   );
 }

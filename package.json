@@ -1,8 +1,8 @@
 {
   "name": "citia",
   "private": true,
-  "version": "0.1.0",
-  "description": "AI UFA — прототип цифровой копии Уфы (three.js + OSM)",
+  "version": "2.0.0",
+  "description": "Citia v2 — 3D-копия Уфы и 1-го Иткулова в браузере (three.js + OSM)",
   "type": "module",
   "scripts": {
     "dev": "vite",
