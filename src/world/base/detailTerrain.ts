@@ -53,18 +53,18 @@ type XY = [number, number];
 function boxBlur(field: Float32Array, w: number, h: number, radius: number, along: boolean): void {
   const n = along ? w : h;
   const lines = along ? h : w;
+  const step = along ? 1 : w;
   const line = new Float32Array(n);
+  const scale = 1 / (2 * radius + 1);
   for (let l = 0; l < lines; l++) {
-    const at = (k: number) => (along ? l * w + k : k * w + l);
-    for (let k = 0; k < n; k++) line[k] = field[at(k)]!;
+    const first = along ? l * w : l;
+    for (let k = 0, at = first; k < n; k++, at += step) line[k] = field[at]!;
     let sum = 0;
-    for (let k = -radius; k <= radius; k++) sum += k >= 0 && k < n ? line[k]! : 0;
-    for (let k = 0; k < n; k++) {
-      field[at(k)] = sum / (2 * radius + 1);
-      const out = k - radius;
-      const into = k + radius + 1;
-      if (out >= 0) sum -= line[out]!;
-      if (into < n) sum += line[into]!;
+    for (let k = 0; k <= radius && k < n; k++) sum += line[k]!;
+    for (let k = 0, at = first; k < n; k++, at += step) {
+      field[at] = sum * scale;
+      if (k - radius >= 0) sum -= line[k - radius]!;
+      if (k + radius + 1 < n) sum += line[k + radius + 1]!;
     }
   }
 }
@@ -252,54 +252,55 @@ export class DetailHeights {
    * переход, а не ступенька, и за краем участков земля плавно возвращается к съёмке.
    */
   flattenPlots(plots: readonly (readonly (readonly [number, number])[])[]): void {
-    const target = new Map<number, number>();
-    for (const plot of plots) {
-      const ring = plot.map(this.toGrid);
-      const xs: number[] = [];
-      const ys: number[] = [];
-      const zs: number[] = [];
-      const nodes: number[] = [];
-      this.visit(ring, 0, (i, px, py, d) => {
-        if (d > 0 || target.has(i)) return;
-        xs.push(px);
-        ys.push(py);
-        zs.push(this.nodeHeight(i));
-        nodes.push(i);
-      });
-      const plane = fitPlane(xs, ys, zs);
-      if (!plane) continue;
-      nodes.forEach((i, k) => target.set(i, plane(xs[k]!, ys[k]!)));
+    const rings = plots.map((plot) => plot.map(this.toGrid)).filter((ring) => ring.length >= 3);
+    if (!rings.length) return;
+    // Плотный кусок сетки вокруг участков (с запасом на размытие): высота плоскостей и «доля участков».
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const ring of rings) {
+      for (const [x, y] of ring) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
     }
-    if (!target.size) return;
-    // Плотный кусок сетки вокруг участков: высота плоскостей и «доля участков» — размытием (два прохода окна).
     const pad = PLOT_BLEND * 3;
-    let c0 = Infinity;
-    let r0 = Infinity;
-    let c1 = -Infinity;
-    let r1 = -Infinity;
-    for (const i of target.keys()) {
-      const c = i % this.width;
-      const r = Math.floor(i / this.width);
-      c0 = Math.min(c0, c);
-      c1 = Math.max(c1, c);
-      r0 = Math.min(r0, r);
-      r1 = Math.max(r1, r);
-    }
-    const rx = Math.max(1, Math.round(PLOT_BLEND / this.cellX));
-    const ry = Math.max(1, Math.round(PLOT_BLEND / this.cellY));
-    c0 = Math.max(0, c0 - Math.ceil(pad / this.cellX));
-    r0 = Math.max(0, r0 - Math.ceil(pad / this.cellY));
-    c1 = Math.min(this.width - 1, c1 + Math.ceil(pad / this.cellX));
-    r1 = Math.min(this.height - 1, r1 + Math.ceil(pad / this.cellY));
+    const c0 = Math.max(0, Math.floor((minX - pad) / this.cellX));
+    const r0 = Math.max(0, Math.floor((minY - pad) / this.cellY));
+    const c1 = Math.min(this.width - 1, Math.ceil((maxX + pad) / this.cellX));
+    const r1 = Math.min(this.height - 1, Math.ceil((maxY + pad) / this.cellY));
+    if (c1 < c0 || r1 < r0) return;
     const w = c1 - c0 + 1;
     const h = r1 - r0 + 1;
     const value = new Float32Array(w * h);
     const share = new Float32Array(w * h);
-    for (const [i, v] of target) {
-      const k = (Math.floor(i / this.width) - r0) * w + ((i % this.width) - c0);
-      value[k] = v;
-      share[k] = 1;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const zs: number[] = [];
+    const ks: number[] = [];
+    for (const ring of rings) {
+      xs.length = ys.length = zs.length = ks.length = 0;
+      this.inside(ring, (i, px, py) => {
+        const c = i % this.width;
+        const k = ((i - c) / this.width - r0) * w + (c - c0);
+        if (share[k]) return;
+        xs.push(px);
+        ys.push(py);
+        zs.push(this.nodeHeight(i));
+        ks.push(k);
+      });
+      const plane = fitPlane(xs, ys, zs);
+      if (!plane) continue;
+      ks.forEach((k, n) => {
+        value[k] = plane(xs[n]!, ys[n]!);
+        share[k] = 1;
+      });
     }
+    const rx = Math.max(1, Math.round(PLOT_BLEND / this.cellX));
+    const ry = Math.max(1, Math.round(PLOT_BLEND / this.cellY));
     for (let pass = 0; pass < 2; pass++) {
       for (const field of [value, share]) {
         boxBlur(field, w, h, rx, true);
@@ -346,6 +347,35 @@ export class DetailHeights {
 
   /** Долгота/широта → метры сетки (x — на восток от west, y — на юг от north). */
   private readonly toGrid = ([lon, lat]: readonly [number, number]): XY => [(lon - this.bbox.west) * this.mPerDegLon, (this.bbox.north - lat) * M_PER_DEG_LAT];
+
+  /** Узлы внутри контура ring (м сетки) — построчно, без расстояний до каждой стороны: fn(узел, x, y). */
+  private inside(ring: XY[], fn: (i: number, px: number, py: number) => void): void {
+    if (ring.length < 3) return;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [, y] of ring) {
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    const r0 = Math.max(0, Math.ceil(y0 / this.cellY));
+    const r1 = Math.min(this.height - 1, Math.floor(y1 / this.cellY));
+    const xs: number[] = [];
+    for (let r = r0; r <= r1; r++) {
+      const py = r * this.cellY;
+      xs.length = 0;
+      for (let k = 0, m = ring.length - 1; k < ring.length; m = k++) {
+        const [xa, ya] = ring[k]!;
+        const [xb, yb] = ring[m]!;
+        if (ya > py !== yb > py) xs.push(xa + ((py - ya) * (xb - xa)) / (yb - ya));
+      }
+      xs.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const c0 = Math.max(0, Math.ceil(xs[k]! / this.cellX));
+        const c1 = Math.min(this.width - 1, Math.floor(xs[k + 1]! / this.cellX));
+        for (let c = c0; c <= c1; c++) fn(r * this.width + c, c * this.cellX, py);
+      }
+    }
+  }
 
   /** Узлы со съёмкой не дальше reach от контура ring (м сетки): fn(узел, x, y, расстояние; внутри — минус). */
   private visit(ring: XY[], reach: number, fn: (i: number, px: number, py: number, distance: number) => void): void {

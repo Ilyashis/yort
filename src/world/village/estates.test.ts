@@ -113,6 +113,21 @@ describe('planEstates', () => {
   });
 });
 
+describe('planEstates: лес и вода', () => {
+  // Лес — круг на 4000 точек радиусом 600 м, в нём поляна радиусом 90 м, где и стоит деревня.
+  const circle = (r: number, n: number): Vec2[] => Array.from({ length: n }, (_, k) => [60 + r * Math.cos((k / n) * 2 * Math.PI), r * Math.sin((k / n) * 2 * Math.PI)]);
+  const forest = { rings: [circle(600, 4000), circle(90, 2000)], margin: 0 };
+
+  it('огромный контур леса не тормозит, а на поляне участки есть', () => {
+    const t0 = performance.now();
+    const inForest = planEstates({ houses: [...north, ...south], sheds: [], blockers: [forest], roads: [road], tracks: [] });
+    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(inForest.plots.length).toBe(12);
+    // Участки — только на поляне (лес — ничья земля).
+    for (const plot of inForest.plots) for (const [x, y] of plot.ring) expect(Math.hypot(x - 60, y)).toBeLessThan(90 + 1.5);
+  });
+});
+
 describe('simplify', () => {
   it('лесенка растра — в прямую', () => {
     const stairs: Vec2[] = [];

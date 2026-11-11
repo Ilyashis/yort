@@ -29,7 +29,7 @@ export interface EstateInput {
   /** Хозпостройки (OSM и съёмка): стоят внутри участков, заменяют часть придуманных построек. */
   sheds: readonly EstateBuilding[];
   /** Ничья земля: общественные здания, вода, лес (с запасом margin, м). */
-  blockers: readonly { ring: readonly Vec2[]; margin: number }[];
+  blockers: readonly { rings: readonly (readonly Vec2[])[]; margin: number }[];
   roads: readonly EstateRoad[];
   /** Просёлки и тропы: участки их не перегораживают. */
   tracks: readonly EstateRoad[];
@@ -217,10 +217,10 @@ export function planEstates(input: EstateInput): EstatePlan {
     }
   }
   for (const b of input.blockers) {
-    grid.polygon(openRing(b.ring), b.margin, (i) => (grid.flags[i]! |= BLOCK));
+    grid.polygon(b.rings.map(openRing), b.margin, (i) => (grid.flags[i]! |= BLOCK));
   }
   const buildings = [...houses, ...input.sheds.map((s) => ({ id: s.id, ring: openRing(s.ring) }))];
-  for (const b of buildings) grid.polygon(b.ring, 0.3, (i) => (grid.flags[i]! |= BUILDING));
+  for (const b of buildings) grid.polygon([b.ring], 0.3, (i) => (grid.flags[i]! |= BUILDING));
 
   // Оси каждого дома: ближайшая улица, уличный забор, глубина.
   const sites = houses.map((house, index) => siteOf(house, index, segments));
@@ -253,7 +253,7 @@ export function planEstates(input: EstateInput): EstatePlan {
   }
   // Под самим домом — всегда его участок.
   for (const site of sites) {
-    grid.polygon(site.house.ring, 0.4, (i) => {
+    grid.polygon([site.house.ring], 0.4, (i) => {
       owner[i] = site.index;
       cost[i] = -1;
     });
@@ -274,7 +274,7 @@ export function planEstates(input: EstateInput): EstatePlan {
   }
 
   const taken = new Uint8Array(grid.w * grid.h);
-  for (const b of buildings) grid.polygon(b.ring, 0.8, (i) => (taken[i] = 1));
+  for (const b of buildings) grid.polygon([b.ring], 0.8, (i) => (taken[i] = 1));
 
   // Глубина каждого участка (дальняя клетка от уличного забора) — одним проходом.
   const maxDepth = new Float64Array(sites.length);
@@ -419,19 +419,72 @@ class Grid {
 
   /** Клетки не дальше reach от отрезка: fn(клетка, расстояние). */
   nearSegment(a: Vec2, b: Vec2, reach: number, fn: (index: number, distance: number) => void): void {
-    this.box([add(a, [-reach, -reach]), add(a, [reach, reach]), add(b, [-reach, -reach]), add(b, [reach, reach])], (i, p) => {
-      const d = segmentDistance(p, a, b);
-      if (d < reach) fn(i, d);
-    });
+    const i0 = Math.max(0, Math.floor((Math.min(a[0], b[0]) - reach - this.x0) / CELL));
+    const i1 = Math.min(this.w - 1, Math.ceil((Math.max(a[0], b[0]) + reach - this.x0) / CELL));
+    const j0 = Math.max(0, Math.floor((Math.min(a[1], b[1]) - reach - this.y0) / CELL));
+    const j1 = Math.min(this.h - 1, Math.ceil((Math.max(a[1], b[1]) + reach - this.y0) / CELL));
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const length2 = dx * dx + dy * dy;
+    for (let j = j0; j <= j1; j++) {
+      const py = this.y0 + (j + 0.5) * CELL - a[1];
+      for (let i = i0; i <= i1; i++) {
+        const px = this.x0 + (i + 0.5) * CELL - a[0];
+        const t = length2 > 0 ? Math.min(Math.max((px * dx + py * dy) / length2, 0), 1) : 0;
+        const d = Math.hypot(px - dx * t, py - dy * t);
+        if (d < reach) fn(j * this.w + i, d);
+      }
+    }
   }
 
-  /** Клетки внутри контура или не дальше grow от него. */
-  polygon(ring: readonly Vec2[], grow: number, fn: (index: number) => void): void {
-    if (ring.length < 3) return;
-    const pad: Vec2[] = ring.flatMap((p) => [add(p, [-grow, -grow]), add(p, [grow, grow])]);
-    this.box(pad, (i, p) => {
-      if (insidePolygon(p, ring) || (grow > 0 && ringDistance(p, ring) <= grow)) fn(i);
-    });
+  /**
+   * Клетки внутри многоугольника (внешний контур и дыры — по правилу чёт-нечет) или не дальше grow от его
+   * краёв. Построчно: пересечения строки с рёбрами, а запас — только у рёбер. Лес и река бывают контурами
+   * в тысячи точек на километры — проверять каждую клетку против каждой точки нельзя.
+   */
+  polygon(rings: readonly (readonly Vec2[])[], grow: number, fn: (index: number) => void): void {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const ring of rings) {
+      for (const [, y] of ring) {
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (!Number.isFinite(minY)) return;
+    const j0 = Math.max(0, Math.floor((minY - this.y0) / CELL));
+    const j1 = Math.min(this.h - 1, Math.ceil((maxY - this.y0) / CELL));
+    if (j1 < j0) return;
+    // Пересечения строк с рёбрами — по строкам, которые ребро пересекает (а не все рёбра на каждую строку).
+    const rows: number[][] = Array.from({ length: j1 - j0 + 1 }, () => []);
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      for (let k = 0, m = ring.length - 1; k < ring.length; m = k++) {
+        const [xa, ya] = ring[k]!;
+        const [xb, yb] = ring[m]!;
+        if (ya === yb) continue;
+        const lo = Math.max(j0, Math.ceil((Math.min(ya, yb) - this.y0) / CELL - 0.5));
+        const hi = Math.min(j1, Math.floor((Math.max(ya, yb) - this.y0) / CELL - 0.5));
+        for (let j = lo; j <= hi; j++) {
+          const y = this.y0 + (j + 0.5) * CELL;
+          if (ya > y !== yb > y) rows[j - j0]!.push(xa + ((y - ya) * (xb - xa)) / (yb - ya));
+        }
+      }
+    }
+    for (let j = j0; j <= j1; j++) {
+      const xs = rows[j - j0]!;
+      if (xs.length < 2) continue;
+      xs.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const i0 = Math.max(0, Math.ceil((xs[k]! - this.x0) / CELL - 0.5));
+        const i1 = Math.min(this.w - 1, Math.floor((xs[k + 1]! - this.x0) / CELL - 0.5));
+        for (let i = i0; i <= i1; i++) fn(j * this.w + i);
+      }
+    }
+    if (grow <= 0) return;
+    for (const ring of rings) {
+      for (let k = 0; k < ring.length; k++) this.nearSegment(ring[k]!, ring[(k + 1) % ring.length]!, grow, (i) => fn(i));
+    }
   }
 }
 
@@ -1237,18 +1290,3 @@ function segmentDistance(p: Vec2, a: Vec2, b: Vec2): number {
   return Math.hypot(p[0] - q[0], p[1] - q[1]);
 }
 
-function ringDistance(p: Vec2, ring: readonly Vec2[]): number {
-  let min = Infinity;
-  for (let i = 0; i < ring.length; i++) min = Math.min(min, segmentDistance(p, ring[i]!, ring[(i + 1) % ring.length]!));
-  return min;
-}
-
-function insidePolygon([x, y]: Vec2, ring: readonly Vec2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i]!;
-    const [xj, yj] = ring[j]!;
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}

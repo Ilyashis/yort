@@ -141,18 +141,15 @@ function estateInput(features: readonly BaseBuildingFeature[], environment: Envi
       const id = `${f.properties.id}:${i}`;
       if (VILLAGE_HOUSE_TYPES.has(f.properties.building) && area >= SHED_AREA && area <= HOUSE_AREA) input.houses.push({ id, ring });
       else if (area < SHED_AREA * 2.5 && !PUBLIC_TYPES.has(f.properties.building)) input.sheds.push({ id, ring });
-      else input.blockers.push({ ring, margin: 2.5 });
+      else input.blockers.push({ rings: [ring], margin: 2.5 });
     });
   }
   for (const feature of environment.ground) {
     const water = feature.properties.kind === 'water';
     const wood = feature.properties.kind === 'green' && feature.properties.cover === 'wood';
     if (!water && !wood) continue;
-    for (const rings of polygonsOfGround(feature))
-      input.blockers.push({
-        ring: (rings[0] ?? []).map(frame.toLocal),
-        margin: water ? 3 : 0,
-      });
+    // Все кольца (с дырами — полянами в лесу) — ничья земля только внутри контура.
+    for (const rings of polygonsOfGround(feature)) input.blockers.push({ rings: rings.map((ring) => ring.map(frame.toLocal)), margin: water ? 3 : 0 });
   }
   return input;
 }
