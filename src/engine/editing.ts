@@ -178,7 +178,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   store.setResolver((id) => editor.resolve(id));
   store.setModelApplier((b, model) => editor.applyModel(b, model));
 
-  let lastLevel: unknown[] = [useEditStore.getState().edits.spots, useEditStore.getState().edits.plotLifts, useEditStore.getState().edits.buildings, useEditStore.getState().edits.removedBuildings, useEditStore.getState().edits.roads, useEditStore.getState().edits.removedRoads];
+  let lastLevel: unknown[] = [useEditStore.getState().edits.shapes, useEditStore.getState().edits.spots, useEditStore.getState().edits.plotLifts, useEditStore.getState().edits.buildings, useEditStore.getState().edits.removedBuildings, useEditStore.getState().edits.roads, useEditStore.getState().edits.removedRoads];
   let lastRoads: unknown[] = [];
   let lastObstacles: unknown[] = [];
   const same = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -205,7 +205,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     syncTerrain();
     const { edits, selection } = useEditStore.getState();
     // Подняли участок, подвинули дом или дорогу — площадки и полотно улиц пересчитываются.
-    const levelKey = [edits.spots, edits.plotLifts, edits.buildings, edits.removedBuildings, edits.roads, edits.removedRoads];
+    const levelKey = [edits.shapes, edits.spots, edits.plotLifts, edits.buildings, edits.removedBuildings, edits.roads, edits.removedRoads];
     if (!same(levelKey, lastLevel)) {
       lastLevel = levelKey;
       const moved = d.level(edits);

@@ -364,3 +364,86 @@ export function applySpots(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz' 
   });
   for (const [k, [sum, weight, fade]] of touched) lev[k] += (sum / weight) * fade;
 }
+
+export interface LevelShape {
+  kind: 'plane' | 'smooth' | 'natural';
+  x: number;
+  z: number;
+  radius: number;
+  /** Какая доля радиуса уходит на плавный переход к земле вокруг: 0,12 — терраса с крутым краем, 0,4 — мягко. */
+  edge: number;
+  /** Плоскость: высота в центре (в метрах сетки высот), уклон в процентах и куда она поднимается (градусы от севера по часовой). */
+  height?: number;
+  slope?: number;
+  bearing?: number;
+}
+
+/**
+ * Правки рельефа по областям, по порядку: плоскость с заданной высотой и уклоном (ровная площадка и
+ * терраса — она же с нулевым уклоном), сглаживание, возврат к естественной земле. Меняет lev на месте.
+ */
+export function applyShapes(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz' | 'natural'>, lev: Float32Array, shapes: readonly LevelShape[]): void {
+  const { rect, step, nx, nz, natural } = grid;
+  for (const shape of shapes) {
+    const i0 = Math.max(0, Math.floor((shape.x - shape.radius - rect.x0) / step)), i1 = Math.min(nx - 1, Math.ceil((shape.x + shape.radius - rect.x0) / step));
+    const j0 = Math.max(0, Math.floor((shape.z - shape.radius - rect.z0) / step)), j1 = Math.min(nz - 1, Math.ceil((shape.z + shape.radius - rect.z0) / step));
+    const edge = Math.min(0.9, Math.max(0.05, shape.edge));
+    const b = ((shape.bearing ?? 0) * Math.PI) / 180;
+    const ux = Math.sin(b), uz = -Math.cos(b);
+    // Сглаживание берёт среднее по соседям из земли «до» — поэтому сначала снимок.
+    const reach = Math.max(1, Math.round((shape.radius * 0.3) / step));
+    const before = shape.kind === 'smooth' ? Float32Array.from(lev) : lev;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const x = rect.x0 + i * step, z = rect.z0 + j * step;
+        const w = 1 - smooth(1 - edge, 1, Math.hypot(x - shape.x, z - shape.z) / shape.radius);
+        if (w <= 0) continue;
+        const k = j * nx + i;
+        let target: number;
+        if (shape.kind === 'natural') target = natural[k];
+        else if (shape.kind === 'plane') target = (shape.height ?? natural[k] + lev[k]) + ((shape.slope ?? 0) / 100) * ((x - shape.x) * ux + (z - shape.z) * uz);
+        else {
+          let sum = 0, count = 0;
+          for (let dj = -reach; dj <= reach; dj++) {
+            for (let di = -reach; di <= reach; di++) {
+              const ii = i + di, jj = j + dj;
+              if (ii < 0 || jj < 0 || ii >= nx || jj >= nz) continue;
+              sum += natural[jj * nx + ii] + before[jj * nx + ii];
+              count++;
+            }
+          }
+          target = sum / count;
+        }
+        lev[k] += (target - natural[k] - lev[k]) * w;
+      }
+    }
+  }
+}
+
+/** Плоскость, лучше всего ложащаяся на землю в круге: высота в центре, уклон (%) и куда поднимается (° от севера). */
+export function fitPlaneAt(heightAt: (x: number, z: number) => number, x: number, z: number, radius: number): { height: number; slope: number; bearing: number } {
+  let n = 0, sx = 0, sz = 0, sh = 0, sxx = 0, szz = 0, sxz = 0, sxh = 0, szh = 0;
+  const cell = radius / 8;
+  for (let dz = -radius; dz <= radius; dz += cell) {
+    for (let dx = -radius; dx <= radius; dx += cell) {
+      if (dx * dx + dz * dz > radius * radius) continue;
+      const h = heightAt(x + dx, z + dz);
+      n++;
+      sx += dx;
+      sz += dz;
+      sh += h;
+      sxx += dx * dx;
+      szz += dz * dz;
+      sxz += dx * dz;
+      sxh += dx * h;
+      szh += dz * h;
+    }
+  }
+  // Точки стоят симметрично вокруг центра, поэтому суммы sx, sz ≈ 0 и уравнения распадаются.
+  const det = sxx * szz - sxz * sxz;
+  const gx = det ? ((sxh - (sx * sh) / n) * szz - (szh - (sz * sh) / n) * sxz) / det : 0;
+  const gz = det ? ((szh - (sz * sh) / n) * sxx - (sxh - (sx * sh) / n) * sxz) / det : 0;
+  const slope = Math.hypot(gx, gz) * 100;
+  const bearing = slope < 0.05 ? 0 : (((Math.atan2(gx, -gz) * 180) / Math.PI) + 360) % 360;
+  return { height: sh / n, slope, bearing };
+}

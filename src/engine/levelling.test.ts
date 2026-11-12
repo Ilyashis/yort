@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { P2 } from '../core/geo';
-import { applySpots, computeLevels, monotone, type LevelInput } from './levelling';
+import { applyShapes, applySpots, computeLevels, fitPlaneAt, monotone, type LevelInput } from './levelling';
 
 /** Сетка 3 м на склоне: земля поднимается на восток, с рябью. */
 function grid(height: (x: number, z: number) => number, size = 120): Omit<LevelInput, 'houses' | 'roads' | 'water'> {
@@ -71,6 +71,35 @@ describe('выравнивание земли', () => {
     expect(lev[k(63, 60)]).toBeLessThan(2);
     expect(lev[k(60, 90)]).toBe(0);
     expect(lev[k(30, 60)]).toBe(0);
+  });
+
+  it('плоскость по области: ровно внутри, с заданным уклоном, за краем земля прежняя', () => {
+    const g = grid(slope);
+    const lev = new Float32Array(g.natural.length);
+    const k = (x: number, z: number) => (z / 3) * g.nx + x / 3;
+    // Поднимается на восток (90°) на 10 %.
+    applyShapes(g, lev, [{ kind: 'plane', x: 60, z: 60, radius: 20, edge: 0.3, height: 7, slope: 10, bearing: 90 }]);
+    const h = (x: number, z: number) => g.natural[k(x, z)] + lev[k(x, z)];
+    expect(h(60, 60)).toBeCloseTo(7, 4);
+    expect(h(66, 60)).toBeCloseTo(7.6, 4);
+    expect(h(60, 66)).toBeCloseTo(7, 4);
+    expect(lev[k(90, 60)]).toBe(0);
+    // «Как было» возвращает естественную землю.
+    applyShapes(g, lev, [{ kind: 'natural', x: 60, z: 60, radius: 30, edge: 0.1 }]);
+    expect(Math.abs(lev[k(60, 60)])).toBeLessThan(1e-5);
+  });
+
+  it('сглаживание убирает рябь, плоскость по земле находит её уклон', () => {
+    const g = grid(slope);
+    const lev = new Float32Array(g.natural.length);
+    const k = (x: number, z: number) => (z / 3) * g.nx + x / 3;
+    const rough = (get: (x: number) => number) => Math.abs(get(57) - 2 * get(60) + get(63));
+    applyShapes(g, lev, [{ kind: 'smooth', x: 60, z: 60, radius: 24, edge: 0.3 }]);
+    expect(rough((x) => g.natural[k(x, 60)] + lev[k(x, 60)])).toBeLessThan(rough((x) => g.natural[k(x, 60)]));
+    const plane = fitPlaneAt((x, z) => x * 0.08 + z * 0, 60, 60, 12);
+    expect(plane.slope).toBeCloseTo(8, 3);
+    expect(plane.bearing).toBeCloseTo(90, 3);
+    expect(plane.height).toBeCloseTo(4.8, 3);
   });
 
   it('монотонная последовательность', () => {

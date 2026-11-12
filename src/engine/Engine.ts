@@ -31,7 +31,7 @@ import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
 import { createGrass, type Grass } from './grass';
-import { applySpots, computeLevels, type LevelHouse } from './levelling';
+import { applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
 import { probe } from './probe';
 import { createTrees } from './trees';
 import { createEditing, loadSculpt, roadsWithEdits } from './editing';
@@ -315,6 +315,10 @@ export class Engine {
         const roads = city ? [] : roadsWithEdits(world, edits).roads;
         const grid = { rect: hm.rect, step: hm.step, nx: hm.nx, nz: hm.nz, natural: hm.natural };
         const { lev } = computeLevels({ ...grid, houses, roads, water });
+        applyShapes(grid, lev, (edits.shapes ?? []).map((s) => {
+          const [x, z] = world.frame.xz(s.at[0], s.at[1]);
+          return { ...s, x, z, height: s.height === undefined ? undefined : s.height - hm.origin };
+        }));
         applySpots(grid, lev, (edits.spots ?? []).map((s) => {
           const [x, z] = world.frame.xz(s.at[0], s.at[1]);
           return { x, z, height: s.height - hm.origin, radius: s.radius };

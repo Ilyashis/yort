@@ -20,6 +20,9 @@ import {
   Scene,
   Shape,
   SphereGeometry,
+  Sprite,
+  SpriteMaterial,
+  CanvasTexture,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -33,6 +36,8 @@ export interface BlockData {
   size: number;
   /** Высота земли в точке мира, м. */
   heightAt: (x: number, z: number) => number;
+  /** Сколько прибавить к высоте, чтобы получить метры над уровнем моря (для подписей). */
+  origin: number;
   /** Контуры домов: у каждого первое кольцо — внешнее. */
   buildings: readonly P2[][][];
   roads: readonly { pts: readonly P2[]; width: number }[];
@@ -40,6 +45,10 @@ export interface BlockData {
 
 export interface BlockMarks {
   spots: readonly { id: string; x: number; z: number; radius: number }[];
+  /** Области правок: круг, у плоскости с уклоном — стрелка вверх по склону (° от севера). */
+  areas?: readonly { id: string; x: number; z: number; radius: number; uphill?: number }[];
+  /** Сдвиг горизонтали, который сейчас тянут мышью: откуда и куда. */
+  pull?: readonly [P2, P2];
   selected?: string;
   section?: readonly [P2, P2?];
 }
@@ -63,6 +72,11 @@ export class ReliefBlock {
   private readonly camera = new PerspectiveCamera(32, 1, 1, 5000);
   private readonly block = new Group();
   private readonly marks = new Group();
+  /** Подписи горизонталей и метка севера: не растягиваются вместе с высотами. */
+  private readonly labels = new Group();
+  private heights?: Float32Array;
+  /** Тянуть по блоку — не вращать его, а вести линию (сдвиг горизонтали). */
+  lineDrag = false;
   private readonly uniforms = { uRange: { value: new Vector2(0, 1) }, uStep: { value: 0.5 } };
   private readonly material: MeshStandardMaterial;
   private top?: Mesh;
@@ -76,14 +90,19 @@ export class ReliefBlock {
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly events: { onPick: (x: number, z: number) => void; onHover: (point: { x: number; z: number; height: number } | undefined) => void },
+    private readonly events: {
+      onPick: (x: number, z: number) => void;
+      onHover: (point: { x: number; z: number; height: number } | undefined) => void;
+      /** Линию ведут по блоку: from → to; done — кнопку отпустили. */
+      onLine?: (from: P2, to: P2, done: boolean) => void;
+    },
   ) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.scene.add(new AmbientLight(0xffffff, 1.1));
     const sun = new DirectionalLight(0xffffff, 2.4);
     sun.position.set(-0.6, 1, 0.45);
-    this.scene.add(sun, this.block);
+    this.scene.add(sun, this.block, this.labels);
     this.block.add(this.marks);
 
     this.material = new MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: DoubleSide });
@@ -116,12 +135,26 @@ export class ReliefBlock {
     };
 
     const dom = canvas;
-    let drag: { x: number; y: number; moved: number } | undefined;
+    let drag: { x: number; y: number; moved: number; from?: P2; to?: P2 } | undefined;
     const down = (e: PointerEvent) => {
       drag = { x: e.clientX, y: e.clientY, moved: 0 };
+      // Линию ведём левой кнопкой; с Shift или правой кнопкой блок по-прежнему вращается.
+      if (this.lineDrag && e.button === 0 && !e.shiftKey) {
+        const hit = this.pick(e.clientX, e.clientY);
+        if (hit) drag.from = [hit.x, hit.z];
+      }
       dom.setPointerCapture(e.pointerId);
     };
     const move = (e: PointerEvent) => {
+      if (drag?.from) {
+        const hit = this.pick(e.clientX, e.clientY);
+        if (hit) {
+          drag.to = [hit.x, hit.z];
+          this.events.onLine?.(drag.from, drag.to, false);
+          this.events.onHover({ ...hit, height: this.data!.heightAt(hit.x, hit.z) });
+        }
+        return;
+      }
       if (drag) {
         const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
         drag.moved += Math.abs(dx) + Math.abs(dy);
@@ -138,6 +171,12 @@ export class ReliefBlock {
       this.events.onHover(hit && { ...hit, height: this.data!.heightAt(hit.x, hit.z) });
     };
     const up = (e: PointerEvent) => {
+      if (drag?.from) {
+        const { from, to } = drag;
+        drag = undefined;
+        if (to && Math.hypot(to[0] - from[0], to[1] - from[1]) > 0.5) this.events.onLine?.(from, to, true);
+        return;
+      }
       const click = drag && drag.moved <= 4;
       drag = undefined;
       if (!click) return;
@@ -155,6 +194,8 @@ export class ReliefBlock {
     dom.addEventListener('pointerup', up);
     dom.addEventListener('pointerleave', leave);
     dom.addEventListener('wheel', wheel, { passive: false });
+    const menu = (e: Event) => e.preventDefault();
+    dom.addEventListener('contextmenu', menu);
     const observer = new ResizeObserver(() => this.render());
     observer.observe(dom);
     this.cleanup.push(() => {
@@ -163,6 +204,7 @@ export class ReliefBlock {
       dom.removeEventListener('pointerup', up);
       dom.removeEventListener('pointerleave', leave);
       dom.removeEventListener('wheel', wheel);
+      dom.removeEventListener('contextmenu', menu);
       observer.disconnect();
     });
   }
@@ -189,6 +231,7 @@ export class ReliefBlock {
     }
     this.min = min;
     this.max = max;
+    this.heights = heights;
     this.uniforms.uRange.value.set(min, max);
     // Подошва блока — ниже самой низкой точки на шестую часть перепада, но не тоньше метра.
     const floor = min - Math.max(1, (max - min) / 6);
@@ -263,6 +306,7 @@ export class ReliefBlock {
       geometry.setAttribute('position', new BufferAttribute(new Float32Array(roadPoints), 3));
       this.block.add(new LineSegments(geometry, new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 })));
     }
+    this.label();
     this.render();
   }
 
@@ -297,6 +341,43 @@ export class ReliefBlock {
         this.marks.add(new Line(geometry, new LineBasicMaterial({ color: spot.id === marks.selected ? 0xffc857 : 0xffffff, transparent: true, opacity: 0.55 })));
       }
     }
+    const circle = (x0: number, z0: number, radius: number, colour: number, opacity: number) => {
+      const ring: number[] = [];
+      for (let k = 0; k <= 56; k++) {
+        const a = (k / 56) * Math.PI * 2, x = x0 + Math.cos(a) * radius, z = z0 + Math.sin(a) * radius;
+        if (Math.abs(x - data.x) > data.size / 2 || Math.abs(z - data.z) > data.size / 2) continue;
+        ring.push(x - data.x, y(x, z) + 0.12, z - data.z);
+      }
+      if (ring.length < 6) return;
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(new Float32Array(ring), 3));
+      this.marks.add(new Line(geometry, new LineBasicMaterial({ color: colour, transparent: true, opacity })));
+    };
+    const stroke = (from: P2, to: P2, colour: number) => {
+      const line: number[] = [];
+      for (let k = 0; k <= 40; k++) {
+        const x = from[0] + ((to[0] - from[0]) * k) / 40, z = from[1] + ((to[1] - from[1]) * k) / 40;
+        line.push(x - data.x, y(x, z) + 0.15, z - data.z);
+      }
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(new Float32Array(line), 3));
+      this.marks.add(new Line(geometry, new LineBasicMaterial({ color: colour })));
+    };
+    for (const area of marks.areas ?? []) {
+      const on = area.id === marks.selected;
+      const colour = on ? 0xffc857 : 0x7fd4ff;
+      dot(area.x, area.z, colour, on ? r : r * 0.7);
+      circle(area.x, area.z, area.radius, colour, on ? 0.95 : 0.6);
+      if (area.uphill !== undefined) {
+        const b = (area.uphill * Math.PI) / 180;
+        stroke([area.x, area.z], [area.x + Math.sin(b) * area.radius * 0.85, area.z - Math.cos(b) * area.radius * 0.85], colour);
+      }
+    }
+    if (marks.pull) {
+      dot(marks.pull[0][0], marks.pull[0][1], 0xff5a4f, r * 0.7);
+      dot(marks.pull[1][0], marks.pull[1][1], 0xffc857, r);
+      stroke(marks.pull[0], marks.pull[1], 0xffc857);
+    }
     const [a, b] = marks.section ?? [];
     if (a) dot(a[0], a[1], 0xff5a4f, r);
     if (a && b) {
@@ -320,7 +401,68 @@ export class ReliefBlock {
 
   setContourStep(step: number): void {
     this.uniforms.uStep.value = step;
+    this.label();
     this.render();
+  }
+
+  /** Куда на земле смотрят «вправо» и «от себя» на экране — чтобы двигать кусок стрелками. */
+  heading(): { right: P2; away: P2 } {
+    return { right: [Math.cos(this.yaw), -Math.sin(this.yaw)], away: [-Math.sin(this.yaw), -Math.cos(this.yaw)] };
+  }
+
+  private sprite(text: string, colour: string, width: number): Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 192;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = '600 38px Inter, -apple-system, Segoe UI, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = 'rgba(12, 14, 18, 0.85)';
+    ctx.strokeText(text, 96, 34);
+    ctx.fillStyle = colour;
+    ctx.fillText(text, 96, 34);
+    const sprite = new Sprite(new SpriteMaterial({ map: new CanvasTexture(canvas), depthTest: false, transparent: true }));
+    sprite.scale.set(width, width / 3, 1);
+    sprite.renderOrder = 5;
+    return sprite;
+  }
+
+  /** Подписи высот на утолщённых горизонталях (каждой пятой) и метка севера. */
+  private label(): void {
+    const data = this.data, heights = this.heights;
+    if (!data || !heights) return;
+    for (const child of [...this.labels.children]) {
+      this.labels.remove(child);
+      const material = (child as Sprite).material;
+      material.map?.dispose();
+      material.dispose();
+    }
+    const { size } = data;
+    const cell = size / (N - 1);
+    const major = this.uniforms.uStep.value * 5;
+    const digits = major % 1 === 0 ? 0 : major * 10 % 1 === 0 ? 1 : 2;
+    const placed: [number, number][] = [];
+    // Идём по трём линиям через блок и подписываем горизонталь там, где линия её пересекает.
+    for (const j of [Math.round(N * 0.25), Math.round(N * 0.5), Math.round(N * 0.75)]) {
+      for (let i = 2; i < N - 3 && placed.length < 18; i++) {
+        const h0 = heights[j * N + i], h1 = heights[j * N + i + 1];
+        const level = Math.ceil(Math.min(h0 + data.origin, h1 + data.origin) / major) * major;
+        if (level > Math.max(h0 + data.origin, h1 + data.origin) || h0 === h1) continue;
+        const x = -size / 2 + (i + (level - data.origin - h0) / (h1 - h0)) * cell, z = -size / 2 + j * cell;
+        if (placed.some(([px, pz]) => Math.hypot(px - x, pz - z) < size / 6)) continue;
+        placed.push([x, z]);
+        const sprite = this.sprite(level.toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits }), '#f3ead2', size / 7);
+        sprite.position.set(x, 0, z);
+        sprite.userData.h = level - data.origin - this.min;
+        this.labels.add(sprite);
+      }
+    }
+    const north = this.sprite('С ↑', '#ffc857', size / 8);
+    north.position.set(0, 0, -size / 2 - size / 16);
+    north.userData.h = heights[Math.floor(N / 2)] - this.min;
+    this.labels.add(north);
   }
 
   /** Точка земли под указателем (мир). */
@@ -347,10 +489,13 @@ export class ReliefBlock {
       this.block.scale.set(1, this.exaggeration, 1);
       // Отметки остаются круглыми при любом преувеличении высот.
       for (const child of this.marks.children) if (child.userData.round) child.scale.set(1, 1 / this.exaggeration, 1);
+      for (const child of this.labels.children) child.position.y = child.userData.h * this.exaggeration + data.size / 60;
       const tall = (this.max - this.min) * this.exaggeration;
-      const distance = (data.size * 1.9) / this.zoom / Math.min(1, this.camera.aspect * 0.75);
+      // Кадр — по всему блоку: высокий склон отодвигает камеру, чтобы блок не вылезал из окна.
+      const extent = Math.hypot(data.size, tall * 1.25);
+      const distance = (extent * 1.9) / this.zoom / Math.min(1, this.camera.aspect * 0.75);
       // Смотрим чуть ниже середины блока: внизу окна лежит подсказка.
-      const target = new Vector3(0, tall * 0.3 - data.size * 0.07, 0);
+      const target = new Vector3(0, tall * 0.4 - extent * 0.07, 0);
       this.camera.position.set(
         target.x + Math.sin(this.yaw) * Math.cos(this.pitch) * distance,
         target.y + Math.sin(this.pitch) * distance,
@@ -368,6 +513,7 @@ export class ReliefBlock {
     cancelAnimationFrame(this.frame);
     this.cleanup.forEach((fn) => fn());
     this.block.traverse((o) => (o as Mesh).geometry?.dispose());
+    for (const child of this.labels.children) (child as Sprite).material.map?.dispose();
     this.material.dispose();
     this.renderer.dispose();
   }
