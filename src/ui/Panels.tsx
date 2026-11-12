@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { TERRITORIES, findTerritory } from '../core/data';
 import { CAR_COLOURS } from '../engine/controls';
+import { probe } from '../engine/probe';
 import { useStore, type Mode } from '../state/store';
 
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
@@ -18,6 +19,7 @@ const ICONS = {
   sound: 'M4 9.5h3l4.5-4v13l-4.5-4H4zM15 9a4 4 0 0 1 0 6M17.5 6.5a7.5 7.5 0 0 1 0 11',
   mute: 'M4 9.5h3l4.5-4v13l-4.5-4H4zM15.5 9.5l5 5M20.5 9.5l-5 5',
   top: 'M4 4h16v16H4zM4 12h16M12 4v16',
+  relief: 'M3 18l5.5-9 3.5 5 3-4 6 8zM3 21h18',
   tilt: 'M3 17l9-12 9 12zM7.5 11h9',
   close: 'M6 6l12 12M18 6L6 18',
 };
@@ -129,6 +131,17 @@ export function Tools() {
       {mode === 'overview' && (
         <button className="panel round" title={topView ? 'Вид под углом' : 'Вид сверху'} onClick={() => set({ topView: !topView })}>
           <Icon d={topView ? ICONS.tilt : ICONS.top} />
+        </button>
+      )}
+      {mode === 'overview' && (
+        <button
+          className="panel round" title="Рельеф: блок-модель, горизонтали, отметки высот и разрез"
+          onClick={() => {
+            const focus = probe.current?.focus();
+            if (focus) set({ relief: { ...focus, size: 120 } });
+          }}
+        >
+          <Icon d={ICONS.relief} />
         </button>
       )}
       {mode === 'drive' && (

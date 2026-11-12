@@ -35,9 +35,8 @@ export interface SculptState {
 const localFrame = (world: World): LocalFrame => createLocalFrame([world.frame.lon0, world.frame.lat0]);
 export const roadKey = (index: number) => `road/${index}`;
 
-/** Загрузить правки места и сразу повторить мазки кисти — всё остальное строится уже на поправленной земле. */
+/** Повторить мазки кисти из правок места (правки уже загружены) — всё остальное строится на поправленной земле. */
 export function loadSculpt(world: World, hm: HeightMap): SculptState {
-  useEditStore.getState().load(world.territory.id);
   const strokes = useEditStore.getState().edits.terrain;
   const field = strokes.length ? replayStrokes(strokes, localFrame(world).toLocal, (x, y) => hm.atBase(x, -y)) : new SculptField();
   if (strokes.length) hm.applyOffsets((x, z) => field.offsetAt(x, -z));
@@ -70,6 +69,8 @@ export interface EditingDeps {
   sculpt: SculptState;
   /** Земля поменялась в прямоугольнике (координаты мира): сетка рельефа и всё, что на ней стоит. */
   groundChanged: (area: Rect) => void;
+  /** Пересчитать выравнивание земли (площадки домов, улицы) по правкам; возвращает, что сдвинулось. */
+  level: (edits: Edits) => { area: Rect; delta: (x: number, z: number) => number } | undefined;
   /** Дороги или дворы поменялись: маски земли, фонари, разметка. */
   roadsChanged: (edits: Edits, hiddenPlots: ReadonlySet<string>) => void;
   /** Поменялось, кто мешает пройти: убранные дома OSM, свои дома, скрытые участки. */
@@ -177,6 +178,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   store.setResolver((id) => editor.resolve(id));
   store.setModelApplier((b, model) => editor.applyModel(b, model));
 
+  let lastLevel: unknown[] = [useEditStore.getState().edits.spots, useEditStore.getState().edits.plotLifts, useEditStore.getState().edits.buildings, useEditStore.getState().edits.removedBuildings, useEditStore.getState().edits.roads, useEditStore.getState().edits.removedRoads];
   let lastRoads: unknown[] = [];
   let lastObstacles: unknown[] = [];
   const same = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -202,6 +204,16 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   const applyEdits = () => {
     syncTerrain();
     const { edits, selection } = useEditStore.getState();
+    // Подняли участок, подвинули дом или дорогу — площадки и полотно улиц пересчитываются.
+    const levelKey = [edits.spots, edits.plotLifts, edits.buildings, edits.removedBuildings, edits.roads, edits.removedRoads];
+    if (!same(levelKey, lastLevel)) {
+      lastLevel = levelKey;
+      const moved = d.level(edits);
+      if (moved) {
+        d.groundChanged(moved.area);
+        village?.shiftGround((x, y) => moved.delta(x, -y), { x0: moved.area.x0, x1: moved.area.x1, y0: -moved.area.z1, y1: -moved.area.z0 });
+      }
+    }
     const removed = new Set(edits.removedBuildings);
     const replaced = new Set(edits.buildings.map((b) => b.source).filter((s): s is string => !!s));
     const deleted = new Set([...removed].filter((id) => !replaced.has(id)));

@@ -10,6 +10,8 @@ export interface Territory {
   kind: 'city' | 'village';
   description: string;
   bbox: BBox;
+  /** Деревня: улицы с асфальтом по названию (кроме проходящей дороги — она асфальтовая всегда). */
+  pavedStreets?: string[];
 }
 
 export const TERRITORIES = territoriesJson as Territory[];

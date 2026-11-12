@@ -30,13 +30,16 @@ import { createMonument, createProps, placeLamps, type Props } from './props';
 import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
+import { createGrass, type Grass } from './grass';
+import { applySpots, computeLevels, type LevelHouse } from './levelling';
+import { probe } from './probe';
 import { createTrees } from './trees';
 import { createEditing, loadSculpt, roadsWithEdits } from './editing';
 import { GroundUnderlay } from '../three/groundUnderlay';
 import type { Animator, CityScene } from '../three/CityScene';
 import { useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
-import type { Edits } from '../world/edit/edits';
+import { plotKey, type Edits } from '../world/edit/edits';
 import type { Footprint } from '../core/data';
 import type { P2 } from '../core/geo';
 import { createVillageLayers, planVillage, shapedHeights, type VillageLayers } from './village';
@@ -66,6 +69,7 @@ export class Engine {
   private readonly bloom: UnrealBloomPass;
   private readonly atmosphere: Atmosphere;
   private readonly keys = new Set<string>();
+  private readonly abort = new AbortController();
   private readonly ctx: Ctx;
   private readonly overview: Overview;
   private readonly walk: Walk;
@@ -84,6 +88,8 @@ export class Engine {
   private buildings?: BuildingSet;
   private props?: Props;
   private village?: VillageLayers;
+  private grass?: Grass;
+  private treesUpdate?: (camera: { position: Vector3 }) => void;
   private soundscape?: Soundscape;
   private mode: Mode = 'overview';
   private time = useStore.getState().time;
@@ -118,6 +124,7 @@ export class Engine {
     this.scene.add(this.outline);
 
     this.ctx = {
+      signal: this.abort.signal,
       camera: this.camera, dom: canvas, keys: this.keys,
       hm: undefined as unknown as HeightMap, walls: new SegmentGrid<number>(16), roads: new RoadIndex([]),
       rect: { x0: -1, z0: -1, x1: 1, z1: 1 }, city: true, night: 0,
@@ -171,6 +178,10 @@ export class Engine {
   dispose(): void {
     cancelAnimationFrame(this.raf);
     this.loadToken++;
+    // Прежний движок не должен больше ни ловить мышь, ни держать курсор захваченным.
+    this.walk.exit();
+    this.drive.exit();
+    this.abort.abort();
     this.cleanup.forEach((fn) => fn());
     this.disposeWorld();
     this.atmosphere.dispose();
@@ -195,7 +206,12 @@ export class Engine {
     };
     const onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
     const onBlur = () => this.keys.clear();
-    const onLock = () => useStore.getState().set({ locked: document.pointerLockElement === this.canvas });
+    const onLock = () => {
+      const locked = document.pointerLockElement === this.canvas;
+      // Курсор захватывается только на прогулке: в обзоре и за рулём он должен оставаться на экране.
+      if (locked && this.mode !== 'walk') document.exitPointerLock();
+      useStore.getState().set({ locked: locked && this.mode === 'walk' });
+    };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
@@ -242,10 +258,14 @@ export class Engine {
     this.buildings = undefined;
     this.props = undefined;
     this.village = undefined;
+    this.grass = undefined;
+    this.treesUpdate = undefined;
     this.soundscape?.destroy();
     this.soundscape = undefined;
     Object.assign(this.ctx, { onWalk: undefined, onDrive: undefined, onBump: undefined });
     this.world = undefined;
+    probe.current = undefined;
+    useStore.getState().set({ relief: null });
     this.miniMap = undefined;
     this.outline.visible = false;
   }
@@ -271,7 +291,37 @@ export class Engine {
       const villagePlan = planVillage(world, useStore.getState().estates);
       const hm = new HeightMap(world, want, city ? 5 : 3, shapedHeights(world, villagePlan));
       const rect = hm.rect;
-      // Правки места (и мазки кисти рельефа) — до постройки слоёв: всё встаёт на уже поправленную землю.
+      // Правки места — до постройки слоёв: всё встаёт на уже поправленную землю.
+      useEditStore.getState().load(world.territory.id);
+      /** Площадки под домами, полотно улиц по высотам домов, ровное русло — по текущим правкам. */
+      const padsOf = new Map<string, P2[][]>();
+      for (const g of villagePlan?.plotGround ?? []) {
+        const owner = g.id.slice(0, g.id.lastIndexOf(':'));
+        padsOf.set(owner, [...(padsOf.get(owner) ?? []), ...g.pads]);
+      }
+      const water = world.ground.filter((g) => g.kind === 'water').map((g) => g.rings);
+      const level = (edits: Edits) => {
+        const lifts = edits.plotLifts ?? {};
+        const gone = new Set(edits.removedBuildings);
+        const houses: LevelHouse[] = [];
+        if (!city) {
+          for (const b of world.buildings) {
+            if (!gone.has(b.props.id)) houses.push({ id: b.props.id, ring: b.rings[0], pads: padsOf.get(b.props.id), lift: lifts[b.props.id] });
+          }
+          for (const b of edits.buildings) {
+            houses.push({ id: b.id, ring: b.footprint.map(([lon, lat]) => world.frame.xz(lon, lat)), pads: b.source ? padsOf.get(b.source) : undefined, lift: lifts[plotKey(b)] });
+          }
+        }
+        const roads = city ? [] : roadsWithEdits(world, edits).roads;
+        const grid = { rect: hm.rect, step: hm.step, nx: hm.nx, nz: hm.nz, natural: hm.natural };
+        const { lev } = computeLevels({ ...grid, houses, roads, water });
+        applySpots(grid, lev, (edits.spots ?? []).map((s) => {
+          const [x, z] = world.frame.xz(s.at[0], s.at[1]);
+          return { x, z, height: s.height - hm.origin, radius: s.radius };
+        }));
+        return hm.relevel(lev);
+      };
+      level(useEditStore.getState().edits);
       const sculpt = loadSculpt(world, hm);
       const edits0 = useEditStore.getState().edits;
       const paths = new RoadIndex(world.paths);
@@ -355,7 +405,10 @@ export class Engine {
       const trees = createTrees({ world, hm, roads, paths, footprints: solid.footprints, buildings: buildings.list, clearings: monument ? [[monument.x, monument.z, 22]] : [], yardTrees: villagePlan?.estates ? villagePlan.trees : undefined });
       if (token !== this.loadToken) return;
 
-      group.add(terrain.group, buildings.mesh, trees.group);
+      const grass = createGrass(hm, masks!, rect, city, solid.footprints);
+      this.grass = grass;
+      this.treesUpdate = trees.update;
+      group.add(terrain.group, buildings.mesh, trees.group, grass.group);
       if (monument) group.add(monument.group);
       this.scene.add(group);
       this.worldGroup = group;
@@ -366,20 +419,25 @@ export class Engine {
       progress('Готовим редактор');
       const editing = createEditing({
         host: this.host, world, hm, buildings, village, overview: this.overview, underlay: this.underlay, sculpt,
+        level,
         groundChanged: (area) => {
+          useStore.getState().set({ terrainRev: useStore.getState().terrainRev + 1 });
           terrain.refresh(area);
           buildings.reseat(hm, area);
           trees.reseat(area);
+          grass.refresh(area);
           props?.reseat(area);
         },
         roadsChanged: layRoads,
         obstaclesChanged: (edits, hiddenPlots) => {
           solid = obstacles(edits, hiddenPlots);
+          grass.setFootprints(solid.footprints);
           Object.assign(this.ctx, { walls: solid.walls });
         },
         setCityVisible: (visible) => {
           buildings.mesh.visible = visible;
           trees.group.visible = visible;
+          grass.setVisible(visible);
           village?.setVisible(visible);
         },
         pickables: () => [buildings.mesh, ...(village?.pickables() ?? [])],
@@ -400,12 +458,13 @@ export class Engine {
         onBump: (strength: number) => soundscape.bumped(strength),
       });
       this.worldDisposers = [
-        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
+        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => (this.grass = undefined), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
         () => terrain.group.traverse((o) => (o as { geometry?: BufferGeometry }).geometry?.dispose()),
       ];
       this.world = world;
+      probe.current = { world, hm, focus: () => ({ x: this.overview.focus.x, z: this.overview.focus.z }) };
       this.buildings = buildings;
-      this.atmosphere.fog.density = city ? 0.00013 : 0.00011;
+      this.atmosphere.fog.density = city ? 0.00022 : 0.00032;
 
       this.mode = 'overview';
       this.walk.exit();
@@ -568,6 +627,8 @@ export class Engine {
     const mode = this.mode === 'overview' ? this.overview : this.mode === 'walk' ? this.walk : this.drive;
     mode.update(dt);
     for (const animator of this.animators) animator(dt);
+    this.treesUpdate?.(this.camera);
+    if (urlParams.get('grass') !== '0') this.grass?.update(this.camera);
     this.atmosphere.update(this.camera, mode.focus, mode.shadowRadius, now);
 
     if (now - this.hudAt > 120) {

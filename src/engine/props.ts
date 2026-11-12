@@ -166,7 +166,7 @@ export function createProps(world: World, hm: HeightMap, lamps: readonly Lamp[],
     mark.push(...c[0], ...c[2], ...c[1], ...c[0], ...c[3], ...c[2]);
   };
   for (const road of world.roads) {
-    if (!isPaved(world, road.highway) || road.oneway || road.width < 6.5 || road.highway === 'service' || !city) continue;
+    if (!isPaved(world, road) || road.oneway || road.width < 6.5 || road.highway === 'service' || !city) continue;
     let carry = 2;
     for (let i = 1; i < road.pts.length; i++) {
       const a = road.pts[i - 1], b = road.pts[i];

@@ -26,6 +26,8 @@ export class HeightMap {
   /** Текущие высоты (с правками кистью) и исходные. */
   readonly data: Float32Array;
   readonly base: Float32Array;
+  /** Естественная земля: до площадок под домами, полотна улиц и русла (см. levelling.ts). */
+  readonly natural: Float32Array;
   readonly rect: Rect;
   private readonly baseAlt: number;
 
@@ -51,6 +53,32 @@ export class HeightMap {
     }
     this.data = data;
     this.base = data.slice();
+    this.natural = data.slice();
+  }
+
+  /**
+   * Новое выравнивание: исходные высоты = естественные + lev; правки кистью остаются поверх. Возвращает,
+   * где и насколько земля сдвинулась, или undefined, если ничего не поменялось.
+   */
+  relevel(lev: Float32Array): { area: Rect; delta: (x: number, z: number) => number } | undefined {
+    const diff = new Float32Array(lev.length);
+    let i0 = Infinity, i1 = -1, j0 = Infinity, j1 = -1;
+    for (let k = 0; k < lev.length; k++) {
+      const d = this.natural[k] + lev[k] - this.base[k];
+      if (Math.abs(d) < 1e-4) continue;
+      diff[k] = d;
+      this.base[k] += d;
+      this.data[k] += d;
+      const i = k % this.nx, j = (k - i) / this.nx;
+      i0 = Math.min(i0, i);
+      i1 = Math.max(i1, i);
+      j0 = Math.min(j0, j);
+      j1 = Math.max(j1, j);
+    }
+    if (i1 < 0) return undefined;
+    const r = this.rect, s = this.step;
+    const area: Rect = { x0: r.x0 + (i0 - 1) * s, x1: r.x0 + (i1 + 1) * s, z0: r.z0 + (j0 - 1) * s, z1: r.z0 + (j1 + 1) * s };
+    return { area, delta: (x, z) => (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1 ? 0 : this.sample(diff, x, z)) };
   }
 
   /** Поправки кисти рельефа: высоты узлов в прямоугольнике = исходные + offset(x, z). */
@@ -64,6 +92,16 @@ export class HeightMap {
         this.data[k] = this.base[k] + offset(r.x0 + i * this.step, r.z0 + j * this.step);
       }
     }
+  }
+
+  /** Высота точки (0, 0) мира над уровнем моря: высоты сетки отсчитаны от неё. */
+  get origin(): number {
+    return this.baseAlt;
+  }
+
+  /** Естественная высота: до площадок, улиц, русла и отметок. */
+  atNatural(x: number, z: number): number {
+    return this.sample(this.natural, x, z);
   }
 
   /** Высота без правок кистью. */
@@ -144,7 +182,9 @@ function maskTexture(canvas: HTMLCanvasElement, anisotropy: number): CanvasTextu
 }
 
 /** В деревне асфальт — только на проходящей дороге, остальное — грунтовки. */
-export const isPaved = (world: World, highway: string) => world.territory.kind === 'city' || highway === 'tertiary' || highway === 'secondary' || highway === 'primary';
+export const isPaved = (world: World, road: { highway: string; name?: string }) =>
+  world.territory.kind === 'city' || road.highway === 'tertiary' || road.highway === 'secondary' || road.highway === 'primary' ||
+  (!!road.name && !!world.territory.pavedStreets?.includes(road.name));
 
 export interface MaskExtras {
   /** Утоптанная земля (подъезды к воротам). */
@@ -170,9 +210,9 @@ export function paintMasks(world: World, rect: Rect, lamps: readonly P2[], footp
     fillRings(A.ctx, g.rings);
   }
   for (const road of world.roads) {
-    const paved = isPaved(world, road.highway);
+    const paved = isPaved(world, road);
     A.ctx.strokeStyle = paved ? R : B;
-    strokeLine(A.ctx, road.pts, Math.max(minW, paved ? road.width : road.width * 0.7));
+    strokeLine(A.ctx, road.pts, Math.max(minW, paved ? road.width * (city ? 1 : 0.8) : road.width * 0.7));
   }
   A.ctx.fillStyle = B;
   for (const ring of extras?.dirt ?? []) fillRings(A.ctx, [ring]);
@@ -251,6 +291,12 @@ export function paintMiniMap(world: World, rect: Rect, footprints: readonly Foot
   return canvas;
 }
 
+/** Два оттенка «ничьей» земли — ими же красится трава. */
+export const groundColours = (city: boolean) => ({
+  a: city ? new Color().setRGB(0.17, 0.2, 0.1) : new Color().setRGB(0.17, 0.24, 0.075),
+  b: city ? new Color().setRGB(0.25, 0.235, 0.17) : new Color().setRGB(0.27, 0.29, 0.1),
+});
+
 export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, underlay: GroundUnderlay): MeshStandardMaterial {
   const material = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.96, metalness: 0 });
   const uniforms = {
@@ -258,8 +304,9 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
     uMaskB: { value: masks.b },
     uMaskC: { value: masks.c },
     uRect: { value: [rect.x0, rect.z0, rect.x1 - rect.x0, rect.z1 - rect.z0] },
-    uGroundA: { value: city ? new Color().setRGB(0.17, 0.2, 0.1) : new Color().setRGB(0.17, 0.24, 0.075) },
-    uGroundB: { value: city ? new Color().setRGB(0.25, 0.235, 0.17) : new Color().setRGB(0.27, 0.29, 0.1) },
+    uGroundA: { value: groundColours(city).a },
+    uGroundB: { value: groundColours(city).b },
+    uGravel: { value: city ? 0 : 1 },
     uTime: shared.uTime,
     uLamps: shared.uLamps,
     ...underlay.uniforms,
@@ -278,7 +325,7 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         uniform sampler2D uMaskA, uMaskB, uMaskC;
         uniform vec4 uRect;
         uniform vec3 uGroundA, uGroundB;
-        uniform float uTime, uLamps;
+        uniform float uTime, uLamps, uGravel;
         ${NOISE_GLSL}
         ${UNDERLAY_GLSL}
         float cov(float c) {
@@ -312,7 +359,12 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         float bed = 0.5 + 0.5 * sin((vWPos.x * 0.8 + vWPos.z * 0.6) * 5.2);
         col = mix(col, mix(vec3(0.16, 0.115, 0.075), vec3(0.11, 0.2, 0.06), smoothstep(0.35, 0.75, bed) * (0.6 + 0.4 * nMid)) * (0.85 + 0.3 * nGrain), veg);
         float dirt = cov(mA.b + (nMid - 0.5) * 0.25 + nFine * 0.2);
-        col = mix(col, vec3(0.34, 0.27, 0.185) * (0.78 + 0.34 * nMid + 0.3 * nFine + 0.3 * nGrain), dirt);
+        vec3 soil = vec3(0.34, 0.27, 0.185) * (0.78 + 0.34 * nMid + 0.3 * nFine + 0.3 * nGrain);
+        // Щебёнка: серая, вблизи — отдельные камешки разного тона, по колеям темнее.
+        float stone = h21(floor(vWPos.xz * 16.0)) * 0.6 + h21(floor(vWPos.xz * 41.0 + 7.0)) * 0.4;
+        float stones = mix(0.5, stone, 1.0 - smoothstep(6.0, 38.0, camD));
+        vec3 gravel = mix(vec3(0.3, 0.285, 0.26), vec3(0.47, 0.455, 0.43), stones) * (0.82 + 0.3 * nMid + 0.2 * nFine);
+        col = mix(col, mix(soil, gravel, uGravel), dirt);
         float pave = cov(mA.g);
         vec2 tile = abs(fract(vWPos.xz / 0.7) - 0.5);
         float joint = smoothstep(0.455, 0.5, max(tile.x, tile.y)) * (1.0 - smoothstep(8.0, 40.0, camD));

@@ -7,6 +7,7 @@ import {
   Color,
   DirectionalLight,
   FogExp2,
+  ShaderChunk,
   HemisphereLight,
   Mesh,
   PMREMGenerator,
@@ -100,10 +101,49 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
+
+// Дымка: воздух гуще у земли и редеет с высотой (как настоящая воздушная перспектива), поэтому дальний
+// лес и дома бледнеют и синеют, а вид сверху вниз остаётся чётким. Заменяет туман three.js во всех материалах.
+const HAZE_HEIGHT = 160;
+ShaderChunk.fog_pars_vertex = /* glsl */ `
+#ifdef USE_FOG
+  varying float vFogDepth;
+  varying float vFogY;
+#endif`;
+ShaderChunk.fog_vertex = /* glsl */ `
+#ifdef USE_FOG
+  vFogDepth = length(mvPosition.xyz);
+  vFogY = cameraPosition.y + dot(viewMatrix[1].xyz, mvPosition.xyz);
+#endif`;
+ShaderChunk.fog_pars_fragment = /* glsl */ `
+#ifdef USE_FOG
+  uniform vec3 fogColor;
+  varying float vFogDepth;
+  varying float vFogY;
+  #ifdef FOG_EXP2
+    uniform float fogDensity;
+  #else
+    uniform float fogNear;
+    uniform float fogFar;
+  #endif
+#endif`;
+ShaderChunk.fog_fragment = /* glsl */ `
+#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float hazeFrom = max(cameraPosition.y, -60.0) / ${HAZE_HEIGHT.toFixed(1)};
+    float hazeRise = (max(vFogY, -60.0) - max(cameraPosition.y, -60.0)) / ${HAZE_HEIGHT.toFixed(1)};
+    float hazeMean = abs(hazeRise) < 0.001 ? 1.0 : (1.0 - exp(-hazeRise)) / hazeRise;
+    float fogFactor = 1.0 - exp(-fogDensity * vFogDepth * exp(-hazeFrom) * hazeMean);
+  #else
+    float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+  #endif
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fogFactor);
+#endif`;
+
 export class Atmosphere {
   readonly light = new DirectionalLight(0xffffff, 3);
   readonly hemi = new HemisphereLight(0x8aa0ff, 0x1a1c22, 0);
-  readonly fog = new FogExp2(0xffffff, 0.00012);
+  readonly fog = new FogExp2(0xffffff, 0.0003);
   readonly sunDir = new Vector3(0, 1, 0);
   /** Что нужно знать остальному движку о свете. */
   night = 0;

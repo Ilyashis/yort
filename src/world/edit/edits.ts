@@ -64,6 +64,32 @@ export interface Edits {
   removedYards: string[];
   /** Мазки кисти рельефа — по порядку. */
   terrain: SculptStroke[];
+  /** Подъём участка дома над его естественной высотой, м: ключ — id дома OSM или своего дома. */
+  plotLifts?: Record<string, number>;
+  /** Опорные отметки рельефа: земля проходит через каждую. */
+  spots?: TerrainSpot[];
+}
+
+export interface TerrainSpot {
+  id: string;
+  at: LonLat;
+  /** Высота над уровнем моря, м. */
+  height: number;
+  /** Дальше этого от отметки земля не меняется, м. */
+  radius: number;
+}
+
+export const SPOT_RADIUS = { min: 4, max: 80, initial: 14 };
+
+export function upsertSpot(edits: Edits, spot: TerrainSpot): Edits {
+  const radius = Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, spot.radius));
+  const next = { ...spot, radius, height: Math.round(spot.height * 100) / 100 };
+  const spots = edits.spots ?? [];
+  return { ...edits, spots: spots.some((s) => s.id === spot.id) ? spots.map((s) => (s.id === spot.id ? next : s)) : [...spots, next] };
+}
+
+export function removeSpot(edits: Edits, id: string): Edits {
+  return { ...edits, spots: (edits.spots ?? []).filter((s) => s.id !== id) };
 }
 
 export const EMPTY_EDITS: Edits = {
@@ -145,6 +171,20 @@ export function replacedOsmIds(edits: Edits): Set<string> {
   return new Set([...edits.removedBuildings, ...edits.buildings.map((b) => b.source).filter((s): s is string => !!s)]);
 }
 
+/** Ключ участка дома: у дома из OSM — id OSM (не меняется, когда дом двигают), у своего — его id. */
+export const plotKey = (building: { id: string; source?: string }) => building.source ?? building.id;
+
+export const PLOT_LIFT_LIMIT = 6;
+
+/** Поднять или опустить участок дома; 0 — вернуть естественную высоту. */
+export function setPlotLift(edits: Edits, key: string, lift: number): Edits {
+  const next = { ...(edits.plotLifts ?? {}) };
+  const value = Math.round(Math.min(PLOT_LIFT_LIMIT, Math.max(-PLOT_LIFT_LIMIT, lift)) * 100) / 100;
+  if (value) next[key] = value;
+  else delete next[key];
+  return { ...edits, plotLifts: next };
+}
+
 export function isEmpty(edits: Edits): boolean {
   return (
     !edits.buildings.length &&
@@ -153,7 +193,9 @@ export function isEmpty(edits: Edits): boolean {
     !edits.removedRoads.length &&
     !edits.fences.length &&
     !edits.removedYards.length &&
-    !edits.terrain.length
+    !edits.terrain.length &&
+    !Object.keys(edits.plotLifts ?? {}).length &&
+    !edits.spots?.length
   );
 }
 
@@ -191,6 +233,14 @@ export function parseEdits(value: unknown): Edits | undefined {
     terrain: arr<unknown>(v.terrain)
       .map(parseStroke)
       .filter((s): s is SculptStroke => !!s),
+    plotLifts: Object.fromEntries(
+      Object.entries(v.plotLifts && typeof v.plotLifts === 'object' ? v.plotLifts : {}).filter(
+        (e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1]) && Math.abs(e[1]) <= PLOT_LIFT_LIMIT,
+      ),
+    ),
+    spots: arr<TerrainSpot>(v.spots)
+      .filter((s) => s && typeof s.id === 'string' && points([s.at]).length === 1 && Number.isFinite(s.height) && Number.isFinite(s.radius))
+      .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
   };
 }
 

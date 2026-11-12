@@ -18,7 +18,14 @@ import type { Rect } from './shared';
 import type { HeightMap } from './terrain';
 
 /** То, что режимам нужно от мира; поля меняются при смене территории. */
+/** Подписка, которая снимается вместе с движком: иначе прежний движок продолжал бы ловить мышь. */
+function on<K extends keyof HTMLElementEventMap>(signal: AbortSignal, target: EventTarget, type: K, handler: (e: HTMLElementEventMap[K]) => void, options?: AddEventListenerOptions): void {
+  target.addEventListener(type, handler as EventListener, { ...options, signal });
+}
+
 export interface Ctx {
+  /** Гаснет, когда движок уничтожен. */
+  signal: AbortSignal;
   camera: PerspectiveCamera;
   dom: HTMLElement;
   keys: Set<string>;
@@ -73,12 +80,12 @@ export class Overview {
 
   constructor(private readonly ctx: Ctx) {
     const dom = ctx.dom;
-    dom.addEventListener('pointerdown', (e) => {
+    on(ctx.signal, dom, 'pointerdown', (e) => {
       if (!this.active || !this.enabled) return;
       this.down = { x: e.clientX, y: e.clientY, button: e.button, moved: 0, shift: e.shiftKey };
       dom.setPointerCapture(e.pointerId);
     });
-    dom.addEventListener('pointermove', (e) => {
+    on(ctx.signal, dom, 'pointermove', (e) => {
       const d = this.down;
       if (!this.active || !d || !this.enabled) return;
       const dx = e.clientX - d.x, dy = e.clientY - d.y;
@@ -96,23 +103,23 @@ export class Overview {
         g.z += Math.sin(g.yaw) * dx * k - Math.cos(g.yaw) * fwd;
       }
     });
-    dom.addEventListener('pointerup', (e) => {
+    on(ctx.signal, dom, 'pointerup', (e) => {
       const d = this.down;
       this.down = undefined;
       if (this.active && d && d.button === 0 && d.moved < 5) this.onPick?.(e.clientX, e.clientY);
     });
-    dom.addEventListener('dblclick', (e) => {
+    on(ctx.signal, dom, 'dblclick', (e) => {
       if (!this.active) return;
       const r = dom.getBoundingClientRect();
       const p = ctx.ground(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
       if (p) this.flyTo(p.x, p.z, Math.max(60, this.g.dist * 0.45));
     });
-    dom.addEventListener('wheel', (e) => {
+    on(ctx.signal, dom, 'wheel', (e) => {
       if (!this.active) return;
       e.preventDefault();
       this.g.dist = clamp(this.g.dist * Math.exp(e.deltaY * 0.0013), 25, 7000);
     }, { passive: false });
-    dom.addEventListener('contextmenu', (e) => e.preventDefault());
+    on(ctx.signal, dom, 'contextmenu', (e) => e.preventDefault());
   }
 
   enter(): void {
@@ -204,12 +211,13 @@ export class Walk implements Player {
 
   constructor(private readonly ctx: Ctx) {
     const dom = ctx.dom;
-    dom.addEventListener('click', () => {
-      if (this.active && document.pointerLockElement !== dom) dom.requestPointerLock?.();
+    on(ctx.signal, dom, 'click', () => {
+      // Браузер может отказать в захвате (вкладка не в фокусе) — тогда осматриваемся с зажатой кнопкой.
+      if (this.active && document.pointerLockElement !== dom) void Promise.resolve(dom.requestPointerLock?.()).catch(() => undefined);
     });
-    dom.addEventListener('pointerdown', () => (this.drag = this.active));
-    window.addEventListener('pointerup', () => (this.drag = false));
-    document.addEventListener('mousemove', (e) => {
+    on(ctx.signal, dom, 'pointerdown', () => (this.drag = this.active));
+    on(ctx.signal, window, 'pointerup', () => (this.drag = false));
+    on(ctx.signal, document, 'mousemove', (e) => {
       if (!this.active) return;
       const locked = document.pointerLockElement === dom;
       if (!locked && !this.drag) return;
@@ -328,7 +336,7 @@ export class Drive implements Player {
 
   constructor(private readonly ctx: Ctx) {
     this.car.root.visible = false;
-    ctx.dom.addEventListener('wheel', (e) => {
+    on(ctx.signal, ctx.dom, 'wheel', (e) => {
       if (this.active) this.zoom = clamp(this.zoom * Math.exp(e.deltaY * 0.001), 0.6, 3);
     }, { passive: true });
   }

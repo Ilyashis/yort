@@ -1,3 +1,5 @@
+import { findTerritory } from '../core/data';
+import { useStore } from '../state/store';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { hashString } from '../utils/hash';
@@ -8,6 +10,8 @@ import {
   ROAD_KINDS,
   ROOF_COLORS,
   clampFloors,
+  plotKey,
+  setPlotLift,
   removeBuilding,
   removeFence,
   removeRoad,
@@ -43,6 +47,7 @@ function sidesOf(footprint: readonly LonLat[]): [number, number] {
 /** Свойства выделенного в редакторе: дом (тип, этажи, крыша, цвета), дорога или забор. */
 export function EditPanel() {
   const mode = useAppStore((s) => s.mode);
+  const place = useStore((s) => s.place);
   const selection = useEditStore((s) => s.selection);
   const edits = useEditStore((s) => s.edits);
   const resolve = useEditStore((s) => s.resolveBuilding);
@@ -68,12 +73,15 @@ export function EditPanel() {
     </button>
   );
 
+  const village = findTerritory(place)?.kind === 'village';
   if (selection.type === 'building') {
     const building = resolve?.(selection.id);
     if (!building) return null;
     const own = edits.buildings.some((b) => b.id === selection.id);
     const fromOsm = !!building.source;
     const update = (patch: Partial<EditedBuilding>) => commit(upsertBuilding(useEditStore.getState().edits, { ...building, ...patch }));
+    const lift = edits.plotLifts?.[plotKey(building)] ?? 0;
+    const setLift = (value: number) => commit(setPlotLift(useEditStore.getState().edits, plotKey(building), value));
     const model = building.model && findHouseModel(building.model.id);
     const setModel = (id: HouseModelId | undefined) => {
       if (!applyModel) return;
@@ -98,6 +106,32 @@ export function EditPanel() {
           {fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью, белые точки —
           растянуть, оранжевая — повернуть
         </p>
+
+        {village && (
+          <div className="field">
+            <span>
+              Высота участка <b>{lift ? `${lift > 0 ? '+' : '−'}${fmt(Math.abs(lift))} м` : 'как у земли'}</b>
+            </span>
+            <div className="segmented segmented-small" role="group" aria-label="Высота участка">
+              <button type="button" onClick={() => setLift(lift - 0.5)} title="Опустить участок на полметра">
+                − 0,5
+              </button>
+              <button type="button" onClick={() => setLift(lift - 0.1)} title="Опустить на 10 см">
+                − 0,1
+              </button>
+              <button type="button" className={lift ? '' : 'active'} onClick={() => setLift(0)} title="Вернуть естественную высоту">
+                Авто
+              </button>
+              <button type="button" onClick={() => setLift(lift + 0.1)} title="Поднять на 10 см">
+                + 0,1
+              </button>
+              <button type="button" onClick={() => setLift(lift + 0.5)} title="Поднять участок на полметра">
+                + 0,5
+              </button>
+            </div>
+            <p className="muted">Двор выравнивается на этой высоте, улица рядом подстраивается под неё.</p>
+          </div>
+        )}
 
         <div className="field">
           <span>Модель дома</span>

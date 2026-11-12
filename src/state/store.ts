@@ -35,6 +35,10 @@ interface State {
   estates: boolean;
   sound: boolean;
   stats: { buildings: number; trees: number; osm?: string } | null;
+  /** Открыто окно «Рельеф»: центр куска земли (мир) и сторона, м. */
+  relief: { x: number; z: number; size: number } | null;
+  /** Растёт, когда земля поменялась — окно «Рельеф» перечитывает высоты. */
+  terrainRev: number;
   set: (patch: Partial<State>) => void;
 }
 
@@ -76,6 +80,8 @@ export const useStore = create<State>((set) => ({
   estates: read('estates', true),
   sound: read('sound', true),
   stats: null,
+  relief: null,
+  terrainRev: 0,
   set: (patch) => set(patch),
 }));
 

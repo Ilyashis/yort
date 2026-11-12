@@ -4,6 +4,7 @@ import { useStore } from './state/store';
 import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { Minimap } from './ui/Minimap';
+import { Relief } from './ui/Relief';
 import { BuildingCard, Dock, Help, Hud, Loader, PlaceBar, TimePanel, Tools } from './ui/Panels';
 
 export function App() {
@@ -38,6 +39,7 @@ export function App() {
       <Tools />
       <Dock />
       <TimePanel />
+      <Relief />
       <Help />
       <Loader />
     </div>
