@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import { TERRITORIES, findTerritory } from '../core/data';
 
 export type Mode = 'overview' | 'walk' | 'drive';
+/** Чем раскрашена земля: рисунком движка, снимком своей съёмки с дрона или спутниковым. */
+export type Ground = 'drawn' | 'drone' | 'satellite';
 
 export interface Selected {
   id: string;
@@ -34,6 +36,11 @@ interface State {
   /** Обустроенный посёлок: участки, заборы, дворовые постройки (деревня). */
   estates: boolean;
   sound: boolean;
+  ground: Ground;
+  /** Подпись источника спутникового снимка (её обязаны показывать) или сообщение, что он не загрузился. */
+  groundCredit: string;
+  /** У текущего места есть снимок с дрона. */
+  hasPhoto: boolean;
   stats: { buildings: number; trees: number; osm?: string } | null;
   /** Открыто окно «Рельеф»: центр куска земли (мир) и сторона, м. */
   relief: { x: number; z: number; size: number } | null;
@@ -79,6 +86,9 @@ export const useStore = create<State>((set) => ({
   carColour: read('car', 0),
   estates: read('estates', true),
   sound: read('sound', true),
+  ground: (['drawn', 'drone', 'satellite'] as Ground[]).find((g) => g === (urlParams.get('ground') ?? read('ground', 'drone'))) ?? 'drone',
+  groundCredit: '',
+  hasPhoto: false,
   stats: null,
   relief: null,
   terrainRev: 0,
@@ -97,6 +107,7 @@ useStore.subscribe((s, prev) => {
   if (s.carColour !== prev.carColour) write('car', s.carColour);
   if (s.estates !== prev.estates) write('estates', s.estates);
   if (s.sound !== prev.sound) write('sound', s.sound);
+  if (s.ground !== prev.ground) write('ground', s.ground);
   if (s.help !== prev.help && !s.help) write('seenHelp', true);
   if (s.time !== prev.time && performance.now() - savedAt > 1000) {
     savedAt = performance.now();

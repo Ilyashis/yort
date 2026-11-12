@@ -8,16 +8,16 @@ import { fitPlaneAt } from '../engine/levelling';
 import { probe } from '../engine/probe';
 import { useStore } from '../state/store';
 import { useEditStore } from '../store/useEditStore';
-import { SPOT_RADIUS, removeShape, removeSpot, upsertShape, upsertSpot, type TerrainShape, type TerrainSpot } from '../world/edit/edits';
+import { SPOT_RADIUS, moveShape, removeShape, removeSpot, upsertShape, upsertSpot, type TerrainShape, type TerrainSpot } from '../world/edit/edits';
 import { ReliefBlock } from './reliefBlock';
 
 const SIZES = [60, 120, 250, 500];
 const STEPS = [0.1, 0.25, 0.5, 1, 2];
 const RADII = [6, 10, 14, 20, 30, 50, 80];
-type Tool = 'view' | 'spot' | 'pull' | 'area' | 'section';
+type Tool = 'view' | 'spot' | 'pull' | 'area' | 'lasso' | 'move' | 'section';
 type AreaOp = 'fit' | 'level' | 'terrace' | 'smooth' | 'natural';
 
-const TOOLS: [Tool, string][] = [['view', 'Смотреть'], ['spot', 'Отметка'], ['pull', 'Горизонталь'], ['area', 'Область'], ['section', 'Разрез']];
+const TOOLS: [Tool, string][] = [['view', 'Смотреть'], ['spot', 'Отметка'], ['pull', 'Горизонталь'], ['area', 'Область'], ['lasso', 'Лассо'], ['move', 'Двигать'], ['section', 'Разрез']];
 const AREA_OPS: [AreaOp, string, string][] = [
   ['fit', 'Плоскость', 'Ровная плоскость по нынешнему уклону: бугры и ямы уходят, уклон остаётся'],
   ['level', 'Ровно', 'Горизонтальная площадка с мягкими краями'],
@@ -30,6 +30,8 @@ const HINTS: Record<Tool, string> = {
   spot: 'Щёлкните по земле — появится отметка с нынешней высотой. Впишите нужную: земля пройдёт через неё.',
   pull: 'Возьмите горизонталь и перетащите: она пройдёт через точку, где вы отпустите. Вращать — с Shift.',
   area: 'Выберите, что сделать, и щёлкните по земле — правка ляжет кругом вокруг этой точки.',
+  lasso: 'Обведите кусок земли мышью — потом поднимайте или опускайте его числом справа. Вращать — с Shift.',
+  move: 'Возьмите область (круг или контур лассо) и перетащите на новое место. Вращать — с Shift.',
   section: 'Щёлкните две точки — внизу появится профиль земли между ними.',
 };
 
@@ -120,7 +122,7 @@ function Section({ a, b, rev }: { a: P2; b: P2; rev: number }) {
 }
 
 const shapeName = (shape: TerrainShape) =>
-  shape.kind === 'smooth' ? 'Сглажено' : shape.kind === 'natural' ? 'Как было' : (shape.slope ?? 0) > 0 ? 'Плоскость' : shape.edge < 0.2 ? 'Терраса' : 'Ровно';
+  shape.kind === 'lift' ? 'Лассо' : shape.kind === 'smooth' ? 'Сглажено' : shape.kind === 'natural' ? 'Как было' : (shape.slope ?? 0) > 0 ? 'Плоскость' : shape.edge < 0.2 ? 'Терраса' : 'Ровно';
 
 export function Relief() {
   const relief = useStore((s) => s.relief);
@@ -137,12 +139,14 @@ export function Relief() {
   const [selected, setSelected] = useState<string>();
   const [section, setSection] = useState<[P2, P2?]>();
   const [pull, setPull] = useState<[P2, P2]>();
+  const [outline, setOutline] = useState<P2[]>();
+  const [top, setTop] = useState(false);
   const [hover, setHover] = useState<{ x: number; z: number; height: number }>();
   const [range, setRange] = useState<[number, number]>([0, 0]);
   // Обработчики блока живут в сцене дольше одного рендера — держим свежие через ref.
   const touched = useRef(false);
   const onPick = useRef<(x: number, z: number) => void>(() => undefined);
-  const onLine = useRef<(from: P2, to: P2, done: boolean) => void>(() => undefined);
+  const onLine = useRef<(from: P2, to: P2, done: boolean, path: P2[]) => void>(() => undefined);
 
   const p = probe.current;
   const inBlock = (x: number, z: number) => !!relief && Math.abs(x - relief.x) <= relief.size / 2 && Math.abs(z - relief.z) <= relief.size / 2;
@@ -183,20 +187,51 @@ export function Relief() {
       setSelected(near && near.d < relief!.size / 20 ? near.id : undefined);
     }
   };
-  onLine.current = (from, to, done) => {
+  onLine.current = (from, to, done, path) => {
     if (!p) return;
+    const lonLat = (q: P2): [number, number] => [p.world.frame.lon(q[0]), p.world.frame.lat(q[1])];
+    if (tool === 'lasso') {
+      if (!done) return setOutline(path);
+      setOutline(undefined);
+      if (path.length < 4) return;
+      // Площадь и середина контура: по ним ширина плавного края и место в списке.
+      let area = 0, cx = 0, cz = 0;
+      path.forEach((a, n) => {
+        const b = path[(n + 1) % path.length], cross = a[0] * b[1] - b[0] * a[1];
+        area += cross / 2;
+        cx += (a[0] + b[0]) * cross;
+        cz += (a[1] + b[1]) * cross;
+      });
+      if (Math.abs(area) < 4) return;
+      const id = newId('area');
+      commit(upsertShape(now(), { id, kind: 'lift', at: lonLat([cx / (6 * area), cz / (6 * area)]), ring: path.map(lonLat), radius: Math.sqrt(Math.abs(area) / Math.PI), edge: 0.25, lift: 0 }));
+      setSelected(id);
+      return;
+    }
+    if (tool === 'move') {
+      // Двигаем область, за которую взялись: выбранную или ближайшую к точке, где нажали.
+      const grabbed = shapes.map(({ shape, xz }) => ({ shape, d: Math.hypot(xz[0] - from[0], xz[1] - from[1]) - shape.radius })).sort((m, n) => m.d - n.d)[0];
+      const target = grabbed && grabbed.d < relief!.size / 20 ? grabbed.shape : shapes.find(({ shape }) => shape.id === selected)?.shape;
+      if (!target) return;
+      setSelected(target.id);
+      if (!done) return setPull([from, to]);
+      setPull(undefined);
+      const [lon0, lat0] = lonLat(from), [lon1, lat1] = lonLat(to);
+      commit(moveShape(now(), target.id, lon1 - lon0, lat1 - lat0));
+      return;
+    }
     if (!done) return setPull([from, to]);
     setPull(undefined);
     // Горизонталь, взятая в точке from, теперь проходит через to: там земля получает высоту точки from.
     const id = newId('spot');
     const reach = Math.hypot(to[0] - from[0], to[1] - from[1]);
-    commit(upsertSpot(now(), { id, at: [p.world.frame.lon(to[0]), p.world.frame.lat(to[1])], height: p.hm.at(from[0], from[1]) + p.hm.origin, radius: Math.max(6, Math.round(reach * 1.25)) }));
+    commit(upsertSpot(now(), { id, at: lonLat(to), height: p.hm.at(from[0], from[1]) + p.hm.origin, radius: Math.max(6, Math.round(reach * 1.25)) }));
     setSelected(id);
   };
 
   useEffect(() => {
     if (!relief || !canvas.current) return;
-    const instance = new ReliefBlock(canvas.current, { onPick: (x, z) => onPick.current(x, z), onHover: setHover, onLine: (from, to, done) => onLine.current(from, to, done) });
+    const instance = new ReliefBlock(canvas.current, { onPick: (x, z) => onPick.current(x, z), onHover: setHover, onLine: (from, to, done, path) => onLine.current(from, to, done, path) });
     block.current = instance;
     return () => {
       instance.dispose();
@@ -218,16 +253,18 @@ export function Relief() {
   useEffect(() => {
     block.current?.setMarks({
       spots: spots.map(({ spot, xz }) => ({ id: spot.id, x: xz[0], z: xz[1], radius: spot.radius })),
-      areas: shapes.map(({ shape, xz }) => ({ id: shape.id, x: xz[0], z: xz[1], radius: shape.radius, uphill: shape.kind === 'plane' && (shape.slope ?? 0) > 0 ? shape.bearing : undefined })),
+      areas: shapes.map(({ shape, xz }) => ({ id: shape.id, x: xz[0], z: xz[1], radius: shape.radius, uphill: shape.kind === 'plane' && (shape.slope ?? 0) > 0 ? shape.bearing : undefined, ring: p && shape.ring?.map(([lon, lat]): P2 => p.world.frame.xz(lon, lat)) })),
+      outline,
       selected,
       section,
       pull,
     });
-  }, [spots, shapes, selected, section, pull, rev, relief]);
+  }, [spots, shapes, selected, section, pull, outline, rev, relief]);
   useEffect(() => block.current?.setExaggeration(exaggeration), [exaggeration, relief]);
   useEffect(() => block.current?.setContourStep(step), [step, relief]);
+  useEffect(() => block.current?.setTop(top), [top, relief]);
   useEffect(() => {
-    if (block.current) block.current.lineDrag = tool === 'pull';
+    if (block.current) block.current.lineDrag = tool === 'pull' || tool === 'lasso' || tool === 'move';
   }, [tool, relief]);
 
   /** Сдвинуть кусок на четверть его стороны — в ту сторону, куда показывает стрелка на экране. */
@@ -288,6 +325,9 @@ export function Relief() {
           <div className="relief-view">
             <canvas ref={canvas} className={tool === 'view' ? '' : 'aim'} />
             <output>{hover ? `${metres(hover.height + p.hm.origin)} м` : ''}</output>
+            <button type="button" className={`relief-top ${top ? 'on' : ''}`} title="Вид строго сверху, север вверху — так удобнее обводить" onClick={() => setTop(!top)}>
+              Сверху
+            </button>
             <div className="relief-pan" role="group" aria-label="Сдвинуть кусок">
               <button type="button" title="Сдвинуть кусок от себя (↑)" style={{ gridArea: 'u' }} onClick={() => shift(0, 1)}>↑</button>
               <button type="button" title="Сдвинуть кусок влево (←)" style={{ gridArea: 'l' }} onClick={() => shift(-1, 0)}>←</button>
@@ -337,13 +377,16 @@ export function Relief() {
 
             <div className="relief-field">
               <span>Области {shapes.length ? <b>{shapes.length}</b> : null}</span>
-              {shapes.length === 0 && <p className="muted">Пока нет. «Область» — плоскость, терраса, сглаживание.</p>}
+              {shapes.length === 0 && <p className="muted">Пока нет. «Область» — плоскость, терраса, сглаживание; «Лассо» — обвести и поднять.</p>}
               <ul className="relief-list">
                 {shapes.map(({ shape }) => (
                   <li key={shape.id} className={shape.id === selected ? 'on' : ''} onClick={() => setSelected(shape.id)}>
                     <div>
                       <strong>{shapeName(shape)}</strong>
-                      <Radius value={shape.radius} label={`${shapeName(shape)}: радиус`} onChange={(radius) => setShape(shape, { radius })} />
+                      {shape.kind === 'lift' && (
+                        <Num value={shape.lift ?? 0} step={0.1} digits={2} suffix="м" label="Поднять, м" title="На сколько поднять (+) или опустить (−) землю внутри контура, м" onChange={(lift) => setShape(shape, { lift })} />
+                      )}
+                      {!shape.ring && <Radius value={shape.radius} label={`${shapeName(shape)}: радиус`} onChange={(radius) => setShape(shape, { radius })} />}
                       <button type="button" title="Убрать правку" aria-label="Убрать правку" onClick={(e) => { e.stopPropagation(); commit(removeShape(now(), shape.id)); }}>
                         ×
                       </button>

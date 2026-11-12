@@ -17,6 +17,7 @@ import {
 import type { Footprint, World } from '../core/data';
 import type { P2 } from '../core/geo';
 import { UNDERLAY_GLSL, type GroundUnderlay } from '../three/groundUnderlay';
+import { ORTHO_GLSL, type OrthoUniforms } from './ortho';
 import { NOISE_GLSL, shared, type Rect } from './shared';
 
 /** Высоты земли: регулярная сетка, между узлами — те же треугольники, что и у видимой сетки. */
@@ -297,7 +298,7 @@ export const groundColours = (city: boolean) => ({
   b: city ? new Color().setRGB(0.25, 0.235, 0.17) : new Color().setRGB(0.27, 0.29, 0.1),
 });
 
-export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, underlay: GroundUnderlay): MeshStandardMaterial {
+export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, underlay: GroundUnderlay, ortho: OrthoUniforms): MeshStandardMaterial {
   const material = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.96, metalness: 0 });
   const uniforms = {
     uMaskA: { value: masks.a },
@@ -310,6 +311,7 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
     uTime: shared.uTime,
     uLamps: shared.uLamps,
     ...underlay.uniforms,
+    ...ortho,
   };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -328,6 +330,7 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         uniform float uTime, uLamps, uGravel;
         ${NOISE_GLSL}
         ${UNDERLAY_GLSL}
+        ${ORTHO_GLSL}
         float cov(float c) {
           float w = clamp(fwidth(c) * 1.2, 0.03, 0.3);
           return smoothstep(0.5 - w, 0.5 + w, c);
@@ -355,6 +358,11 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         col = mix(col, vec3(0.105, 0.2, 0.06) * (0.86 + 0.24 * nMid + 0.25 * nFine + 0.3 * nGrain), lawn);
         float wood = cov(mB.g);
         col = mix(col, vec3(0.075, 0.13, 0.05) * (0.8 + 0.4 * nMid), wood);
+        // Снимок с дрона — настоящий цвет земли; вблизи к нему добавляется зерно, под домами его нет
+        // (там на снимке крыши).
+        vec4 photo = orthoAt(vWPos.xz);
+        float photoK = photo.a * (1.0 - smoothstep(0.2, 0.6, mC.g));
+        col = mix(col, photo.rgb * (0.92 + 0.22 * nFine + 0.3 * nGrain), photoK);
         float veg = cov(mC.b);
         float bed = 0.5 + 0.5 * sin((vWPos.x * 0.8 + vWPos.z * 0.6) * 5.2);
         col = mix(col, mix(vec3(0.16, 0.115, 0.075), vec3(0.11, 0.2, 0.06), smoothstep(0.35, 0.75, bed) * (0.6 + 0.4 * nMid)) * (0.85 + 0.3 * nGrain), veg);

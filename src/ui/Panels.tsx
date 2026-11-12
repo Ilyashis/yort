@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { TERRITORIES, findTerritory } from '../core/data';
 import { CAR_COLOURS } from '../engine/controls';
 import { probe } from '../engine/probe';
-import { useStore, type Mode } from '../state/store';
+import { useStore, type Ground, type Mode } from '../state/store';
 
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill={fill ? 'currentColor' : 'none'} stroke={fill ? 'none' : 'currentColor'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -35,6 +35,9 @@ export function PlaceBar() {
   const set = useStore((s) => s.set);
   const mode = useStore((s) => s.mode);
   const estates = useStore((s) => s.estates);
+  const ground = useStore((s) => s.ground);
+  const groundCredit = useStore((s) => s.groundCredit);
+  const hasPhoto = useStore((s) => s.hasPhoto);
   const current = findTerritory(place);
   if (mode !== 'overview') return null;
   return (
@@ -61,11 +64,30 @@ export function PlaceBar() {
           <span>Обустроенный посёлок</span>
         </label>
       )}
+      <div className="ground-pick">
+        <span>Земля</span>
+        <div className="segmented" role="group" aria-label="Чем раскрашена земля">
+          {(
+            [
+              ['drawn', 'Рисунок', 'Земля нарисована движком по данным карты'],
+              ['drone', 'Дрон', 'Снимок своей съёмки с дрона (июль 2023)'],
+              ['satellite', 'Спутник', 'Спутниковый снимок — загружается из сети'],
+            ] as [Ground, string, string][]
+          )
+            .filter(([id]) => id !== 'drone' || hasPhoto)
+            .map(([id, label, title]) => (
+              <button key={id} type="button" title={title} className={(ground === 'drone' && !hasPhoto ? 'drawn' : ground) === id ? 'on' : ''} onClick={() => set({ ground: id })}>
+                {label}
+              </button>
+            ))}
+        </div>
+      </div>
       {stats && (
         <p className="stats">
           <span><b>{stats.buildings.toLocaleString('ru')}</b> зданий</span>
           <span><b>{stats.trees.toLocaleString('ru')}</b> деревьев</span>
           <span>данные © OpenStreetMap, Copernicus DEM</span>
+          {ground === 'satellite' && groundCredit && <span>{groundCredit}</span>}
         </p>
       )}
     </header>

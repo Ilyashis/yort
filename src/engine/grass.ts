@@ -18,6 +18,7 @@ import {
 } from 'three';
 import { rng } from '../core/geo';
 import type { RingIndex } from '../core/spatial';
+import { ORTHO_GLSL, type OrthoUniforms } from './ortho';
 import { NOISE_GLSL, shared, type Rect } from './shared';
 import { groundColours, type HeightMap, type Masks } from './terrain';
 
@@ -84,7 +85,7 @@ export interface Grass {
   dispose: () => void;
 }
 
-export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boolean, footprints: RingIndex): Grass {
+export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boolean, footprints: RingIndex, ortho: OrthoUniforms): Grass {
   const group = new Group();
   group.name = 'grass';
   const tuft = tuftGeometry();
@@ -101,6 +102,7 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
     uTime: shared.uTime,
     uTall: { value: city ? 0.26 : 0.42 },
     uFar: { value: FAR },
+    ...ortho,
   };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -115,7 +117,8 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
         uniform vec3 uGroundA, uGroundB;
         uniform float uTime, uTall, uFar;
         varying vec3 vGrass;
-        ${NOISE_GLSL}`,
+        ${NOISE_GLSL}
+        ${ORTHO_GLSL}`,
       )
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nobjectNormal = vec3(0.0, 1.0, 0.0);')
       .replace(
@@ -138,12 +141,18 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
 
         // Вдали пучков меньше, зато они шире — поле остаётся сплошным.
         float thin = smoothstep(9.0, uFar * 0.7, camD);
-        float keep = step(fract(seed * 7.31), 1.0 - 0.88 * thin);
+        // Пучок не пропадает разом, а плавно уходит в землю: иначе на ходу поле мерцает.
+        float keep = clamp((1.0 - 0.88 * thin - fract(seed * 7.31)) / 0.14, 0.0, 1.0);
         // Изредка — высокий пучок бурьяна, на газоне трава ровная и короткая.
         float weed = step(0.93, fract(seed * 29.3)) * (1.0 - lawn);
         float tall = mix(uTall * (0.35 + 1.25 * patchy), 0.14, lawn) * (1.0 - 0.4 * wood) * (0.6 + 0.8 * fract(seed * 13.7)) * (1.0 + 1.3 * weed);
         tall *= (1.0 - smoothstep(0.2, 0.42, bare)) * keep * (1.0 - smoothstep(uFar * 0.72, uFar, camD));
         float widen = 1.0 + 3.2 * thin;
+        // По снимку с дрона: трава цвета настоящей земли, а на вытоптанном и голом (не зелёном) — ниже и реже.
+        vec4 photo = orthoAt(root.xz);
+        float photoK = photo.a * (1.0 - smoothstep(0.2, 0.6, mC.g));
+        float green = smoothstep(-0.03, 0.04, photo.g - max(photo.r, photo.b));
+        tall *= mix(1.0, 0.15 + 0.85 * green, photoK);
 
         float ang = seed * 50.0;
         float ca = cos(ang), sa = sin(ang);
@@ -163,6 +172,7 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
         vec3 g = mix(uGroundA, uGroundB, smoothstep(0.32, 0.68, nBig)) * (0.84 + 0.26 * nMid);
         g = mix(g, vec3(0.105, 0.2, 0.06) * (0.86 + 0.24 * nMid), lawn);
         g = mix(g, vec3(0.075, 0.13, 0.05) * (0.8 + 0.4 * nMid), wood);
+        g = mix(g, photo.rgb, photoK);
         float tone = 0.72 + 0.56 * fract(seed * 17.9) * (0.6 + 0.8 * aSide.z);
         vec3 tip = mix(g * 1.38, vec3(0.14, 0.27, 0.065), 0.6) * tone + vec3(0.004, 0.02, 0.0);
         tip = mix(tip, vec3(0.34, 0.3, 0.12), (0.2 + 0.6 * weed) * step(0.55, fract(seed * 3.3 + aSide.z)) * (1.0 - lawn));

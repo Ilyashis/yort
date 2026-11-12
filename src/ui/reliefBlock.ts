@@ -46,7 +46,9 @@ export interface BlockData {
 export interface BlockMarks {
   spots: readonly { id: string; x: number; z: number; radius: number }[];
   /** Области правок: круг, у плоскости с уклоном — стрелка вверх по склону (° от севера). */
-  areas?: readonly { id: string; x: number; z: number; radius: number; uphill?: number }[];
+  areas?: readonly { id: string; x: number; z: number; radius: number; uphill?: number; ring?: readonly P2[] }[];
+  /** Контур, который сейчас обводят лассо. */
+  outline?: readonly P2[];
   /** Сдвиг горизонтали, который сейчас тянут мышью: откуда и куда. */
   pull?: readonly [P2, P2];
   selected?: string;
@@ -85,6 +87,7 @@ export class ReliefBlock {
   private pitch = 0.62;
   private zoom = 1;
   private exaggeration = 3;
+  private tilted?: { yaw: number; pitch: number };
   private frame = 0;
   private readonly cleanup: (() => void)[] = [];
 
@@ -94,7 +97,7 @@ export class ReliefBlock {
       onPick: (x: number, z: number) => void;
       onHover: (point: { x: number; z: number; height: number } | undefined) => void;
       /** Линию ведут по блоку: from → to; done — кнопку отпустили. */
-      onLine?: (from: P2, to: P2, done: boolean) => void;
+      onLine?: (from: P2, to: P2, done: boolean, path: P2[]) => void;
     },
   ) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -135,13 +138,16 @@ export class ReliefBlock {
     };
 
     const dom = canvas;
-    let drag: { x: number; y: number; moved: number; from?: P2; to?: P2 } | undefined;
+    let drag: { x: number; y: number; moved: number; from?: P2; to?: P2; path?: P2[] } | undefined;
     const down = (e: PointerEvent) => {
       drag = { x: e.clientX, y: e.clientY, moved: 0 };
       // Линию ведём левой кнопкой; с Shift или правой кнопкой блок по-прежнему вращается.
       if (this.lineDrag && e.button === 0 && !e.shiftKey) {
         const hit = this.pick(e.clientX, e.clientY);
-        if (hit) drag.from = [hit.x, hit.z];
+        if (hit) {
+          drag.from = [hit.x, hit.z];
+          drag.path = [drag.from];
+        }
       }
       dom.setPointerCapture(e.pointerId);
     };
@@ -150,7 +156,9 @@ export class ReliefBlock {
         const hit = this.pick(e.clientX, e.clientY);
         if (hit) {
           drag.to = [hit.x, hit.z];
-          this.events.onLine?.(drag.from, drag.to, false);
+          const last = drag.path![drag.path!.length - 1];
+          if (Math.hypot(hit.x - last[0], hit.z - last[1]) > this.data!.size / 150) drag.path!.push(drag.to);
+          this.events.onLine?.(drag.from, drag.to, false, drag.path!);
           this.events.onHover({ ...hit, height: this.data!.heightAt(hit.x, hit.z) });
         }
         return;
@@ -172,9 +180,9 @@ export class ReliefBlock {
     };
     const up = (e: PointerEvent) => {
       if (drag?.from) {
-        const { from, to } = drag;
+        const { from, to, path } = drag;
         drag = undefined;
-        if (to && Math.hypot(to[0] - from[0], to[1] - from[1]) > 0.5) this.events.onLine?.(from, to, true);
+        if (to && (path!.length > 3 || Math.hypot(to[0] - from[0], to[1] - from[1]) > 0.5)) this.events.onLine?.(from, to, true, path!);
         return;
       }
       const click = drag && drag.moved <= 4;
@@ -353,10 +361,10 @@ export class ReliefBlock {
       geometry.setAttribute('position', new BufferAttribute(new Float32Array(ring), 3));
       this.marks.add(new Line(geometry, new LineBasicMaterial({ color: colour, transparent: true, opacity })));
     };
-    const stroke = (from: P2, to: P2, colour: number) => {
+    const stroke = (from: P2, to: P2, colour: number, steps = 40) => {
       const line: number[] = [];
-      for (let k = 0; k <= 40; k++) {
-        const x = from[0] + ((to[0] - from[0]) * k) / 40, z = from[1] + ((to[1] - from[1]) * k) / 40;
+      for (let k = 0; k <= steps; k++) {
+        const x = from[0] + ((to[0] - from[0]) * k) / steps, z = from[1] + ((to[1] - from[1]) * k) / steps;
         line.push(x - data.x, y(x, z) + 0.15, z - data.z);
       }
       const geometry = new BufferGeometry();
@@ -367,12 +375,14 @@ export class ReliefBlock {
       const on = area.id === marks.selected;
       const colour = on ? 0xffc857 : 0x7fd4ff;
       dot(area.x, area.z, colour, on ? r : r * 0.7);
-      circle(area.x, area.z, area.radius, colour, on ? 0.95 : 0.6);
+      if (area.ring) area.ring.forEach((p, n) => stroke(p, area.ring![(n + 1) % area.ring!.length], colour, 8));
+      else circle(area.x, area.z, area.radius, colour, on ? 0.95 : 0.6);
       if (area.uphill !== undefined) {
         const b = (area.uphill * Math.PI) / 180;
         stroke([area.x, area.z], [area.x + Math.sin(b) * area.radius * 0.85, area.z - Math.cos(b) * area.radius * 0.85], colour);
       }
     }
+    if (marks.outline) marks.outline.slice(1).forEach((p, n) => stroke(marks.outline![n], p, 0xffc857, 4));
     if (marks.pull) {
       dot(marks.pull[0][0], marks.pull[0][1], 0xff5a4f, r * 0.7);
       dot(marks.pull[1][0], marks.pull[1][1], 0xffc857, r);
@@ -402,6 +412,20 @@ export class ReliefBlock {
   setContourStep(step: number): void {
     this.uniforms.uStep.value = step;
     this.label();
+    this.render();
+  }
+
+  /** Вид строго сверху, север вверху (так удобнее обводить лассо), или обратно под углом. */
+  setTop(top: boolean): void {
+    if (top && !this.tilted) {
+      this.tilted = { yaw: this.yaw, pitch: this.pitch };
+      this.yaw = 0;
+      this.pitch = 1.5;
+    } else if (!top && this.tilted) {
+      this.yaw = this.tilted.yaw;
+      this.pitch = this.tilted.pitch;
+      this.tilted = undefined;
+    }
     this.render();
   }
 

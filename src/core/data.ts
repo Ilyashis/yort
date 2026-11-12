@@ -76,6 +76,10 @@ export interface World {
   lamps: P2[];
   benches: P2[];
   trees: P2[];
+  /** Настоящие деревья по своей съёмке: место, высота и радиус кроны (м), порода. */
+  surveyTrees: { x: number; z: number; height: number; radius: number; spruce: boolean }[];
+  /** Снято ли это место съёмкой: там деревья не сажаются наугад. */
+  surveyed: (x: number, z: number) => boolean;
   /** Цвета домов по съёмке с дрона: id → крыша и стены. */
   surveyColours: Record<string, { roof?: string; wall?: string }>;
   osmTimestamp?: string;
@@ -189,9 +193,27 @@ interface SurveyFile {
   buildings?: { id: string; kind: 'shed' | 'house'; footprint: number[][]; height: number; roof?: string }[];
 }
 
+interface TreeSurveyFile {
+  trees?: [number, number, number, number, 'b' | 's'][];
+  coverage?: { west: number; south: number; east: number; north: number; width: number; height: number; cells: string };
+}
+
+/** Сетка «где съёмка есть» (биты построчно с севера) → проверка точки мира. */
+function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: number) => boolean {
+  if (!c) return () => false;
+  const bin = atob(c.cells);
+  const x0 = frame.x(c.west), z0 = frame.z(c.north), w = frame.x(c.east) - x0, h = frame.z(c.south) - z0;
+  return (x, z) => {
+    const i = Math.floor(((x - x0) / w) * c.width), j = Math.floor(((z - z0) / h) * c.height);
+    if (i < 0 || j < 0 || i >= c.width || j >= c.height) return false;
+    const k = j * c.width + i;
+    return ((bin.charCodeAt(k >> 3) >> (7 - (k & 7))) & 1) === 1;
+  };
+}
+
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -200,6 +222,8 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<StreetsFile>(territory, 'streets.json'),
     getJson<{ trees: number[][] }>(territory, 'trees.json'),
     getJson<SurveyFile>(territory, 'survey.json'),
+    getJson<TreeSurveyFile>(territory, 'trees-survey.json'),
+    getJson<StreetsFile>(territory, 'streets-survey.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -236,11 +260,17 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
       polygonsOf(frame, f).map((rings) => ({ kind: f.properties.kind, cover: f.properties.cover, rings })),
     ),
     roads: (streets?.roads ?? []).map((r) => ({ ...r, pts: line(r.coords) })),
-    paths: (streets?.paths ?? []).map((r) => ({ ...r, pts: line(r.coords) })),
+    // К тропам OSM — дороги, обведённые по своей съёмке.
+    paths: [...(streets?.paths ?? []), ...(streetSurvey?.paths ?? [])].map((r) => ({ ...r, pts: line(r.coords) })),
     crossings: (streets?.crossings ?? []).map(line),
     lamps: (streets?.lamps ?? []).map(point),
     benches: (streets?.benches ?? []).map(point),
     trees: (treesFile?.trees ?? []).map(point),
+    surveyTrees: (treeSurvey?.trees ?? []).map(([lon, lat, height, radius, kind]) => {
+      const [x, z] = frame.xz(lon, lat);
+      return { x, z, height, radius, spruce: kind === 's' };
+    }),
+    surveyed: coverage(frame, treeSurvey?.coverage),
     surveyColours: survey?.houses ?? {},
     osmTimestamp: buildingsFile.metadata?.osmTimestamp,
   };

@@ -366,7 +366,11 @@ export function applySpots(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz' 
 }
 
 export interface LevelShape {
-  kind: 'plane' | 'smooth' | 'natural';
+  kind: 'plane' | 'smooth' | 'natural' | 'lift';
+  /** Контур области (лассо); нет — круг радиуса radius вокруг (x, z). */
+  ring?: readonly P2[];
+  /** Для «lift»: на сколько поднять (+) или опустить (−) землю внутри, м. */
+  lift?: number;
   x: number;
   z: number;
   radius: number;
@@ -385,9 +389,23 @@ export interface LevelShape {
 export function applyShapes(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz' | 'natural'>, lev: Float32Array, shapes: readonly LevelShape[]): void {
   const { rect, step, nx, nz, natural } = grid;
   for (const shape of shapes) {
-    const i0 = Math.max(0, Math.floor((shape.x - shape.radius - rect.x0) / step)), i1 = Math.min(nx - 1, Math.ceil((shape.x + shape.radius - rect.x0) / step));
-    const j0 = Math.max(0, Math.floor((shape.z - shape.radius - rect.z0) / step)), j1 = Math.min(nz - 1, Math.ceil((shape.z + shape.radius - rect.z0) / step));
+    const ring = shape.ring && shape.ring.length >= 3 ? shape.ring : undefined;
+    const bx0 = ring ? Math.min(...ring.map((p) => p[0])) : shape.x - shape.radius, bx1 = ring ? Math.max(...ring.map((p) => p[0])) : shape.x + shape.radius;
+    const bz0 = ring ? Math.min(...ring.map((p) => p[1])) : shape.z - shape.radius, bz1 = ring ? Math.max(...ring.map((p) => p[1])) : shape.z + shape.radius;
+    const i0 = Math.max(0, Math.floor((bx0 - rect.x0) / step)), i1 = Math.min(nx - 1, Math.ceil((bx1 - rect.x0) / step));
+    const j0 = Math.max(0, Math.floor((bz0 - rect.z0) / step)), j1 = Math.min(nz - 1, Math.ceil((bz1 - rect.z0) / step));
     const edge = Math.min(0.9, Math.max(0.05, shape.edge));
+    /** Вес правки в точке: 1 в глубине области, плавно до 0 у её границы. */
+    const weight = (x: number, z: number): number => {
+      if (!ring) return 1 - smooth(1 - edge, 1, Math.hypot(x - shape.x, z - shape.z) / shape.radius);
+      if (!pointInRing(x, z, ring)) return 0;
+      let d2 = Infinity;
+      for (let n = 0; n < ring.length; n++) {
+        const a = ring[n], b = ring[(n + 1) % ring.length];
+        d2 = Math.min(d2, segDist2(x, z, a[0], a[1], b[0], b[1])[0]);
+      }
+      return smooth(0, Math.max(step * 0.5, edge * shape.radius), Math.sqrt(d2));
+    };
     const b = ((shape.bearing ?? 0) * Math.PI) / 180;
     const ux = Math.sin(b), uz = -Math.cos(b);
     // Сглаживание берёт среднее по соседям из земли «до» — поэтому сначала снимок.
@@ -396,9 +414,13 @@ export function applyShapes(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz'
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
         const x = rect.x0 + i * step, z = rect.z0 + j * step;
-        const w = 1 - smooth(1 - edge, 1, Math.hypot(x - shape.x, z - shape.z) / shape.radius);
+        const w = weight(x, z);
         if (w <= 0) continue;
         const k = j * nx + i;
+        if (shape.kind === 'lift') {
+          lev[k] += (shape.lift ?? 0) * w;
+          continue;
+        }
         let target: number;
         if (shape.kind === 'natural') target = natural[k];
         else if (shape.kind === 'plane') target = (shape.height ?? natural[k] + lev[k]) + ((shape.slope ?? 0) / 100) * ((x - shape.x) * ux + (z - shape.z) * uz);

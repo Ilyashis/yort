@@ -13,6 +13,7 @@ import {
   Raycaster,
   Scene,
   Vector2,
+  type Texture,
   Vector3,
   WebGLRenderer,
   WebGLRenderTarget,
@@ -23,7 +24,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { findTerritory, loadWorld, type Territory, type World } from '../core/data';
 import { RingIndex, RoadIndex, SegmentGrid } from '../core/spatial';
-import { urlParams, useStore, type Mode } from '../state/store';
+import { urlParams, useStore, type Ground, type Mode } from '../state/store';
 import { createBuildings, type Building, type BuildingSet } from './buildings';
 import { CAR_COLOURS, Drive, Overview, Walk, type Ctx, type Player } from './controls';
 import { createMonument, createProps, placeLamps, type Props } from './props';
@@ -32,6 +33,7 @@ import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
 import { createGrass, type Grass } from './grass';
 import { applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
+import { createOrthoUniforms, findOrtho, loadOrtho, loadSatellite, satelliteSource } from './ortho';
 import { probe } from './probe';
 import { createTrees } from './trees';
 import { createEditing, loadSculpt, roadsWithEdits } from './editing';
@@ -89,6 +91,7 @@ export class Engine {
   private props?: Props;
   private village?: VillageLayers;
   private grass?: Grass;
+  private showGround?: (mode: Ground) => void;
   private treesUpdate?: (camera: { position: Vector3 }) => void;
   private soundscape?: Soundscape;
   private mode: Mode = 'overview';
@@ -230,6 +233,7 @@ export class Engine {
       if (s.topView !== prev.topView) this.overview.setView(s.topView);
       if (s.estates !== prev.estates && this.world?.territory.kind === 'village') void this.load(this.world.territory);
       if (s.sound !== prev.sound) this.soundscape?.setEnabled(s.sound);
+      if (s.ground !== prev.ground) this.showGround?.(s.ground);
     });
     this.cleanup.push(() => {
       window.removeEventListener('keydown', onKeyDown);
@@ -259,6 +263,7 @@ export class Engine {
     this.props = undefined;
     this.village = undefined;
     this.grass = undefined;
+    this.showGround = undefined;
     this.treesUpdate = undefined;
     this.soundscape?.destroy();
     this.soundscape = undefined;
@@ -317,7 +322,7 @@ export class Engine {
         const { lev } = computeLevels({ ...grid, houses, roads, water });
         applyShapes(grid, lev, (edits.shapes ?? []).map((s) => {
           const [x, z] = world.frame.xz(s.at[0], s.at[1]);
-          return { ...s, x, z, height: s.height === undefined ? undefined : s.height - hm.origin };
+          return { ...s, x, z, ring: s.ring?.map(([lon, lat]): P2 => world.frame.xz(lon, lat)), height: s.height === undefined ? undefined : s.height - hm.origin };
         }));
         applySpots(grid, lev, (edits.spots ?? []).map((s) => {
           const [x, z] = world.frame.xz(s.at[0], s.at[1]);
@@ -401,7 +406,43 @@ export class Engine {
         Object.assign(this.ctx, { roads });
       };
       layRoads(edits0, new Set());
-      const terrainMaterial = createTerrainMaterial(masks!, rect, city, this.underlay);
+      // Чем красить землю: рисунком, снимком с дрона или спутниковым. Снимки грузятся в фоне и только когда
+      // выбраны; земля и трава подхватывают их на лету.
+      const ortho = createOrthoUniforms();
+      const orthoFile = await findOrtho(world);
+      if (token !== this.loadToken) return;
+      const photos: Partial<Record<Ground, { texture: Texture; rect: [number, number, number, number] }>> = {};
+      const pending = new Set<Ground>();
+      const showGround = (mode: Ground) => {
+        const want = mode === 'drone' && !orthoFile ? 'drawn' : mode;
+        const ready = want === 'drawn' ? undefined : photos[want];
+        if (ready) {
+          ortho.uOrtho.value = ready.texture;
+          ortho.uOrthoRect.value = ready.rect;
+        }
+        ortho.uOrthoOn.value = ready ? 1 : 0;
+        if (want === 'drawn' || ready || pending.has(want)) return;
+        pending.add(want);
+        const keep = (photo: { texture: Texture; rect: [number, number, number, number] }) => {
+          if (token !== this.loadToken) return photo.texture.dispose();
+          photos[want] = photo;
+          showGround(useStore.getState().ground);
+        };
+        if (want === 'drone') void loadOrtho(world, orthoFile!, anisotropy).then(keep).catch(() => pending.delete(want));
+        else {
+          const source = satelliteSource();
+          const satellite = loadSatellite(world, source, anisotropy, () => token === this.loadToken);
+          keep(satellite);
+          useStore.getState().set({ groundCredit: `спутниковый снимок ${source.credit}` });
+          void satellite.done.then((count) => {
+            if (!count && token === this.loadToken) useStore.getState().set({ groundCredit: 'спутниковый снимок не загрузился — нет сети или источник недоступен' });
+          });
+        }
+      };
+      this.showGround = showGround;
+      useStore.getState().set({ hasPhoto: !!orthoFile, groundCredit: '' });
+      showGround(useStore.getState().ground);
+      const terrainMaterial = createTerrainMaterial(masks!, rect, city, this.underlay, ortho);
       const terrain = createTerrainMeshes(hm, terrainMaterial);
 
       progress('Сажаем деревья');
@@ -409,7 +450,7 @@ export class Engine {
       const trees = createTrees({ world, hm, roads, paths, footprints: solid.footprints, buildings: buildings.list, clearings: monument ? [[monument.x, monument.z, 22]] : [], yardTrees: villagePlan?.estates ? villagePlan.trees : undefined });
       if (token !== this.loadToken) return;
 
-      const grass = createGrass(hm, masks!, rect, city, solid.footprints);
+      const grass = createGrass(hm, masks!, rect, city, solid.footprints, ortho);
       this.grass = grass;
       this.treesUpdate = trees.update;
       group.add(terrain.group, buildings.mesh, trees.group, grass.group);
@@ -462,7 +503,7 @@ export class Engine {
         onBump: (strength: number) => soundscape.bumped(strength),
       });
       this.worldDisposers = [
-        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => (this.grass = undefined), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
+        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
         () => terrain.group.traverse((o) => (o as { geometry?: BufferGeometry }).geometry?.dispose()),
       ];
       this.world = world;

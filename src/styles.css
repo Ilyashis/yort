@@ -877,3 +877,40 @@ input[type='range']::-webkit-slider-thumb {
     flex-wrap: wrap;
   }
 }
+
+.ground-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--dim);
+}
+.ground-pick .segmented {
+  flex: 1;
+  display: flex;
+}
+.ground-pick .segmented button {
+  flex: 1;
+  padding: 6px 4px;
+}
+
+.relief-top {
+  position: absolute;
+  top: 10px;
+  right: 104px;
+  padding: 5px 10px;
+  color: var(--dim);
+  background: rgba(17, 19, 24, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+.relief-top:hover {
+  color: var(--text);
+}
+.relief-top.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}

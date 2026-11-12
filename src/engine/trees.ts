@@ -25,8 +25,8 @@ import type { Building } from './buildings';
 import { shared } from './shared';
 import type { HeightMap } from './terrain';
 
-/** Атлас 4×2: листва, листва берёзы, хвоя сосны, еловая лапа, кора, кора берёзы, белое. */
-const CELL = { leaf: 0, birchLeaf: 1, pine: 2, spruce: 3, bark: 4, birchBark: 5, white: 6 } as const;
+/** Атлас 4×2 (ячейки 0 и 2 свободны): листва берёзы, еловая лапа, кора, кора берёзы, белое. */
+const CELL = { birchLeaf: 1, spruce: 3, bark: 4, birchBark: 5, white: 6 } as const;
 type Cell = (typeof CELL)[keyof typeof CELL];
 
 /** Точка ячейки атласа (u, v — 0..1 внутри ячейки, v вверх). */
@@ -78,37 +78,19 @@ function foliageAtlas(): CanvasTexture {
       ctx.restore();
     }
   };
-  at(CELL.leaf, () => leaves(430, 23, 13, 110, false));
   at(CELL.birchLeaf, () => leaves(520, 15, 9, 108, true));
-  at(CELL.pine, () => {
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 46; i++) {
-      const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 92;
-      const x = S / 2 + Math.cos(a) * d, y = S / 2 + Math.sin(a) * d;
-      const l = 55 + (i / 46) * 30;
-      for (let k = 0; k < 26; k++) {
-        const b = r() * Math.PI * 2, len = 16 + r() * 16;
-        ctx.strokeStyle = tone(l + r() * 14);
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + Math.cos(b) * len, y + Math.sin(b) * len);
-        ctx.stroke();
-      }
-    }
-  });
   at(CELL.spruce, () => {
     // Еловая лапа: стержень снизу вверх, веточки с хвоей — клином от широкого основания к кончику.
     ctx.lineCap = 'round';
-    for (let i = 0; i < 520; i++) {
+    for (let i = 0; i < 900; i++) {
       const t = Math.pow(r(), 0.8);
       const y = S - 8 - t * (S - 20);
       const half = (1 - t) * 104 + 10;
       const x = S / 2 + (r() * 2 - 1) * half;
       const out = Math.sign(x - S / 2) || 1;
       const b = -Math.PI / 2 + out * (0.5 + r() * 0.7);
-      ctx.strokeStyle = tone(42 + r() * 44);
-      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = tone(40 + r() * 48);
+      ctx.lineWidth = 2.6;
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + Math.cos(b) * 15, y + Math.sin(b) * 15);
@@ -200,16 +182,6 @@ class Parts {
     return this.limb([0, 0, 0], [0, height, 0], r0, r1, sides, hex, cell);
   }
 
-  /** Тёмная сердцевина кроны: издали крона остаётся плотной, даже когда листва на карточках редеет. */
-  core(x: number, y: number, z: number, r: number, ry: number, palette: Palette, shade = 0.62): this {
-    const g = new IcosahedronGeometry(1, 0);
-    const p = g.getAttribute('position');
-    for (let i = 0; i < p.count; i++) p.setXYZ(i, x + p.getX(i) * r, y + p.getY(i) * r * ry, z + p.getZ(i) * r);
-    // Под листвой сердцевина тёмная (цвет тени), у дальней модели — цвета самой кроны.
-    const a = new Color(shade < 0.6 ? palette.bottom : palette.top).multiplyScalar(shade < 0.6 ? 1 : shade), b = new Color(palette.bottom).multiplyScalar(shade < 0.6 ? 0.75 : shade + 0.1), out = new Color();
-    return this.add(g, (_y, ny) => out.copy(b).lerp(a, Math.min(1, Math.max(0, ny * 0.6 + 0.5))), () => cellUv(CELL.white, 0.5, 0.5), new Vector3(x, y - r * 0.2, z));
-  }
-
   /** Лист-карточка: квадрат с текстурой листвы; нормали — как у шара кроны, чтобы свет ложился мягко. */
   card(centre: Vector3, normal: Vector3, size: number, roll: number, cell: Cell, palette: Palette, crown: Vector3, lift = 0.5): this {
     const side = Math.abs(normal.y) > 0.92 ? new Vector3(1, 0, 0) : new Vector3(0, 1, 0);
@@ -222,7 +194,7 @@ class Parts {
     for (const [i, j] of corners) {
       const p = centre.clone().addScaledVector(cu, (i * size) / 2).addScaledVector(cv, (j * size) / 2);
       const n = p.clone().sub(crown).normalize();
-      n.y += 0.35;
+      n.y += 0.7;
       n.normalize();
       const c = out.copy(b).lerp(a, Math.min(1, Math.max(0, n.y * 0.6 + lift)));
       this.pos.push(p.x, p.y, p.z);
@@ -233,58 +205,70 @@ class Parts {
     return this;
   }
 
-  /** Ком листвы: сердцевина и карточки по её поверхности. Снизу крона реже. */
-  crown(x: number, y: number, z: number, r: number, ry: number, cell: Cell, palette: Palette, rnd: () => number, density = 1, droop = 0): this {
-    const centre = new Vector3(x, y, z);
-    if (this.flat) return this.core(x, y, z, r * 0.95, ry, palette, 0.82);
-    const far = density < 1;
-    this.core(x, y, z, r * (far ? 0.72 : 0.58), ry, palette, far ? 0.4 : 0.45);
-    // Листвы столько, чтобы закрыть ком целиком: у лесных моделей карточек меньше, зато они крупнее.
-    const count = far ? Math.round(20 * density) : 24;
-    const size = r * (far ? 1.7 : 1.2);
+  /**
+   * Крона одним объёмом: листва на карточках по яйцевидной форме вокруг ствола (самое широкое место — ниже
+   * середины, кверху сужается), внутри узкая тёмная сердцевина, чтобы крона не просвечивала насквозь.
+   */
+  canopy(y0: number, y1: number, radius: number, cell: Cell, palette: Palette, rnd: () => number, count: number, size: number, droop: number): this {
+    const mid = (y0 + y1) / 2, half = (y1 - y0) / 2;
+    const profile = (t: number) => radius * Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.pow(t, 0.72))));
+    const egg = (r: number, shade: number) => {
+      const g = new IcosahedronGeometry(1, 1);
+      const p = g.getAttribute('position');
+      for (let i = 0; i < p.count; i++) {
+        const t = (p.getY(i) + 1) / 2;
+        const k = (profile(Math.min(0.97, Math.max(0.03, t))) / radius) * r;
+        const flat = Math.hypot(p.getX(i), p.getZ(i)) || 1;
+        p.setXYZ(i, (p.getX(i) / flat) * k * Math.min(1, flat * 1.6), y0 + t * (y1 - y0), (p.getZ(i) / flat) * k * Math.min(1, flat * 1.6));
+      }
+      // Под листвой сердцевина — цвета тени, целиком тёмная; у дальней модели она и есть крона.
+      const top = new Color(shade < 0.6 ? palette.bottom : palette.top).multiplyScalar(shade < 0.6 ? 0.42 : shade), bottom = new Color(palette.bottom).multiplyScalar(shade < 0.6 ? 0.32 : shade), out = new Color();
+      this.add(g, (_y, ny) => out.copy(bottom).lerp(top, Math.min(1, Math.max(0, ny * 0.6 + 0.5))), () => cellUv(CELL.white, 0.5, 0.5), new Vector3(0, mid - half * 0.3, 0));
+    };
+    if (this.flat) {
+      egg(radius * 0.95, 0.85);
+      return this;
+    }
+    egg(radius * 0.36, 0.42);
+    const centre = new Vector3(0, mid - half * 0.25, 0);
     for (let i = 0; i < count; i++) {
-      const dir = new Vector3(rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1);
-      if (dir.lengthSq() < 0.05 || dir.lengthSq() > 1) {
-        i--;
-        continue;
-      }
-      dir.normalize();
-      if (dir.y < -0.55 && rnd() < 0.7) dir.y = -dir.y;
-      const k = 0.6 + rnd() * 0.4;
-      const at = new Vector3(x + dir.x * r * k, y + dir.y * r * ry * k, z + dir.z * r * k);
-      // Карточка смотрит наружу, но каждая со своим наклоном; у берёзы часть висит прядями вниз.
-      const normal = dir.clone().multiplyScalar(0.7).add(new Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5)).normalize();
-      if (droop && rnd() < droop) {
-        normal.y *= 0.15;
+      const t = 0.04 + 0.94 * (i + rnd()) / count;
+      const a = rnd() * Math.PI * 2;
+      const r = profile(t) * (0.3 + 0.7 * Math.sqrt(rnd()));
+      const at = new Vector3(Math.cos(a) * r, y0 + t * (y1 - y0), Math.sin(a) * r);
+      const normal = new Vector3(Math.cos(a), (t - 0.45) * 0.9, Math.sin(a)).multiplyScalar(0.8).add(new Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5)).normalize();
+      // Нижние пряди берёзы висят: карточка стоит вертикально и опущена.
+      if (rnd() < droop * (1.2 - t)) {
+        normal.y *= 0.12;
         normal.normalize();
-        at.y -= r * 0.6;
+        at.y -= size * 0.45;
       }
-      this.card(at, normal, size * (0.8 + rnd() * 0.45), rnd() * Math.PI * 2, cell, palette, centre.clone().setY(y - r * 0.25));
+      this.card(at, normal, size * (0.75 + rnd() * 0.5), rnd() * Math.PI * 2, cell, palette, centre);
     }
     return this;
   }
 
-  /** Ярус еловых лап: карточки расходятся от ствола и свисают. */
+  /** Ярус еловых лап: карточки расходятся от ствола, свисают и перекрывают друг друга. */
   tier(y: number, length: number, count: number, turn: number, palette: Palette, rnd: () => number): this {
     if (this.flat) return this;
     for (let k = 0; k < count; k++) {
-      const a = turn + (k / count) * Math.PI * 2 + (rnd() - 0.5) * 0.3;
+      const a = turn + (k / count) * Math.PI * 2 + (rnd() - 0.5) * 0.35;
       const out = new Vector3(Math.cos(a), 0, Math.sin(a));
-      const drop = 0.32 + rnd() * 0.16;
-      const along = out.clone().setY(-drop).normalize();
+      const reach = length * (0.82 + rnd() * 0.3);
+      const along = out.clone().setY(-(0.34 + rnd() * 0.2)).normalize();
       const across = new Vector3(-out.z, 0, out.x);
-      const half = length * 0.42;
-      const base = new Vector3(0, y, 0).addScaledVector(out, 0.05);
-      const tip = base.clone().addScaledVector(along, length);
-      const top = new Color(palette.top), bottom = new Color(palette.bottom);
-      // Основание лапы — у ствола (низ ячейки), кончик — снаружи.
+      const half = reach * 0.5;
+      const base = new Vector3(0, y + (rnd() - 0.5) * 0.25, 0);
+      const tip = base.clone().addScaledVector(along, reach);
+      const top = new Color(palette.top).multiplyScalar(0.85 + rnd() * 0.3), bottom = new Color(palette.bottom);
+      // Основание лапы — у ствола (низ ячейки), кончик — снаружи; лапа чуть выгнута «домиком».
       const quad: [Vector3, number, number, Color][] = [
-        [base.clone().addScaledVector(across, -half), 0, 0, bottom], [base.clone().addScaledVector(across, half), 1, 0, bottom],
-        [tip.clone().addScaledVector(across, half), 1, 1, top], [tip.clone().addScaledVector(across, -half), 0, 1, top],
+        [base.clone().addScaledVector(across, -half).setY(base.y - reach * 0.12), 0, 0, bottom], [base.clone().addScaledVector(across, half).setY(base.y - reach * 0.12), 1, 0, bottom],
+        [tip.clone().addScaledVector(across, half * 0.9), 1, 1, top], [tip.clone().addScaledVector(across, -half * 0.9), 0, 1, top],
       ];
       for (const i of [0, 1, 2, 0, 2, 3]) {
         const [p, u, v, c] = quad[i];
-        const n = out.clone().multiplyScalar(0.55).setY(0.85).normalize();
+        const n = out.clone().multiplyScalar(0.6).setY(0.8).normalize();
         this.pos.push(p.x, p.y, p.z);
         this.nrm.push(n.x, n.y, n.z);
         this.col.push(c.r, c.g, c.b);
@@ -294,10 +278,42 @@ class Parts {
     return this;
   }
 
-  cone(y: number, r: number, h: number, sides: number, palette: Palette): this {
-    const k = this.flat ? 1.5 : 1;
-    const a = new Color(palette.top).multiplyScalar(0.55 * k), b = new Color(palette.bottom).multiplyScalar(0.7 * k), out = new Color();
-    return this.add(new ConeGeometry(r * (this.flat ? 2.2 : 1), h, sides, 1, true).translate(0, y + h / 2, 0), (yy) => out.copy(b).lerp(a, (yy - y) / h), () => cellUv(CELL.white, 0.5, 0.5));
+  /** Ель целиком: ствол, тёмный конус внутри, ярусы лап от земли до макушки и острая верхушка. */
+  spruce(height: number, radius: number, tiers: number, perTier: number, palette: Palette, bark: string, rnd: () => number): this {
+    this.trunk(height * 0.96, radius * 0.075, 0.02, this.flat ? 4 : 6, bark);
+    const skirt = height * 0.1;
+    const cone = (r: number, shade: number) => {
+      const a = new Color(palette.top).multiplyScalar(shade), b = new Color(palette.bottom).multiplyScalar(shade), out = new Color();
+      this.add(new ConeGeometry(r, height - skirt, this.flat ? 7 : 8, 1, true).translate(0, skirt + (height - skirt) / 2, 0), (y) => out.copy(b).lerp(a, (y - skirt) / (height - skirt)), () => cellUv(CELL.white, 0.5, 0.5));
+    };
+    if (this.flat) {
+      cone(radius * 0.86, 1.25);
+      return this;
+    }
+    cone(radius * 0.36, 0.7);
+    for (let k = 0; k < tiers; k++) {
+      const t = k / (tiers - 1);
+      // Лапы короче кверху, ярусы наверху чаще.
+      this.tier(skirt + 0.35 + (height - skirt - 0.9) * Math.pow(t, 0.9), radius * (1 - t * 0.9) + 0.15, Math.max(4, Math.round(perTier * (1 - t * 0.45))), k * 0.83, palette, rnd);
+    }
+    // Макушка: две вертикальные карточки крест-накрест.
+    for (const a of [0.4, 0.4 + Math.PI / 2]) {
+      const across = new Vector3(Math.cos(a), 0, Math.sin(a));
+      const base = height - 1.5, w = 0.55;
+      const c = new Color(palette.top);
+      const quad: [Vector3, number, number][] = [
+        [new Vector3(0, base, 0).addScaledVector(across, -w), 0, 0], [new Vector3(0, base, 0).addScaledVector(across, w), 1, 0],
+        [new Vector3(0, height + 0.25, 0).addScaledVector(across, w * 0.9), 1, 1], [new Vector3(0, height + 0.25, 0).addScaledVector(across, -w * 0.9), 0, 1],
+      ];
+      for (const i of [0, 1, 2, 0, 2, 3]) {
+        const [p, u, v] = quad[i];
+        this.pos.push(p.x, p.y, p.z);
+        this.nrm.push(0, 1, 0);
+        this.col.push(c.r, c.g, c.b);
+        this.uv.push(...cellUv(CELL.spruce, u, v));
+      }
+    }
+    return this;
   }
 
   build(): BufferGeometry {
@@ -310,57 +326,28 @@ class Parts {
   }
 }
 
-type Species = 'leaf' | 'birch' | 'pine' | 'spruce' | 'leafLow' | 'birchLow' | 'pineLow';
+type Species = 'birch' | 'spruce' | 'birchLow' | 'spruceLow';
 
 function models(flat: boolean): Record<Species, BufferGeometry> {
   const r = rng(77);
   const make = () => Object.assign(new Parts(), { flat });
-  const G: Palette = { top: '#6f9a3c', bottom: '#2a4a1c' };
-  const B: Palette = { top: '#9aba4c', bottom: '#4b6f2c' };
-  const P: Palette = { top: '#3f6c48', bottom: '#162f22' };
-  const S: Palette = { top: '#4a7446', bottom: '#19301f' };
-  const BARK = '#5a4838', PINE_BARK = '#c57c44', WHITE = '#ffffff';
+  const B: Palette = { top: '#9cbc4e', bottom: '#5c8434' };
+  const S: Palette = { top: '#4d7a4c', bottom: '#142a1c' };
+  const BARK = '#4c3d30', WHITE = '#ffffff';
 
-  const leaf = make().trunk(3.1, 0.27, 0.17, 7, BARK)
-    .limb([0, 2.5, 0], [1.4, 4.3, 0.5], 0.13, 0.06, 5, BARK).limb([0, 2.7, 0], [-1.2, 4.5, -0.8], 0.13, 0.06, 5, BARK)
-    .limb([0, 2.9, 0], [-0.3, 4.3, 1.4], 0.12, 0.05, 5, BARK).limb([0, 3.0, 0], [0.1, 5.2, -0.2], 0.15, 0.07, 5, BARK)
-    .crown(0, 5.2, 0, 2.4, 0.9, CELL.leaf, G, r).crown(1.6, 4.4, 0.6, 1.8, 0.85, CELL.leaf, G, r)
-    .crown(-1.4, 4.6, -0.9, 1.8, 0.85, CELL.leaf, G, r).crown(0.2, 6.6, -0.3, 1.7, 0.9, CELL.leaf, G, r)
-    .crown(-0.4, 4.3, 1.6, 1.6, 0.85, CELL.leaf, G, r);
-
-  // Берёза: тонкий белый ствол с чёрными отметинами, тёмный у земли; узкая высокая крона, пряди свисают.
+  // Берёза: тонкий белый ствол с чёрными отметинами, тёмный у земли; крона одним яйцевидным объёмом,
+  // нижние пряди свисают.
   const birch = make().limb([0, 0, 0], [0, 0.7, 0], 0.2, 0.17, 6, '#4a4540')
-    .limb([0, 0.6, 0], [0.06, 4.6, 0.04], 0.17, 0.1, 6, WHITE, CELL.birchBark).limb([0.06, 4.6, 0.04], [0.15, 8.8, 0.1], 0.1, 0.025, 5, WHITE, CELL.birchBark)
-    .limb([0.04, 3.3, 0], [1.0, 4.6, 0.4], 0.05, 0.02, 4, WHITE, CELL.birchBark).limb([0.04, 3.9, 0], [-0.9, 5.3, -0.5], 0.05, 0.02, 4, WHITE, CELL.birchBark)
-    .limb([0.06, 4.8, 0], [0.3, 6.1, 1.0], 0.045, 0.02, 4, WHITE, CELL.birchBark).limb([0.08, 5.6, 0], [-0.6, 6.9, 0.7], 0.04, 0.02, 4, WHITE, CELL.birchBark)
-    .crown(0.5, 4.5, 0.2, 1.2, 1.05, CELL.birchLeaf, B, r, 1, 0.55).crown(-0.5, 5.3, -0.3, 1.25, 1.05, CELL.birchLeaf, B, r, 1, 0.55)
-    .crown(0.2, 6.3, 0.5, 1.2, 1.05, CELL.birchLeaf, B, r, 1, 0.5).crown(-0.2, 7.3, 0.1, 1.05, 1.1, CELL.birchLeaf, B, r, 1, 0.4)
-    .crown(0.12, 8.4, 0.1, 0.8, 1.2, CELL.birchLeaf, B, r, 1, 0.25);
-
-  // Сосна: высокий голый ствол — серо-бурый снизу, рыжий выше; крона зонтиком на самом верху.
-  const pine = make().limb([0, 0, 0], [0.05, 3.6, 0], 0.26, 0.2, 7, '#7d604a').limb([0.05, 3.6, 0], [0.2, 9.8, -0.1], 0.2, 0.08, 7, PINE_BARK)
-    .limb([0.06, 4.2, 0], [0.7, 4.5, 0.3], 0.035, 0.015, 3, '#5a4a40').limb([0.1, 5.3, 0], [-0.6, 5.5, -0.4], 0.035, 0.015, 3, '#5a4a40')
-    .limb([0.14, 7.0, 0], [1.7, 7.7, 0.4], 0.08, 0.035, 4, PINE_BARK).limb([0.15, 7.5, 0], [-1.5, 8.2, -0.7], 0.08, 0.035, 4, PINE_BARK)
-    .limb([0.17, 8.0, 0], [0.3, 8.7, 1.5], 0.07, 0.03, 4, PINE_BARK).limb([0.18, 8.5, 0], [-0.2, 9.1, -1.4], 0.07, 0.03, 4, PINE_BARK)
-    .crown(1.7, 7.9, 0.4, 1.25, 0.55, CELL.pine, P, r).crown(-1.5, 8.4, -0.7, 1.3, 0.55, CELL.pine, P, r)
-    .crown(0.3, 8.9, 1.5, 1.15, 0.55, CELL.pine, P, r).crown(-0.2, 9.3, -1.4, 1.1, 0.55, CELL.pine, P, r)
-    .crown(0.9, 9.5, -0.4, 1.2, 0.55, CELL.pine, P, r).crown(0.2, 10.2, 0.1, 1.55, 0.6, CELL.pine, P, r);
-
-  const spruce = make().trunk(8.6, 0.2, 0.03, 6, BARK).cone(1.0, 1.0, 7.8, 7, S);
-  for (let k = 0; k < 9; k++) spruce.tier(1.5 + k * 0.82, 2.9 * (1 - k / 10.5) + 0.25, k < 6 ? 7 : 5, k * 0.7, S, r);
-  spruce.tier(8.75, 0.75, 4, 0.3, S, r);
+    .limb([0, 0.6, 0], [0.06, 4.6, 0.04], 0.17, 0.1, 6, WHITE, CELL.birchBark).limb([0.06, 4.6, 0.04], [0.12, 9.0, 0.08], 0.1, 0.025, 5, WHITE, CELL.birchBark)
+    .limb([0.04, 3.4, 0], [1.1, 4.9, 0.4], 0.05, 0.02, 4, WHITE, CELL.birchBark).limb([0.04, 4.0, 0], [-1.0, 5.6, -0.5], 0.05, 0.02, 4, WHITE, CELL.birchBark)
+    .limb([0.06, 4.9, 0], [0.3, 6.4, 1.0], 0.045, 0.02, 4, WHITE, CELL.birchBark).limb([0.08, 5.7, 0], [-0.6, 7.1, 0.7], 0.04, 0.02, 4, WHITE, CELL.birchBark)
+    .canopy(3.0, 9.6, 2.0, CELL.birchLeaf, B, r, 130, 1.5, 0.75);
 
   return {
-    leaf: leaf.build(),
     birch: birch.build(),
-    pine: pine.build(),
-    spruce: spruce.build(),
-    leafLow: make().trunk(3, 0.24, 0.16, 4, BARK)
-      .crown(0, 5, 0, 2.5, 0.95, CELL.leaf, G, r, 0.45).crown(0.9, 6.2, 0.4, 1.6, 0.9, CELL.leaf, G, r, 0.45).build(),
-    birchLow: make().trunk(7.6, 0.16, 0.04, 4, WHITE, CELL.birchBark)
-      .crown(0, 5.4, 0, 1.3, 1.5, CELL.birchLeaf, B, r, 0.55, 0.4).crown(0.1, 7.6, 0.1, 0.95, 1.4, CELL.birchLeaf, B, r, 0.55, 0.3).build(),
-    pineLow: make().limb([0, 0, 0], [0, 3.4, 0], 0.24, 0.19, 4, '#7d604a').limb([0, 3.4, 0], [0.1, 9.2, 0], 0.19, 0.08, 4, PINE_BARK)
-      .crown(0.1, 9.4, 0, 2.0, 0.5, CELL.pine, P, r, 0.45).crown(1.0, 8.3, 0.3, 1.2, 0.5, CELL.pine, P, r, 0.45).crown(-0.9, 8.6, -0.5, 1.1, 0.5, CELL.pine, P, r, 0.45).build(),
+    spruce: make().spruce(10.2, 2.9, 15, 10, S, BARK, r).build(),
+    birchLow: make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 30, 2.1, 0.6).build(),
+    spruceLow: make().spruce(10.0, 2.8, 7, 6, S, BARK, r).build(),
   };
 }
 
@@ -368,6 +355,8 @@ interface Tree {
   x: number;
   z: number;
   s: number;
+  /** Ширина кроны относительно высоты (1 — как у модели); нет — случайная. */
+  wide?: number;
   species: Species;
 }
 
@@ -397,7 +386,20 @@ function scatter(ctx: TreeContext): Tree[] {
     return list[0][0];
   };
 
-  for (const [x, z] of world.trees) trees.push({ x, z, s: 0.85 + rnd() * 0.5, species: choose([['birch', 0.45], ['leaf', 0.35], ['pine', 0.2]]) });
+  // Настоящие деревья по своей съёмке: место, высота и ширина кроны — как в жизни. В лесу — упрощённые модели.
+  const forests = world.ground.filter((g) => g.kind === 'green' && g.cover === 'wood');
+  for (const t of world.surveyTrees) {
+    if (footprints.find(t.x, t.z) >= 0) continue;
+    const dense = forests.some((g) => pointInPoly(t.x, t.z, g.rings));
+    // Модели: берёза — 9,6 м высотой и 2 м радиусом, ель — 10,2 и 2,9 м.
+    const s = Math.min(2.6, Math.max(0.25, t.height / (t.spruce ? 10.2 : 9.6)));
+    const wide = Math.min(1.7, Math.max(0.65, t.radius / (t.spruce ? 2.9 : 2.0) / s));
+    trees.push({ x: t.x, z: t.z, s, wide, species: t.spruce ? (dense ? 'spruceLow' : 'spruce') : dense ? 'birchLow' : 'birch' });
+  }
+  /** Здесь съёмка уже показала, где деревья есть, а где нет — наугад не сажаем. */
+  const known = (x: number, z: number) => world.surveyTrees.length > 0 && world.surveyed(x, z);
+
+  for (const [x, z] of world.trees) trees.push({ x, z, s: 0.85 + rnd() * 0.5, species: choose([['birch', 0.68], ['spruce', 0.32]]) });
 
   const blocked = world.ground.filter((g) => g.kind === 'pitch' || g.kind === 'water' || g.kind === 'parking');
   const inBlocked = (x: number, z: number) => blocked.some((g) => pointInPoly(x, z, g.rings));
@@ -420,11 +422,11 @@ function scatter(ctx: TreeContext): Tree[] {
       for (let gz = Math.floor(z0 / step) * step; gz <= z1; gz += step) {
         if (!wood && rnd() > 0.62) continue;
         const x = gx + rnd() * step * 0.9, z = gz + rnd() * step * 0.9;
-        if (!pointInPoly(x, z, g.rings) || !free(x, z, wood ? 3 : 1.5) || (!wood && inBlocked(x, z))) continue;
+        if (known(x, z) || !pointInPoly(x, z, g.rings) || !free(x, z, wood ? 3 : 1.5) || (!wood && inBlocked(x, z))) continue;
         trees.push(
           wood
-            ? { x, z, s: 1 + rnd() * 0.9, species: choose([['birchLow', 0.5], ['pineLow', 0.44], ['leafLow', 0.06]]) }
-            : { x, z, s: 0.8 + rnd() * 0.7, species: choose([['birch', 0.42], ['pine', 0.26], ['leaf', 0.2], ['spruce', 0.12]]) },
+            ? { x, z, s: 1 + rnd() * 0.9, species: choose([['birchLow', 0.62], ['spruceLow', 0.38]]) }
+            : { x, z, s: 0.8 + rnd() * 0.7, species: choose([['birch', 0.62], ['spruce', 0.38]]) },
         );
       }
     }
@@ -432,9 +434,9 @@ function scatter(ctx: TreeContext): Tree[] {
 
   if (ctx.yardTrees) {
     for (const [x, z] of ctx.yardTrees) {
-      if (footprints.find(x, z) >= 0) continue;
+      if (known(x, z) || footprints.find(x, z) >= 0) continue;
       const birch = rnd() < 0.3;
-      trees.push({ x, z, s: birch ? 0.8 + rnd() * 0.4 : 0.42 + rnd() * 0.22, species: birch ? 'birch' : 'leaf' });
+      trees.push({ x, z, s: birch ? 0.8 + rnd() * 0.4 : 0.4 + rnd() * 0.22, species: birch || rnd() < 0.7 ? 'birch' : 'spruce' });
     }
   } else if (world.territory.kind === 'village') {
     for (const b of ctx.buildings) {
@@ -444,9 +446,9 @@ function scatter(ctx: TreeContext): Tree[] {
       for (let k = 0; k < n; k++) {
         const a = rnd() * Math.PI * 2, d = b.box.L + 3 + rnd() * 9;
         const x = c[0] + Math.cos(a) * d, z = c[1] + Math.sin(a) * d;
-        if (!free(x, z, 2.5)) continue;
+        if (known(x, z) || !free(x, z, 2.5)) continue;
         const small = rnd() < 0.4;
-        trees.push({ x, z, s: small ? 0.45 + rnd() * 0.2 : 0.75 + rnd() * 0.5, species: small ? 'leaf' : choose([['birch', 0.55], ['pine', 0.25], ['leaf', 0.12], ['spruce', 0.08]]) });
+        trees.push({ x, z, s: small ? 0.45 + rnd() * 0.2 : 0.75 + rnd() * 0.5, species: choose([['birch', 0.72], ['spruce', 0.28]]) });
       }
     }
   }
@@ -511,7 +513,7 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
     const mesh = new InstancedMesh(geometries[species], material, list.length);
     list.forEach((t, i) => {
       q.setFromAxisAngle(up, rnd() * Math.PI * 2);
-      const wide = t.s * (0.85 + rnd() * 0.3);
+      const wide = t.s * (t.wide ?? 0.85 + rnd() * 0.3);
       m.compose(pos.set(t.x, ctx.hm.at(t.x, t.z) - 0.15, t.z), q, scale.set(wide, t.s, wide));
       mesh.setMatrixAt(i, m);
       const v = 0.82 + rnd() * 0.36;

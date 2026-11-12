@@ -102,6 +102,20 @@ describe('выравнивание земли', () => {
     expect(plane.height).toBeCloseTo(4.8, 3);
   });
 
+  it('лассо: поднимает землю только внутри контура, у границы — плавно', () => {
+    const g = grid(slope);
+    const lev = new Float32Array(g.natural.length);
+    const k = (x: number, z: number) => (z / 3) * g.nx + x / 3;
+    const ring: P2[] = [[30, 30], [78, 30], [78, 54], [54, 54], [54, 78], [30, 78]];
+    applyShapes(g, lev, [{ kind: 'lift', x: 50, z: 50, radius: 22, edge: 0.25, ring, lift: 2 }]);
+    expect(lev[k(42, 42)]).toBeCloseTo(2, 4);
+    expect(lev[k(33, 42)]).toBeGreaterThan(0);
+    expect(lev[k(33, 42)]).toBeLessThan(2);
+    // Вырез «буквы Г» и всё снаружи не тронуты.
+    expect(lev[k(66, 66)]).toBe(0);
+    expect(lev[k(90, 42)]).toBe(0);
+  });
+
   it('монотонная последовательность', () => {
     expect(monotone([1, 3, 2, 4])).toEqual([1, 2.5, 2.5, 4]);
   });

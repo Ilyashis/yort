@@ -74,8 +74,12 @@ export interface Edits {
 
 export interface TerrainShape {
   id: string;
-  kind: 'plane' | 'smooth' | 'natural';
+  kind: 'plane' | 'smooth' | 'natural' | 'lift';
   at: LonLat;
+  /** Контур области, обведённый лассо; нет — круг. */
+  ring?: LonLat[];
+  /** Для «lift»: на сколько поднять (+) или опустить (−) землю внутри контура, м. */
+  lift?: number;
   radius: number;
   /** Доля радиуса на плавный переход к земле вокруг: 0,12 — терраса, 0,4 — мягко. */
   edge: number;
@@ -90,12 +94,23 @@ export function upsertShape(edits: Edits, shape: TerrainShape): Edits {
     ...shape,
     radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, shape.radius)),
     edge: Math.min(0.9, Math.max(0.05, shape.edge)),
+    ...(shape.kind === 'lift' ? { lift: Math.round(Math.min(15, Math.max(-15, shape.lift ?? 0)) * 100) / 100 } : {}),
     ...(shape.kind === 'plane'
       ? { height: Math.round((shape.height ?? 0) * 100) / 100, slope: Math.round(Math.min(60, Math.max(0, shape.slope ?? 0)) * 10) / 10, bearing: (((Math.round(shape.bearing ?? 0) % 360) + 360) % 360) }
       : {}),
   };
   const shapes = edits.shapes ?? [];
   return { ...edits, shapes: shapes.some((s) => s.id === shape.id) ? shapes.map((s) => (s.id === shape.id ? next : s)) : [...shapes, next] };
+}
+
+/** Передвинуть область (круг или контур) на столько-то градусов долготы и широты. */
+export function moveShape(edits: Edits, id: string, dLon: number, dLat: number): Edits {
+  return {
+    ...edits,
+    shapes: (edits.shapes ?? []).map((s) =>
+      s.id !== id ? s : { ...s, at: [s.at[0] + dLon, s.at[1] + dLat], ...(s.ring ? { ring: s.ring.map(([lon, lat]): LonLat => [lon + dLon, lat + dLat]) } : {}) },
+    ),
+  };
 }
 
 export function removeShape(edits: Edits, id: string): Edits {
@@ -276,7 +291,9 @@ export function parseEdits(value: unknown): Edits | undefined {
       .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
     shapes: arr<TerrainShape>(v.shapes).filter(
       (s) =>
-        s && typeof s.id === 'string' && ['plane', 'smooth', 'natural'].includes(s.kind) && points([s.at]).length === 1 && Number.isFinite(s.radius) && Number.isFinite(s.edge) &&
+        s && typeof s.id === 'string' && ['plane', 'smooth', 'natural', 'lift'].includes(s.kind) &&
+        (s.ring === undefined || (Array.isArray(s.ring) && s.ring.length >= 3 && points(s.ring).length === s.ring.length)) &&
+        (s.kind !== 'lift' || Number.isFinite(s.lift)) && points([s.at]).length === 1 && Number.isFinite(s.radius) && Number.isFinite(s.edge) &&
         (s.kind !== 'plane' || [s.height, s.slope, s.bearing].every((n) => Number.isFinite(n))),
     ),
   };
