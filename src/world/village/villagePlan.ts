@@ -102,9 +102,13 @@ export function sizePresets(id: HouseModelId): [number, number][] {
   return [0.2, 0.5, 0.82].map((t) => [m.width.min + (m.width.max - m.width.min) * t, m.depth.min + (m.depth.max - m.depth.min) * t]);
 }
 
-/** Пределы масштаба модели под контур: шире — заметно искажаются окна и брёвна. */
-export const MIN_SCALE = 0.8;
-export const MAX_SCALE = 1.25;
+/**
+ * Пределы масштаба модели под контур. Раньше были 0,8…1,25 (чтобы окна и брёвна не искажались), и каждый
+ * пятый дом выходил заметно меньше или больше своего контура на карте. Совпадение с картой важнее: модель
+ * тянется почти под любой контур, упор — только для совсем крайних случаев.
+ */
+export const MIN_SCALE = 0.55;
+export const MAX_SCALE = 1.9;
 
 /** Какой размер модели взять для прямоугольника width × depth и как его растянуть. */
 export function fitPreset(id: HouseModelId, width: number, depth: number): { preset: number; size: [number, number]; scale: [number, number] } {

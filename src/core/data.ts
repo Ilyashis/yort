@@ -215,7 +215,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -228,6 +228,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<StreetsFile>(territory, 'streets-survey.json'),
     getJson<TreeSurveyFile>(territory, 'trees-render.json'),
     getJson<{ fences?: number[][][] }>(territory, 'fences-render.json'),
+    getJson<{ footprints?: Record<string, number[][]> }>(territory, 'buildings-fit.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -240,6 +241,13 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     features.flatMap((f) => polygonsOf(frame, f).map((rings) => ({ props: f.properties, rings })));
 
   const buildings = footprints(buildingsFile.features);
+  // Контуры, подогнанные под крыши на карте (scripts/render/fit_houses.py), заменяют контуры OSM.
+  for (const b of buildings) {
+    const fit = houseFit?.footprints?.[b.props.id];
+    if (!fit || b.rings.length !== 1) continue;
+    const ring = normalizeRing(fit.map((c) => frame.xz(c[0], c[1])), true);
+    if (ring.length >= 3) b.rings = [ring];
+  }
   for (const b of survey?.buildings ?? []) {
     const ring = normalizeRing(b.footprint.map((c) => frame.xz(c[0], c[1])), true);
     if (ring.length < 3) continue;

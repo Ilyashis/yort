@@ -21,8 +21,9 @@ describe('выравнивание земли', () => {
       const k = (z / 3) * g.nx + x / 3;
       expect(g.natural[k] + lev[k]).toBeCloseTo(level, 3);
     }
-    // Далеко от дома земля не тронута.
-    expect(lev[0]).toBe(0);
+    // Далеко от дома площадки нет: земля только слегка сглажена (бугры), а не подтянута к высоте дома.
+    expect(Math.abs(lev[0])).toBeLessThan(0.5);
+    expect(Math.abs(g.natural[0] + lev[0] - level)).toBeGreaterThan(2);
   });
 
   it('подъём участка поднимает двор и улицу рядом', () => {
@@ -130,6 +131,23 @@ describe('выравнивание земли', () => {
     // Рядом с линией земля между её высотой и прежней.
     const near = h(60, 51), was = g.natural[k(60, 51)];
     expect(Math.abs(near - 5)).toBeLessThan(Math.abs(was - 5));
+  });
+
+  it('соседние дома не стоят ступеньками, улица без бугров', () => {
+    // Ровный уклон 4 % на восток и «шум» съёмки: бугры по полметра через каждые несколько метров.
+    const bumpy = (x: number, z: number) => x * 0.04 + Math.sin(x * 0.9) * 0.5 + Math.cos(z * 1.1) * 0.5;
+    const g = grid(bumpy, 180);
+    const houses = [0, 1, 2, 3, 4].map((n) => ({ id: `h${n}`, ring: [[30 + n * 27, 60], [42 + n * 27, 60], [42 + n * 27, 70], [30 + n * 27, 70]] as P2[] }));
+    const road = { pts: [[0, 90], [180, 90]] as P2[], width: 6 };
+    const { lev, houseLevel } = computeLevels({ ...g, houses, roads: [road], water: [] });
+    // Дома идут вверх по склону ровными шагами: каждый выше соседа примерно на уклон × расстояние (1,08 м).
+    const levels = houses.map((h) => houseLevel.get(h.id)!);
+    for (let n = 1; n + 1 < levels.length; n++) expect(Math.abs(levels[n + 1] - 2 * levels[n] + levels[n - 1])).toBeLessThan(0.25);
+    // Полотно улицы: изломы между соседними узлами — сантиметры, а не дециметры, как у исходной земли.
+    const k = (x: number) => (90 / 3) * g.nx + x / 3;
+    const rough = (get: (x: number) => number) => Math.max(...[30, 60, 90, 120, 150].map((x) => Math.abs(get(x + 3) - 2 * get(x) + get(x - 3))));
+    expect(rough((x) => g.natural[k(x)] + lev[k(x)])).toBeLessThan(0.08);
+    expect(rough((x) => g.natural[k(x)])).toBeGreaterThan(0.3);
   });
 
   it('монотонная последовательность', () => {

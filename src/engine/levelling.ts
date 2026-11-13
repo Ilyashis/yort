@@ -51,6 +51,15 @@ const STREET_ANCHOR = 0.3;
 const YARD_ABOVE_ROAD = 0.12;
 /** Обочина: от края полотна до естественной земли, м. */
 const ROAD_SHOULDER = 6;
+/** Сглаживание земли посёлка: полностью — ближе SMOOTH_NEAR м от домов и дорог, к SMOOTH_FAR сходит на нет. */
+const SMOOTH_NEAR = 45;
+const SMOOTH_FAR = 85;
+/** Размер бугров, которые уходят, м (σ размытия). */
+const SMOOTH_SIGMA = 7;
+/** На каком расстоянии соседние дома выравнивают высоты друг по другу, м. */
+const NEIGHBOUR_SIGMA = 22;
+/** Сглаживание профиля улицы вдоль неё, м. */
+const STREET_SMOOTH = 9;
 
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -91,12 +100,57 @@ export function monotone(values: readonly number[]): number[] {
 
 export function computeLevels(input: LevelInput): Levels {
   const { rect, step, nx, nz, natural } = input;
-  const target = Float32Array.from(natural);
   const col = (x: number) => (x - rect.x0) / step, row = (z: number) => (z - rect.z0) / step;
+
+  // 0. Земля посёлка без мелких бугров. Съёмка и рельеф шумят на десятки сантиметров, и улицы с дворами выходят
+  // «мятыми». Возле домов и дорог (до ~45 м, дальше плавно на нет) землю сглаживаем: общий уклон остаётся,
+  // бугры и ямки в несколько метров шириной уходят. Всё остальное строится уже на этой земле.
+  const mask = new Float32Array(nx * nz);
+  const stamp = (x: number, z: number) => {
+    const reach = SMOOTH_FAR / step;
+    const ci = col(x), cj = row(z);
+    for (let j = Math.max(0, Math.floor(cj - reach)); j <= Math.min(nz - 1, Math.ceil(cj + reach)); j++) {
+      for (let i = Math.max(0, Math.floor(ci - reach)); i <= Math.min(nx - 1, Math.ceil(ci + reach)); i++) {
+        const w = 1 - smooth(SMOOTH_NEAR, SMOOTH_FAR, Math.hypot(i - ci, j - cj) * step);
+        if (w > mask[j * nx + i]) mask[j * nx + i] = w;
+      }
+    }
+  };
+  for (const house of input.houses) if (house.ring.length) stamp(house.ring[0][0], house.ring[0][1]);
+  for (const road of input.roads) {
+    for (let n = 0; n + 1 < road.pts.length; n++) {
+      const a = road.pts[n], b = road.pts[n + 1];
+      const count = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 20));
+      for (let m = 0; m <= count; m++) stamp(a[0] + ((b[0] - a[0]) * m) / count, a[1] + ((b[1] - a[1]) * m) / count);
+    }
+  }
+  const base = Float32Array.from(natural);
+  if (input.houses.length || input.roads.length) {
+    // Три прохода «коробки» ≈ гауссово размытие с σ около SMOOTH_SIGMA.
+    const r = Math.max(1, Math.round(SMOOTH_SIGMA / step));
+    let blur = Float32Array.from(natural);
+    for (let pass = 0; pass < 3; pass++) {
+      for (const [n, stride, other] of [[nx, 1, nz], [nz, nx, nx]] as const) {
+        const next = new Float32Array(blur.length);
+        for (let line = 0; line < other; line++) {
+          const start = stride === 1 ? line * nx : line;
+          let sum = 0;
+          for (let q = -r; q <= r; q++) sum += blur[start + Math.min(n - 1, Math.max(0, q)) * stride];
+          for (let q = 0; q < n; q++) {
+            next[start + q * stride] = sum / (2 * r + 1);
+            sum += blur[start + Math.min(n - 1, q + r + 1) * stride] - blur[start + Math.max(0, q - r) * stride];
+          }
+        }
+        blur = next;
+      }
+    }
+    for (let k = 0; k < base.length; k++) if (mask[k] > 0) base[k] += (blur[k] - base[k]) * mask[k];
+  }
+  const target = Float32Array.from(base);
   const at = (x: number, z: number): number => {
     const fx = Math.min(nx - 1.001, Math.max(0, col(x))), fz = Math.min(nz - 1.001, Math.max(0, row(z)));
     const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j, k = j * nx + i;
-    return (natural[k] * (1 - tx) + natural[k + 1] * tx) * (1 - tz) + (natural[k + nx] * (1 - tx) + natural[k + nx + 1] * tx) * tz;
+    return (base[k] * (1 - tx) + base[k + 1] * tx) * (1 - tz) + (base[k + nx] * (1 - tx) + base[k + nx + 1] * tx) * tz;
   };
   /** Узлы в прямоугольнике вокруг контура с запасом reach. */
   const around = (ring: readonly P2[], reach: number, fn: (k: number, x: number, z: number) => void) => {
@@ -112,24 +166,41 @@ export function computeLevels(input: LevelInput): Levels {
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) fn(j * nx + i, rect.x0 + i * step, rect.z0 + j * step);
   };
 
-  // 1. Дома: высота площадки — медиана естественной земли под домом, плюс подъём, заданный в редакторе.
+  // 1. Дома: своя высота площадки — медиана земли под домом. Но соседи не должны стоять ступеньками, поэтому
+  // высоты сглаживаются по соседним домам (до ~60 м): общий уклон улицы остаётся, а «этот выше соседа на
+  // полметра» уходит. Подъём, заданный в редакторе, прибавляется уже после.
   const houseLevel = new Map<string, number>();
   const sumL = new Map<number, number>(), sumW = new Map<number, number>(), maxW = new Map<number, number>();
   const sites: { x: number; z: number; level: number; weight: number }[] = [];
+  const raw: { house: LevelHouse; x: number; z: number; level: number }[] = [];
   for (const house of input.houses) {
     if (house.ring.length < 3) continue;
     const under: number[] = [];
     around(house.ring, 2, (k, x, z) => {
-      if (outside(x, z, house.ring) <= 2) under.push(natural[k]);
+      if (outside(x, z, house.ring) <= 2) under.push(base[k]);
     });
     let cx = 0, cz = 0;
     for (const [x, z] of house.ring) {
       cx += x / house.ring.length;
       cz += z / house.ring.length;
     }
-    const level = (under.length ? median(under) : at(cx, cz)) + (house.lift ?? 0);
+    raw.push({ house, x: cx, z: cz, level: under.length ? median(under) : at(cx, cz) });
+  }
+  for (const me of raw) {
+    // Сосед влияет тем сильнее, чем он ближе; сравниваем не сами высоты, а отклонения от сглаженной земли —
+    // иначе дом на склоне тянуло бы к домам ниже и выше по улице.
+    let sum = 0, weight = 0;
+    for (const other of raw) {
+      const d2 = (other.x - me.x) ** 2 + (other.z - me.z) ** 2;
+      if (d2 > (NEIGHBOUR_SIGMA * 3) ** 2) continue;
+      const w = Math.exp(-d2 / (2 * NEIGHBOUR_SIGMA ** 2));
+      sum += w * (other.level - at(other.x, other.z));
+      weight += w;
+    }
+    const level = at(me.x, me.z) + sum / weight + (me.house.lift ?? 0);
+    const house = me.house;
     houseLevel.set(house.id, level);
-    sites.push({ x: cx, z: cz, level, weight: house.lift ? 4 : 1 });
+    sites.push({ x: me.x, z: me.z, level, weight: house.lift ? 4 : 1 });
     const spread = (ring: readonly P2[], flat: number, fade: number) =>
       around(ring, fade, (k, x, z) => {
         const w = 1 - smooth(flat, fade, outside(x, z, ring));
@@ -141,7 +212,7 @@ export function computeLevels(input: LevelInput): Levels {
     spread(house.ring, HOUSE_FLAT, HOUSE_FADE);
     for (const pad of house.pads ?? []) if (pad.length >= 3) spread(pad, PAD_FLAT, PAD_FADE);
   }
-  for (const [k, w] of maxW) target[k] = natural[k] + (sumL.get(k)! / sumW.get(k)! - natural[k]) * w;
+  for (const [k, w] of maxW) target[k] = base[k] + (sumL.get(k)! / sumW.get(k)! - base[k]) * w;
 
   // 2. Улицы: вдоль оси — профиль, который тянется к высотам домов рядом; поперёк полотно ровное.
   const best = new Map<number, { out: number; h: number }>();
@@ -182,7 +253,9 @@ export function computeLevels(input: LevelInput): Levels {
       }
       profile[j] = sum / wsum;
     }
-    for (let pass = 0; pass < 2; pass++) {
+    // Профиль улицы сглаживаем вдоль (σ ≈ STREET_SMOOTH м): без «стиральной доски» между домами.
+    const passes = Math.max(2, Math.round(2 * (STREET_SMOOTH / ds) ** 2));
+    for (let pass = 0; pass < passes; pass++) {
       const next = new Float64Array(n);
       for (let j = 0; j < n; j++) next[j] = (profile[Math.max(0, j - 1)] + 2 * profile[j] + profile[Math.min(n - 1, j + 1)]) / 4;
       profile = next;
