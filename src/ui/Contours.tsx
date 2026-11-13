@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { probe } from '../engine/probe';
 import { useStore } from '../state/store';
 import { useEditStore } from '../store/useEditStore';
-import { removeSpot, upsertSpot, type TerrainSpot } from '../world/edit/edits';
+import { removeLine, removeSpot, upsertLine, upsertSpot, type TerrainLine, type TerrainSpot } from '../world/edit/edits';
 import { Num, Radius } from './Relief';
 
 const STEPS = [0.25, 0.5, 1, 2, 5];
@@ -15,7 +15,7 @@ const metres = (v: number) => v.toLocaleString('ru-RU', { minimumFractionDigits:
 export function toggleContours(): void {
   const s = useStore.getState();
   if (!s.contours) useEditStore.getState().setTool(undefined);
-  s.set(s.contours ? { contours: false, contourSpot: null } : { contours: true, topView: true, selected: null });
+  s.set(s.contours ? { contours: false, contourSpot: null, contourLasso: false } : { contours: true, topView: true, selected: null });
 }
 
 export function Contours() {
@@ -28,6 +28,8 @@ export function Contours() {
   const relief = useStore((s) => s.relief);
   const set = useStore((s) => s.set);
   const spots = useEditStore((s) => s.edits.spots) ?? [];
+  const lines = useEditStore((s) => s.edits.lines) ?? [];
+  const lasso = useStore((s) => s.contourLasso);
   const commit = useEditStore((s) => s.commit);
   const tool = useEditStore((s) => s.tool);
 
@@ -43,10 +45,10 @@ export function Contours() {
       const s = useStore.getState();
       if (typing || s.relief) return;
       if (e.key === 'Escape') {
-        set(s.contourSpot ? { contourSpot: null } : { contours: false });
+        set(s.contourLasso ? { contourLasso: false } : s.contourSpot ? { contourSpot: null } : { contours: false });
         e.stopPropagation();
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.contourSpot) {
-        commit(removeSpot(useEditStore.getState().edits, s.contourSpot));
+        commit(removeLine(removeSpot(useEditStore.getState().edits, s.contourSpot), s.contourSpot));
         set({ contourSpot: null });
         e.stopPropagation();
       }
@@ -57,7 +59,9 @@ export function Contours() {
 
   if (!on || mode !== 'overview') return null;
   const spot = spots.find((s) => s.id === selected);
+  const line = lines.find((l) => l.id === selected);
   const update = (patch: Partial<TerrainSpot>) => spot && commit(upsertSpot(useEditStore.getState().edits, { ...spot, ...patch }));
+  const updateLine = (patch: Partial<TerrainLine>) => line && commit(upsertLine(useEditStore.getState().edits, { ...line, ...patch }));
 
   return (
     <>
@@ -79,7 +83,7 @@ export function Contours() {
           </button>
         </header>
         <p className="muted">
-          Щелчок по земле ставит отметку высоты. Горизонталь можно взять и перетащить — она пройдёт через точку, где отпустите. Карта двигается как обычно.
+          Возьмите горизонталь и ведите мышью — она пойдёт по нарисованной линии, скруглённо. Щелчок по земле ставит отметку высоты. Карта двигается как обычно.
         </p>
         <div className="relief-field">
           <span>Горизонтали через, м</span>
@@ -91,6 +95,35 @@ export function Contours() {
             ))}
           </div>
         </div>
+        {line && (
+          <div className="relief-field">
+            <span>Проведённая горизонталь</span>
+            <ul className="relief-list">
+              <li className="on">
+                <div>
+                  <Num value={line.height} step={0.1} digits={2} suffix="м" label="Высота горизонтали, м" title="Высота над уровнем моря, м. Enter — применить" onChange={(height) => updateLine({ height })} />
+                  <Radius value={line.radius} label="Ширина действия" onChange={(radius) => updateLine({ radius })} />
+                  <button
+                    type="button" title="Убрать линию (Delete)" aria-label="Убрать линию"
+                    onClick={() => {
+                      commit(removeLine(useEditStore.getState().edits, line.id));
+                      set({ contourSpot: null });
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        )}
+        <button
+          type="button" className={`contour-more ${lasso ? 'on' : ''}`} aria-pressed={lasso}
+          title="Обведите мышью кусок земли — его горизонтали разгладятся"
+          onClick={() => set({ contourLasso: !lasso, contourSpot: null })}
+        >
+          {lasso ? 'Обведите кусок земли… (Esc — отмена)' : 'Сгладить лассо'}
+        </button>
         <div className="relief-field">
           <span>
             Отметка {spots.length ? <b>{spot ? `${spots.indexOf(spot) + 1} из ${spots.length}` : `всего ${spots.length}`}</b> : null}
@@ -114,7 +147,7 @@ export function Contours() {
               </li>
             </ul>
           ) : (
-            <p className="muted">{spots.length ? 'Щёлкните по отметке, чтобы изменить её высоту.' : 'Пока нет ни одной.'}</p>
+            <p className="muted">{spots.length || lines.length ? 'Щёлкните по отметке или жёлтой линии, чтобы изменить высоту.' : 'Пока нет ни одной.'}</p>
           )}
         </div>
         <button

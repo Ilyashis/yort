@@ -48,6 +48,34 @@ export interface VillagePlan {
   plotGround: { id: string; driveway?: P2[]; garden?: P2[]; pads: P2[][] }[];
 }
 
+/**
+ * Участки без выдуманного наполнения: остаются только границы — заборы с воротами. Сараи, бани, теплицы,
+ * колодцы и прочая дворовая утварь, палисадники, огороды с грядками и подъезды планировщик придумывал сам;
+ * в жизни на этих местах другое, поэтому их не показываем. Проёмы в заборах, оставленные под палисадники и
+ * стены построек, закрываются; проёмы ворот остаются.
+ */
+function bare(plan: EstatePlan): EstatePlan {
+  const gates = plan.plots.flatMap((p) => (p.gate ? [p.gate] : []));
+  const at = (line: readonly Vec2[], s: number): Vec2 => {
+    for (let n = 0; n + 1 < line.length; n++) {
+      const a = line[n], b = line[n + 1], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (s <= len || n + 2 === line.length) return [a[0] + ((b[0] - a[0]) * Math.min(s, len)) / (len || 1), a[1] + ((b[1] - a[1]) * Math.min(s, len)) / (len || 1)];
+      s -= len;
+    }
+    return line[0];
+  };
+  return {
+    plots: plan.plots.map((p) => ({ ...p, outbuildings: [], props: [], trees: [], garden: undefined, palisade: undefined, driveway: undefined })),
+    runs: plan.runs.map((run) => ({
+      ...run,
+      cuts: run.cuts.filter(([from, to]) => {
+        const mid = at(run.line, (from + to) / 2);
+        return gates.some((g) => Math.hypot(g.at[0] - mid[0], g.at[1] - mid[1]) < (to - from) / 2 + 1);
+      }),
+    })),
+  };
+}
+
 export function planVillage(world: World, withEstates: boolean): VillagePlan | undefined {
   if (world.territory.kind !== 'village') return undefined;
   const roads = world.roads.map((r) => ({ coords: r.pts.map(toLocal), width: r.width }));
@@ -91,7 +119,7 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
       if (!water && !(g.kind === 'green' && g.cover === 'wood')) continue;
       input.blockers.push({ rings: g.rings.map((r) => r.map(toLocal)), margin: water ? 3 : 0 });
     }
-    estates = planEstates(input);
+    estates = bare(planEstates(input));
   }
 
   const outbuildings: VillageHouse[] = (estates?.plots ?? []).flatMap((p) => p.outbuildings.map((b) => ({ id: b.id, model: b.model, seed: b.seed, rect: b.rect })));

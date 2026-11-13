@@ -34,7 +34,7 @@ import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, pain
 import { createContours } from './contours';
 import { createFences } from './fences';
 import { createGrass, type Grass } from './grass';
-import { applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
+import { applyLines, applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
 import { createOrthoUniforms, findOrtho, loadOrtho, loadSatellite, satelliteSource } from './ortho';
 import { probe } from './probe';
 import { createTrees } from './trees';
@@ -327,6 +327,7 @@ export class Engine {
           const [x, z] = world.frame.xz(s.at[0], s.at[1]);
           return { ...s, x, z, ring: s.ring?.map(([lon, lat]): P2 => world.frame.xz(lon, lat)), height: s.height === undefined ? undefined : s.height - hm.origin };
         }));
+        applyLines(grid, lev, (edits.lines ?? []).map((l) => ({ pts: l.path.map(([lon, lat]): P2 => world.frame.xz(lon, lat)), height: l.height - hm.origin, radius: l.radius })));
         applySpots(grid, lev, (edits.spots ?? []).map((s) => {
           const [x, z] = world.frame.xz(s.at[0], s.at[1]);
           return { x, z, height: s.height - hm.origin, radius: s.radius };

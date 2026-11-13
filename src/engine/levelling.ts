@@ -469,3 +469,41 @@ export function fitPlaneAt(heightAt: (x: number, z: number) => number, x: number
   const bearing = slope < 0.05 ? 0 : (((Math.atan2(gx, -gz) * 180) / Math.PI) + 360) % 360;
   return { height: sh / n, slope, bearing };
 }
+
+export interface LevelLine {
+  /** Линия на земле (мир). */
+  pts: readonly P2[];
+  /** Высота, которую земля должна иметь вдоль линии (в метрах сетки высот). */
+  height: number;
+  /** Дальше этого от линии земля не меняется, м. */
+  radius: number;
+}
+
+/**
+ * Проведённые горизонтали: вдоль каждой линии земля встаёт на её высоту — горизонталь этой высоты проходит
+ * по линии, — а в стороны поправка плавно сходит на нет к краю радиуса. Меняет lev на месте.
+ */
+export function applyLines(grid: Pick<LevelInput, 'rect' | 'step' | 'nx' | 'nz' | 'natural'>, lev: Float32Array, lines: readonly LevelLine[]): void {
+  const { rect, step, nx, nz, natural } = grid;
+  for (const line of lines) {
+    if (line.pts.length < 2) continue;
+    const xs = line.pts.map((p) => p[0]), zs = line.pts.map((p) => p[1]);
+    const i0 = Math.max(0, Math.floor((Math.min(...xs) - line.radius - rect.x0) / step)), i1 = Math.min(nx - 1, Math.ceil((Math.max(...xs) + line.radius - rect.x0) / step));
+    const j0 = Math.max(0, Math.floor((Math.min(...zs) - line.radius - rect.z0) / step)), j1 = Math.min(nz - 1, Math.ceil((Math.max(...zs) + line.radius - rect.z0) / step));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const x = rect.x0 + i * step, z = rect.z0 + j * step;
+        let d2 = Infinity;
+        for (let n = 0; n + 1 < line.pts.length; n++) {
+          const a = line.pts[n], b = line.pts[n + 1];
+          d2 = Math.min(d2, segDist2(x, z, a[0], a[1], b[0], b[1])[0]);
+        }
+        // Вплотную к линии (до полушага сетки) — точно её высота, дальше — плавно к прежней земле.
+        const w = 1 - smooth(Math.min(step * 0.5, line.radius * 0.3) / line.radius, 1, Math.sqrt(d2) / line.radius);
+        if (w <= 0) continue;
+        const k = j * nx + i;
+        lev[k] += (line.height - natural[k] - lev[k]) * w;
+      }
+    }
+  }
+}

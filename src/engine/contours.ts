@@ -1,5 +1,6 @@
 // Правка рельефа прямо на сцене: горизонтали поверх земли и всего, что на ней стоит, опорные отметки
-// высот (щелчок по земле) и сдвиг горизонтали мышью. Отметки — те же, что в окне «Рельеф» (edits.spots).
+// высот (щелчок по земле), горизонталь, проведённая от руки (взять линию и вести — она пойдёт по нарисованному),
+// и сглаживание лассо. Отметки и сглаживания — те же, что в окне «Рельеф».
 
 import {
   BufferAttribute,
@@ -19,7 +20,7 @@ import type { World } from '../core/data';
 import { useStore } from '../state/store';
 import { useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
-import { SPOT_RADIUS, upsertSpot } from '../world/edit/edits';
+import { SPOT_RADIUS, upsertLine, upsertShape, upsertSpot } from '../world/edit/edits';
 import type { HeightMap } from './terrain';
 
 export interface ContourDeps {
@@ -115,12 +116,46 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
   pull.renderOrder = 23;
   pull.frustumCulled = false;
   pull.visible = false;
-  group.add(spotPoints, ring, pull);
+  const drawn = new Group();
+  group.add(spotPoints, ring, pull, drawn);
 
   const spots = () => (useEditStore.getState().edits.spots ?? []).map((spot) => ({ spot, xz: world.frame.xz(spot.at[0], spot.at[1]) }));
+  const lineList = () => (useEditStore.getState().edits.lines ?? []).map((line) => ({ line, pts: line.path.map(([lon, lat]) => world.frame.xz(lon, lat)) }));
+  /** Линия по земле (с шагом не реже 2 м) — для показа поверх сцены. */
+  const draped = (pts: readonly (readonly [number, number])[], closed = false): Float32Array => {
+    const out: number[] = [];
+    const all = closed ? [...pts, pts[0]] : pts;
+    for (let n = 0; n + 1 < all.length; n++) {
+      const a = all[n], b = all[n + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
+      for (let k = n ? 1 : 0; k <= steps; k++) {
+        const x = a[0] + ((b[0] - a[0]) * k) / steps, z = a[1] + ((b[1] - a[1]) * k) / steps;
+        out.push(x, hm.at(x, z), z);
+      }
+    }
+    return new Float32Array(out);
+  };
+  const overlayLine = (positions: Float32Array, colour: number, opacity: number) => {
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(positions, 3));
+    const line = new Line(geometry, new LineBasicMaterial({ color: colour, transparent: true, opacity, depthTest: false }));
+    line.renderOrder = 21;
+    line.frustumCulled = false;
+    drawn.add(line);
+  };
   const drawSpots = () => {
     const list = spots();
     const selected = useStore.getState().contourSpot;
+    for (const child of [...drawn.children]) {
+      drawn.remove(child);
+      (child as Line).geometry.dispose();
+      ((child as Line).material as LineBasicMaterial).dispose();
+    }
+    // Проведённые горизонтали — жёлтым (выбранная ярче), сглаженные лассо куски — голубым контуром.
+    for (const { line, pts } of lineList()) overlayLine(draped(pts), 0xffc857, line.id === selected ? 1 : 0.6);
+    for (const shape of useEditStore.getState().edits.shapes ?? []) {
+      if (shape.ring) overlayLine(draped(shape.ring.map(([lon, lat]) => world.frame.xz(lon, lat)), true), 0x7fd4ff, 0.7);
+    }
     const pos = new Float32Array(list.length * 3), col = new Float32Array(list.length * 3);
     list.forEach(({ spot, xz }, i) => {
       pos.set([xz[0], hm.at(xz[0], xz[1]), xz[1]], i * 3);
@@ -129,8 +164,18 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
     spotGeometry.setAttribute('position', new BufferAttribute(pos, 3));
     spotGeometry.setAttribute('color', new BufferAttribute(col, 3));
     const chosen = list.find(({ spot }) => spot.id === selected);
-    ring.visible = !!chosen;
-    if (chosen) {
+    const chosenLine = lineList().find(({ line }) => line.id === selected);
+    ring.visible = !!chosen || !!chosenLine;
+    if (chosenLine) {
+      // У выбранной линии — две границы её действия.
+      const { pts, line } = chosenLine;
+      const side = (sign: number) => pts.map((p, n): [number, number] => {
+        const a = pts[Math.max(0, n - 1)], b = pts[Math.min(pts.length - 1, n + 1)];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [p[0] - ((b[1] - a[1]) / len) * line.radius * sign, p[1] + ((b[0] - a[0]) / len) * line.radius * sign];
+      });
+      ring.geometry.setAttribute('position', new BufferAttribute(draped([...side(1), ...side(-1).reverse()], true), 3));
+    } else if (chosen) {
       const pts: number[] = [];
       for (let k = 0; k <= 72; k++) {
         const a = (k / 72) * Math.PI * 2, x = chosen.xz[0] + Math.cos(a) * chosen.spot.radius, z = chosen.xz[1] + Math.sin(a) * chosen.spot.radius;
@@ -172,6 +217,61 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
     }
     return best?.id;
   };
+  const lineAt = (clientX: number, clientY: number) => {
+    for (const { line, pts } of lineList()) {
+      for (const p of pts) {
+        const at = screen(p[0], hm.at(p[0], p[1]), p[1]);
+        if (at && Math.hypot(at[0] - clientX, at[1] - clientY) < 9) return line.id;
+      }
+    }
+    return undefined;
+  };
+  const newId = (prefix: string) => `${prefix}/${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  /** Скруглить нарисованное от руки: два прохода скользящего среднего, концы на месте. */
+  const rounded = (pts: [number, number][]): [number, number][] => {
+    let out = pts;
+    for (let pass = 0; pass < 2; pass++) {
+      out = out.map((p, n): [number, number] => {
+        if (n === 0 || n === out.length - 1) return p;
+        const a = out[Math.max(0, n - 2)], b = out[n - 1], c = out[n + 1], e = out[Math.min(out.length - 1, n + 2)];
+        return [(a[0] + 2 * b[0] + 3 * p[0] + 2 * c[0] + e[0]) / 9, (a[1] + 2 * b[1] + 3 * p[1] + 2 * c[1] + e[1]) / 9];
+      });
+    }
+    return out;
+  };
+  const lonLat = (p: readonly [number, number]): [number, number] => [world.frame.lon(p[0]), world.frame.lat(p[1])];
+  /** Горизонталь, взятая в начале пути, теперь идёт по нарисованной линии. */
+  const newLine = (path: Vector3[]) => {
+    const step = uniforms.uStep.value;
+    const level = Math.round(sea(path[0].x, path[0].z) / step) * step;
+    const pts = rounded(path.map((p): [number, number] => [p.x, p.z]));
+    // Насколько линия ушла от прежней горизонтали — на столько же (с запасом) в стороны меняется земля.
+    let reach = 0;
+    for (const [x, z] of pts) {
+      const slope = Math.max(0.03, Math.hypot(sea(x + 0.75, z) - sea(x - 0.75, z), sea(x, z + 0.75) - sea(x, z - 0.75)) / 1.5);
+      reach = Math.max(reach, Math.abs(sea(x, z) - level) / slope);
+    }
+    // …но не шире, чем сама линия длинна: короткий штрих не должен перекраивать полдвора.
+    const length = pts.slice(1).reduce((sum, p, n) => sum + Math.hypot(p[0] - pts[n][0], p[1] - pts[n][1]), 0);
+    const id = newId('line');
+    const store = useEditStore.getState();
+    store.commit(upsertLine(store.edits, { id, path: pts.map(lonLat), height: level, radius: Math.max(6, Math.round(Math.min(reach * 1.4, length * 0.4, 25))) }));
+    useStore.getState().set({ contourSpot: id });
+  };
+  /** Обведённый лассо кусок — сгладить. */
+  const smoothArea = (path: Vector3[]) => {
+    const pts = path.map((p): [number, number] => [p.x, p.z]);
+    let area = 0, cx = 0, cz = 0;
+    pts.forEach((a, n) => {
+      const b = pts[(n + 1) % pts.length], cross = a[0] * b[1] - b[0] * a[1];
+      area += cross / 2;
+      cx += (a[0] + b[0]) * cross;
+      cz += (a[1] + b[1]) * cross;
+    });
+    if (Math.abs(area) < 20) return;
+    const store = useEditStore.getState();
+    store.commit(upsertShape(store.edits, { id: newId('area'), kind: 'smooth', at: lonLat([cx / (6 * area), cz / (6 * area)]), ring: pts.map(lonLat), radius: Math.sqrt(Math.abs(area) / Math.PI), edge: 0.3 }));
+  };
   const newSpot = (x: number, z: number, height: number, radius: number) => {
     const id = `spot/${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
     const store = useEditStore.getState();
@@ -179,7 +279,7 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
     useStore.getState().set({ contourSpot: id });
   };
 
-  let press: { x: number; y: number; moved: number; start?: Vector3; grab: boolean; last?: Vector3 } | undefined;
+  let press: { x: number; y: number; moved: number; start?: Vector3; grab: boolean; lasso: boolean; path: Vector3[] } | undefined;
   let hoverCursor = false;
   const abort = new AbortController();
   const listen = <K extends keyof HTMLElementEventMap>(target: EventTarget, type: K, handler: (e: HTMLElementEventMap[K]) => void) =>
@@ -188,9 +288,10 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
   listen(canvas, 'pointerdown', (e) => {
     if (!active() || e.button !== 0 || e.shiftKey) return;
     const start = d.pickGround(e.clientX, e.clientY);
-    const grab = !!start && !spotAt(e.clientX, e.clientY) && nearLine(start);
-    press = { x: e.clientX, y: e.clientY, moved: 0, start, grab };
-    // Взяли горизонталь — карта не едет, пока кнопку не отпустят.
+    const lasso = useStore.getState().contourLasso && !!start;
+    const grab = lasso || (!!start && !spotAt(e.clientX, e.clientY) && nearLine(start));
+    press = { x: e.clientX, y: e.clientY, moved: 0, start, grab, lasso, path: start ? [start] : [] };
+    // Взяли горизонталь или обводим лассо — карта не едет, пока кнопку не отпустят.
     if (grab) d.overview.setEnabled(false);
   });
   listen(canvas, 'pointermove', (e) => {
@@ -208,18 +309,16 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
       press.x = e.clientX;
       press.y = e.clientY;
       if (press.grab && press.start && p) {
-        press.last = p;
-        const pts: number[] = [];
-        for (let k = 0; k <= 24; k++) {
-          const x = press.start.x + ((p.x - press.start.x) * k) / 24, z = press.start.z + ((p.z - press.start.z) * k) / 24;
-          pts.push(x, hm.at(x, z), z);
-        }
-        pull.geometry.setAttribute('position', new BufferAttribute(new Float32Array(pts), 3));
+        const last = press.path[press.path.length - 1];
+        if (Math.hypot(p.x - last.x, p.z - last.z) > Math.max(0.6, metresPerPixel(p) * 3)) press.path.push(p);
+        pull.geometry.dispose();
+        pull.geometry = new BufferGeometry();
+        pull.geometry.setAttribute('position', new BufferAttribute(draped([...press.path, p].map((q): [number, number] => [q.x, q.z]), press.lasso), 3));
         pull.visible = true;
       }
       return;
     }
-    const cursor = p ? (spotAt(e.clientX, e.clientY) ? 'pointer' : nearLine(p) ? 'grab' : 'crosshair') : '';
+    const cursor = !p ? '' : store.contourLasso ? 'crosshair' : spotAt(e.clientX, e.clientY) || lineAt(e.clientX, e.clientY) ? 'pointer' : nearLine(p) ? 'grab' : 'crosshair';
     canvas.style.cursor = cursor;
     hoverCursor = !!cursor;
   });
@@ -230,12 +329,14 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
     pull.visible = false;
     if (done.grab) d.overview.setEnabled(true);
     if (!active() || e.button !== 0) return;
-    if (done.grab && done.start && done.last && done.moved > 5) {
-      // Горизонталь, взятая в start, теперь проходит через точку, где отпустили.
-      const reach = Math.hypot(done.last.x - done.start.x, done.last.z - done.start.z);
-      newSpot(done.last.x, done.last.z, sea(done.start.x, done.start.z), Math.min(SPOT_RADIUS.max, Math.max(6, Math.round(reach * 1.25))));
+    if (done.lasso) {
+      if (done.path.length >= 6) smoothArea(done.path);
+      // Одно лассо — одно сглаживание: дальше карта снова двигается мышью.
+      useStore.getState().set({ contourLasso: false });
+    } else if (done.grab && done.path.length >= 2 && done.moved > 5) {
+      newLine(done.path);
     } else if (done.moved <= 5) {
-      const id = spotAt(e.clientX, e.clientY);
+      const id = spotAt(e.clientX, e.clientY) ?? lineAt(e.clientX, e.clientY);
       if (id) useStore.getState().set({ contourSpot: id });
       else if (done.start) newSpot(done.start.x, done.start.z, sea(done.start.x, done.start.z), SPOT_RADIUS.initial);
     }
@@ -272,6 +373,11 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
       const at = screen(xz[0], hm.at(xz[0], xz[1]), xz[1]);
       if (at && at[0] > r.left && at[0] < r.right && at[1] > r.top && at[1] < r.bottom) out.push({ x: at[0] - r.left, y: at[1] - r.top - 18, text: `${format(spot.height, 2)} м`, spot: true });
     }
+    for (const { line, pts } of lineList()) {
+      const mid = pts[Math.floor(pts.length / 2)];
+      const at = screen(mid[0], hm.at(mid[0], mid[1]), mid[1]);
+      if (at && at[0] > r.left && at[0] < r.right && at[1] > r.top && at[1] < r.bottom) out.push({ x: at[0] - r.left, y: at[1] - r.top - 14, text: `${format(line.height, 2)} м`, spot: true });
+    }
     useStore.getState().set({ contourLabels: out });
   };
 
@@ -286,7 +392,7 @@ export function createContours(d: ContourDeps): { group: Group; update: () => vo
       }
     }),
     useEditStore.subscribe((s, prev) => {
-      if (s.edits.spots !== prev.edits.spots) {
+      if (s.edits.spots !== prev.edits.spots || s.edits.lines !== prev.edits.lines || s.edits.shapes !== prev.edits.shapes) {
         drawSpots();
         stale = true;
       }

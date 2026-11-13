@@ -49,8 +49,10 @@ interface State {
   /** Правка рельефа на сцене: горизонтали поверх всего, отметки высот щелчком. */
   contours: boolean;
   contourStep: number;
-  /** Выбранная отметка. */
+  /** Выбранная отметка или проведённая горизонталь. */
   contourSpot: string | null;
+  /** Следующее перетаскивание — лассо: обвести кусок земли и сгладить его. */
+  contourLasso: boolean;
   /** Высота под указателем (м над морем) и где он на экране. */
   contourHover: { x: number; y: number; height: number } | null;
   /** Подписи высот поверх сцены (пиксели холста). */
@@ -106,6 +108,7 @@ export const useStore = create<State>((set) => ({
   contours: false,
   contourStep: read('contourStep', 1),
   contourSpot: null,
+  contourLasso: false,
   contourHover: null,
   contourLabels: [],
   terrainRev: 0,

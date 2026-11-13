@@ -998,3 +998,8 @@ input[type='range']::-webkit-slider-thumb {
   color: var(--text);
   background: rgba(17, 19, 24, 0.85);
 }
+
+.contour-more.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}

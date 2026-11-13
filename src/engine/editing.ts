@@ -181,7 +181,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   store.setResolver((id) => editor.resolve(id));
   store.setModelApplier((b, model) => editor.applyModel(b, model));
 
-  let lastLevel: unknown[] = [useEditStore.getState().edits.shapes, useEditStore.getState().edits.spots, useEditStore.getState().edits.plotLifts, useEditStore.getState().edits.buildings, useEditStore.getState().edits.removedBuildings, useEditStore.getState().edits.roads, useEditStore.getState().edits.removedRoads];
+  let lastLevel: unknown[] = [useEditStore.getState().edits.lines, useEditStore.getState().edits.shapes, useEditStore.getState().edits.spots, useEditStore.getState().edits.plotLifts, useEditStore.getState().edits.buildings, useEditStore.getState().edits.removedBuildings, useEditStore.getState().edits.roads, useEditStore.getState().edits.removedRoads];
   let lastRoads: unknown[] = [];
   let lastObstacles: unknown[] = [];
   const same = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -208,7 +208,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     syncTerrain();
     const { edits, selection } = useEditStore.getState();
     // Подняли участок, подвинули дом или дорогу — площадки и полотно улиц пересчитываются.
-    const levelKey = [edits.shapes, edits.spots, edits.plotLifts, edits.buildings, edits.removedBuildings, edits.roads, edits.removedRoads];
+    const levelKey = [edits.lines, edits.shapes, edits.spots, edits.plotLifts, edits.buildings, edits.removedBuildings, edits.roads, edits.removedRoads];
     if (!same(levelKey, lastLevel)) {
       lastLevel = levelKey;
       const moved = d.level(edits);
@@ -224,15 +224,17 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     const deleted = new Set([...removed].filter((id) => !replaced.has(id)));
     buildings.setHidden(removed);
     const hiddenPlots = village?.setEdits({ replaced: replacedOsmIds(edits), removedYards: new Set(edits.removedYards), deleted }) ?? new Set<string>();
-    const roadsKey = [edits.roads, edits.removedRoads, edits.removedYards, [...hiddenPlots].sort().join()];
-    if (!same(roadsKey, lastRoads)) {
-      lastRoads = roadsKey;
-      d.roadsChanged(edits, hiddenPlots);
-    }
+    // Дома тоже: под каждым домом в масках земли своё пятно (тень у стен, место без снимка) — оно должно
+    // переезжать вместе с домом.
+    const roadsKey = [edits.roads, edits.removedRoads, edits.removedYards, edits.buildings, edits.removedBuildings, [...hiddenPlots].sort().join()];
     const obstaclesKey = [edits.buildings, edits.removedBuildings, [...hiddenPlots].sort().join()];
     if (!same(obstaclesKey, lastObstacles)) {
       lastObstacles = obstaclesKey;
       d.obstaclesChanged(edits, hiddenPlots);
+    }
+    if (!same(roadsKey, lastRoads)) {
+      lastRoads = roadsKey;
+      d.roadsChanged(edits, hiddenPlots);
     }
     editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
     showSelection();

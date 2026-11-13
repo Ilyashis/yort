@@ -70,6 +70,27 @@ export interface Edits {
   spots?: TerrainSpot[];
   /** Правки рельефа по областям — по порядку: плоскости, сглаживание, возврат к естественной земле. */
   shapes?: TerrainShape[];
+  /** Горизонтали, проведённые от руки: вдоль линии земля встаёт на её высоту. */
+  lines?: TerrainLine[];
+}
+
+export interface TerrainLine {
+  id: string;
+  path: LonLat[];
+  /** Высота над уровнем моря, м. */
+  height: number;
+  /** Дальше этого от линии земля не меняется, м. */
+  radius: number;
+}
+
+export function upsertLine(edits: Edits, line: TerrainLine): Edits {
+  const next = { ...line, height: Math.round(line.height * 100) / 100, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, line.radius)) };
+  const lines = edits.lines ?? [];
+  return { ...edits, lines: lines.some((l) => l.id === line.id) ? lines.map((l) => (l.id === line.id ? next : l)) : [...lines, next] };
+}
+
+export function removeLine(edits: Edits, id: string): Edits {
+  return { ...edits, lines: (edits.lines ?? []).filter((l) => l.id !== id) };
 }
 
 export interface TerrainShape {
@@ -243,7 +264,8 @@ export function isEmpty(edits: Edits): boolean {
     !edits.terrain.length &&
     !Object.keys(edits.plotLifts ?? {}).length &&
     !edits.spots?.length &&
-    !edits.shapes?.length
+    !edits.shapes?.length &&
+    !edits.lines?.length
   );
 }
 
@@ -289,6 +311,10 @@ export function parseEdits(value: unknown): Edits | undefined {
     spots: arr<TerrainSpot>(v.spots)
       .filter((s) => s && typeof s.id === 'string' && points([s.at]).length === 1 && Number.isFinite(s.height) && Number.isFinite(s.radius))
       .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
+    lines: arr<TerrainLine>(v.lines)
+      .filter((l) => l && typeof l.id === 'string' && Number.isFinite(l.height) && Number.isFinite(l.radius))
+      .map((l) => ({ ...l, path: points(l.path) }))
+      .filter((l) => l.path.length >= 2),
     shapes: arr<TerrainShape>(v.shapes).filter(
       (s) =>
         s && typeof s.id === 'string' && ['plane', 'smooth', 'natural', 'lift'].includes(s.kind) &&

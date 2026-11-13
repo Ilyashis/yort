@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { P2 } from '../core/geo';
-import { applyShapes, applySpots, computeLevels, fitPlaneAt, monotone, type LevelInput } from './levelling';
+import { applyLines, applyShapes, applySpots, computeLevels, fitPlaneAt, monotone, type LevelInput } from './levelling';
 
 /** Сетка 3 м на склоне: земля поднимается на восток, с рябью. */
 function grid(height: (x: number, z: number) => number, size = 120): Omit<LevelInput, 'houses' | 'roads' | 'water'> {
@@ -114,6 +114,22 @@ describe('выравнивание земли', () => {
     // Вырез «буквы Г» и всё снаружи не тронуты.
     expect(lev[k(66, 66)]).toBe(0);
     expect(lev[k(90, 42)]).toBe(0);
+  });
+
+  it('проведённая горизонталь: вдоль линии — её высота, за радиусом земля прежняя', () => {
+    const g = grid(slope);
+    const lev = new Float32Array(g.natural.length);
+    const k = (x: number, z: number) => (z / 3) * g.nx + x / 3;
+    applyLines(g, lev, [{ pts: [[30, 60], [60, 45], [90, 60]], height: 5, radius: 12 }]);
+    const h = (x: number, z: number) => g.natural[k(x, z)] + lev[k(x, z)];
+    expect(h(30, 60)).toBeCloseTo(5, 3);
+    expect(h(60, 45)).toBeCloseTo(5, 3);
+    expect(h(90, 60)).toBeCloseTo(5, 3);
+    expect(lev[k(60, 75)]).toBe(0);
+    expect(lev[k(60, 21)]).toBe(0);
+    // Рядом с линией земля между её высотой и прежней.
+    const near = h(60, 51), was = g.natural[k(60, 51)];
+    expect(Math.abs(near - 5)).toBeLessThan(Math.abs(was - 5));
   });
 
   it('монотонная последовательность', () => {
