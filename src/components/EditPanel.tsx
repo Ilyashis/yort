@@ -114,8 +114,8 @@ export function EditPanel() {
         {close}
         <h2>{model ? model.name : BUILDING_KINDS[building.kind].label}</h2>
         <p className="muted">
-          {fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью, белые точки —
-          растянуть, оранжевая — повернуть
+          {fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью; белые точки — растянуть,
+          чуть снаружи угла — повернуть
         </p>
 
         {village && (

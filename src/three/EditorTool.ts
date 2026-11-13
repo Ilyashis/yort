@@ -232,6 +232,7 @@ export class EditorTool {
 
   private move(position: ScreenPoint): void {
     const drag = this.drag;
+    if (!drag) this.hover(position);
     if (!drag || drag.type === 'click') return;
     const point = this.ground(position);
     if (!point) return;
@@ -258,6 +259,23 @@ export class EditorTool {
       layer.preview(drag.current, this.blocked(drag.current));
     }
   }
+
+  /** Курсор над выделенным домом: на углу — растянуть, чуть снаружи угла — повернуть. */
+  private hover(position: ScreenPoint): void {
+    const { tool, selection } = useEditStore.getState();
+    const canvas = this.ctx.city.canvas;
+    const active = tool === 'select' && selection?.type === 'building' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
+    const cursor = active ? (this.ctx.layer.cursorAt(position[0], position[1]) ?? '') : undefined;
+    if (cursor === undefined) {
+      if (this.hoverCursor) canvas.style.cursor = '';
+      this.hoverCursor = false;
+      return;
+    }
+    if (cursor || this.hoverCursor) canvas.style.cursor = cursor;
+    this.hoverCursor = !!cursor;
+  }
+
+  private hoverCursor = false;
 
   private up(position: ScreenPoint): void {
     const drag = this.drag;

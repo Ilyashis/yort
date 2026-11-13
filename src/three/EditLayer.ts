@@ -88,6 +88,15 @@ interface HandleStyle {
 const CORNER_STYLE: HandleStyle = { size: 17, fill: '#ffffff', outline: '#1b1f27', ring: 2 };
 const ROTATE_STYLE: HandleStyle = { size: 19, fill: '#f5a524', outline: '#ffffff', ring: 2 };
 
+/** Докуда от угла дома (снаружи) тянется зона «повернуть», пикселей. */
+const ROTATE_RING_PX = 38;
+/** Курсор «повернуть»: круговая стрелка. */
+const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M20.5 13a7.5 7.5 0 1 1-2.6-5.7M18.4 3.4v4.2h-4.2" stroke="#1b1f27" stroke-width="5"/>' +
+    '<path d="M20.5 13a7.5 7.5 0 1 1-2.6-5.7M18.4 3.4v4.2h-4.2" stroke="#ffffff" stroke-width="2.2"/></svg>',
+)}") 13 13, alias`;
+
 /** Ручка выделенного дома: угол (растянуть) или поворот. */
 export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' };
 
@@ -515,18 +524,48 @@ export class EditLayer {
 
   /** Ручка под курсором: ближайшая, чей кружок на экране накрывает точку. */
   private handleAt(clientX: number, clientY: number): Handle | undefined {
+    return this.probe(clientX, clientY)?.handle;
+  }
+
+  /** Какой курсор показать над ручками выделенного дома: растянуть (на углу) или повернуть (чуть снаружи угла). */
+  cursorAt(clientX: number, clientY: number): string | undefined {
+    const found = this.probe(clientX, clientY);
+    if (!found) return undefined;
+    if (found.handle.handle === 'rotate') return ROTATE_CURSOR;
+    return found.dx * found.dy > 0 ? 'nwse-resize' : 'nesw-resize';
+  }
+
+  /**
+   * Ручка под курсором (по экрану). Прямо на углу — растянуть. Чуть снаружи угла (кольцо вокруг него,
+   * со стороны от дома) — повернуть: так дом крутят за любой угол, не целясь в отдельную ручку.
+   */
+  private probe(clientX: number, clientY: number): { handle: Handle; dx: number; dy: number } | undefined {
     if (!this.handleSpots.length) return undefined;
     const rect = this.city.canvas.getBoundingClientRect();
-    let best: Handle | undefined;
-    let bestDistance = Number.POSITIVE_INFINITY;
+    const spots: { handle: Handle; x: number; y: number; size: number }[] = [];
     for (const { handle, position, size } of this.handleSpots) {
       const p = this.projected.copy(position).project(this.city.camera);
       if (p.z < -1 || p.z > 1) continue; // за камерой или дальше дальней плоскости
-      const x = rect.left + ((p.x + 1) / 2) * rect.width;
-      const y = rect.top + ((1 - p.y) / 2) * rect.height;
-      const distance = Math.hypot(x - clientX, y - clientY);
-      if (distance <= size / 2 + HANDLE_SLOP_PX && distance < bestDistance) {
-        best = handle;
+      spots.push({ handle, size, x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height });
+    }
+    const corners = spots.filter((s) => s.handle.handle === 'corner');
+    const cx = corners.reduce((sum, c) => sum + c.x, 0) / (corners.length || 1), cy = corners.reduce((sum, c) => sum + c.y, 0) / (corners.length || 1);
+    let best: { handle: Handle; dx: number; dy: number } | undefined;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const spot of spots) {
+      const distance = Math.hypot(spot.x - clientX, spot.y - clientY);
+      if (distance <= spot.size / 2 + HANDLE_SLOP_PX && distance < bestDistance) {
+        best = { handle: spot.handle, dx: spot.x - cx, dy: spot.y - cy };
+        bestDistance = distance;
+      }
+    }
+    if (best) return best;
+    for (const corner of corners) {
+      const distance = Math.hypot(corner.x - clientX, corner.y - clientY);
+      // Снаружи: курсор дальше от середины дома, чем сам угол.
+      const outside = Math.hypot(clientX - cx, clientY - cy) > Math.hypot(corner.x - cx, corner.y - cy);
+      if (outside && distance <= ROTATE_RING_PX && distance < bestDistance) {
+        best = { handle: { handle: 'rotate' }, dx: 0, dy: 0 };
         bestDistance = distance;
       }
     }

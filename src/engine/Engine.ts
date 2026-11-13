@@ -394,7 +394,7 @@ export class Engine {
           ...edits.buildings.map((e) => ({ props: { minHeight: 0 } as Footprint['props'], rings: [lonLatRing(e.footprint)] })),
         ];
         masks = paintMasks(now, rect, lamps.map((l): P2 => [l.x + l.dx * 1.3, l.z + l.dz * 1.3]), footprintList, anisotropy,
-          { dirt: shown.flatMap((g) => (g.driveway ? [g.driveway] : [])), gardens: shown.flatMap((g) => (g.garden ? [g.garden] : [])), pads: shown.flatMap((g) => g.pads) }, masks);
+          { dirt: [], gardens: shown.flatMap((g) => (g.garden ? [g.garden] : [])), pads: shown.flatMap((g) => g.pads) }, masks);
         if (props) {
           group.remove(props.group);
           props.dispose();
