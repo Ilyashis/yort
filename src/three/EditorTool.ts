@@ -265,7 +265,8 @@ export class EditorTool {
     const { tool, selection } = useEditStore.getState();
     const canvas = this.ctx.city.canvas;
     const active = tool === 'select' && selection?.type === 'building' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
-    const cursor = active ? (this.ctx.layer.cursorAt(position[0], position[1]) ?? '') : undefined;
+    // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
+    const cursor = active ? (this.ctx.layer.cursorAt(position[0], position[1]) ?? (this.pick(position).building === selection.id ? 'move' : '')) : undefined;
     if (cursor === undefined) {
       if (this.hoverCursor) canvas.style.cursor = '';
       this.hoverCursor = false;

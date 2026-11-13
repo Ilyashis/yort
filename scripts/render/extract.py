@@ -7,7 +7,7 @@
 
 Деревья: зелёное, тёмное и «рябое» (кроны с тенями), в отличие от ровной светлой травы. Отдельные кроны —
 пятна; в сплошном лесу деревья берутся с шагом, чтобы их число оставалось посильным. Высот на картинке нет:
-высота — по ширине кроны. Там, где есть своя съёмка с дрона (trees-survey.json), деревья не трогаем.
+высота — по ширине кроны. Рядом с деревьями, найденными своей съёмкой с дрона (trees-survey.json), не дублируем.
 
   python3 scripts/render/extract.py <render.jpg> --territory itkulovo-1 [--preview лист.jpg]
 Пишет fences-render.json и trees-render.json в данные района.
@@ -104,6 +104,7 @@ def main():
     p.add_argument('--preview', help='лист для проверки: рендер с найденными заборами и деревьями')
     p.add_argument('--skip-fences', action='store_true')
     p.add_argument('--skip-trees', action='store_true')
+    p.add_argument('--drone', help='проект ODM со своей съёмкой (terrain-dtm.npz) — проверять деревья в посёлке по высоте')
     a = p.parse_args()
 
     t = Territory(a.territory)
@@ -250,17 +251,41 @@ def main():
         ax0, ay0, ax1, ay1 = t.area()
         pad = 250
         ok = (world[:, 0] > ax0 - pad) & (world[:, 0] < ax1 + pad) & (world[:, 1] > ay0 - pad) & (world[:, 1] < ay1 + pad)
-        # Где есть своя съёмка с дрона — её деревья точнее (с высотами): там с рендера не берём.
-        drone = json.load(open(t.data / 'trees-survey.json'))['coverage'] if (t.data / 'trees-survey.json').exists() else None
-        if drone:
-            bits = np.unpackbits(np.frombuffer(base64.b64decode(drone['cells']), np.uint8))[: drone['width'] * drone['height']].reshape(drone['height'], drone['width'])
-            lon, lat = t.lonlat(world[:, 0], world[:, 1])
-            ci = ((lon - drone['west']) / (drone['east'] - drone['west']) * drone['width']).astype(int)
-            cj = ((drone['north'] - lat) / (drone['north'] - drone['south']) * drone['height']).astype(int)
-            inside = (ci >= 0) & (ci < drone['width']) & (cj >= 0) & (cj < drone['height'])
-            covered = np.zeros(len(world), bool)
-            covered[inside] = bits[cj[inside], ci[inside]] == 1
-            ok &= ~covered
+        # В посёлке «рябое зелёное» — это ещё и бурьян, грядки, дворы. Поэтому там, где есть своя съёмка
+        # с дрона (--drone), дерево с рендера берём, только если съёмка видит в этом месте что-то выше 1,5 м,
+        # и если рядом (ближе 4 м) дрон сам дерева не нашёл: так добавляются кусты и пропущенные им деревья.
+        near_house = yard[np.minimum(rows * k, H - 1), np.minimum(cols * k, W - 1)] < 60
+        covered = np.zeros(len(world), bool)
+        if a.drone:
+            g = np.load(Path(a.drone) / 'terrain-dtm.npz')
+            dtm, top, cnt = g['dtm'], g['top'], g['cnt']
+            gx0, gy1, res = float(g['x0']), float(g['y1']), float(g['res'])
+            known = np.isfinite(dtm)
+            dist, idx = ndimage.distance_transform_edt(~known, return_indices=True)
+            hag = np.where(np.isfinite(top) & (cnt >= 2), top - dtm[tuple(idx)], 0.0)
+            ci, cj = ((world[:, 0] - gx0) / res).astype(int), ((gy1 - world[:, 1]) / res).astype(int)
+            inside = (ci >= 0) & (ci < dtm.shape[1]) & (cj >= 0) & (cj < dtm.shape[0])
+            # «Снято» — где дрон видит землю рядом (до 8 м). Под сплошным лесом он её не видит и деревья считает
+            # плохо — там верим рендеру.
+            covered[inside] = dist[cj[inside], ci[inside]] * res < 8
+            tall = np.zeros(len(world), bool)
+            tall[inside] = hag[cj[inside], ci[inside]] >= 1.5
+            # И само место на рендере должно быть уверенно зелёным: иначе «высокое» — это сарай, которого нет в OSM.
+            vivid = (sg > sr + 8) & (sg > sb + 10)
+            vivid = ndimage.uniform_filter(vivid.astype(np.float32), 3)[rows, cols] > 0.6
+            # Выше 2,2 м — дерево и без яркой зелени (тёмные ели и сосны); постройки из OSM и съёмки уже исключены.
+            high = np.zeros(len(world), bool)
+            high[inside] = hag[cj[inside], ci[inside]] >= 2.2
+            ok &= ~covered | high | (tall & vivid)
+            drone_file = t.data / 'trees-survey.json'
+            if drone_file.exists():
+                from scipy.spatial import cKDTree
+                found = np.array([tr[:2] for tr in json.load(open(drone_file))['trees']], float)
+                dx, dy = t.local(found[:, 0], found[:, 1])
+                near, _ = cKDTree(np.stack([dx, dy], 1)).query(world, k=1)
+                ok &= ~covered | (near > 4)
+        # У домов за пределами съёмки проверить нечем — оставляем только крупные кроны (от ~2 м радиусом).
+        ok &= covered | ~near_house | (depth[rows, cols] >= 2.0)
         lon, lat = t.lonlat(world[ok, 0], world[ok, 1])
         trees = [[round(float(lo), 6), round(float(la), 6), round(float(h), 1), round(float(rr), 1), 's' if s else 'b', 1 if d else 0]
                  for lo, la, h, rr, s, d in zip(lon, lat, height[ok], radius[ok], spruce[ok], dense[ok])]
