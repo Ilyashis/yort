@@ -44,6 +44,17 @@ function sidesOf(footprint: readonly LonLat[]): [number, number] {
   return [d(a, b), d(b, c)];
 }
 
+/** Контур, повёрнутый вокруг своей середины на degrees градусов по часовой стрелке. */
+function turned(footprint: readonly LonLat[], degrees: number): LonLat[] {
+  const lon0 = footprint.reduce((s, p) => s + p[0], 0) / footprint.length, lat0 = footprint.reduce((s, p) => s + p[1], 0) / footprint.length;
+  const kx = Math.cos((lat0 * Math.PI) / 180) * 111_320, ky = 110_574;
+  const a = (-degrees * Math.PI) / 180, c = Math.cos(a), sn = Math.sin(a);
+  return footprint.map(([lon, lat]): LonLat => {
+    const x = (lon - lon0) * kx, y = (lat - lat0) * ky;
+    return [lon0 + (x * c - y * sn) / kx, lat0 + (x * sn + y * c) / ky];
+  });
+}
+
 /** Свойства выделенного в редакторе: дом (тип, этажи, крыша, цвета), дорога или забор. */
 export function EditPanel() {
   const mode = useAppStore((s) => s.mode);
@@ -132,6 +143,26 @@ export function EditPanel() {
             <p className="muted">Двор выравнивается на этой высоте, улица рядом подстраивается под неё.</p>
           </div>
         )}
+
+        <div className="field">
+          <span>Повернуть дом</span>
+          <div className="segmented segmented-small" role="group" aria-label="Повернуть дом">
+            {(
+              [
+                [-90, '↺ 90°', 'Против часовой на четверть оборота'],
+                [-15, '↺ 15°', 'Против часовой на 15°'],
+                [-1, '↺ 1°', 'Против часовой на 1°'],
+                [1, '1° ↻', 'По часовой на 1°'],
+                [15, '15° ↻', 'По часовой на 15°'],
+                [90, '90° ↻', 'По часовой на четверть оборота'],
+              ] as [number, string, string][]
+            ).map(([degrees, label, title]) => (
+              <button key={degrees} type="button" title={title} onClick={() => update({ footprint: turned(building.footprint, degrees) })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="field">
           <span>Модель дома</span>

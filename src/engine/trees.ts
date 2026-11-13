@@ -213,7 +213,8 @@ class Parts {
     const mid = (y0 + y1) / 2, half = (y1 - y0) / 2;
     const profile = (t: number) => radius * Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.pow(t, 0.72))));
     const egg = (r: number, shade: number) => {
-      const g = new IcosahedronGeometry(1, 1);
+      // Дальняя модель и сердцевина лесной — самые грубые: таких деревьев десятки тысяч.
+      const g = new IcosahedronGeometry(1, this.flat || count <= 40 ? 0 : 1);
       const p = g.getAttribute('position');
       for (let i = 0; i < p.count; i++) {
         const t = (p.getY(i) + 1) / 2;
@@ -346,8 +347,8 @@ function models(flat: boolean): Record<Species, BufferGeometry> {
   return {
     birch: birch.build(),
     spruce: make().spruce(10.2, 2.9, 15, 10, S, BARK, r).build(),
-    birchLow: make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 30, 2.1, 0.6).build(),
-    spruceLow: make().spruce(10.0, 2.8, 7, 6, S, BARK, r).build(),
+    birchLow: make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 18, 2.6, 0.6).build(),
+    spruceLow: make().spruce(10.0, 2.8, 5, 5, S, BARK, r).build(),
   };
 }
 
@@ -390,7 +391,7 @@ function scatter(ctx: TreeContext): Tree[] {
   const forests = world.ground.filter((g) => g.kind === 'green' && g.cover === 'wood');
   for (const t of world.surveyTrees) {
     if (footprints.find(t.x, t.z) >= 0) continue;
-    const dense = forests.some((g) => pointInPoly(t.x, t.z, g.rings));
+    const dense = t.dense ?? forests.some((g) => pointInPoly(t.x, t.z, g.rings));
     // Модели: берёза — 9,6 м высотой и 2 м радиусом, ель — 10,2 и 2,9 м.
     const s = Math.min(2.6, Math.max(0.25, t.height / (t.spruce ? 10.2 : 9.6)));
     const wide = Math.min(1.7, Math.max(0.65, t.radius / (t.spruce ? 2.9 : 2.0) / s));
@@ -494,7 +495,7 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
 
   const TILE = 256;
   /** Дальше этого (до середины плитки) деревья рисуются упрощёнными. */
-  const DETAIL = 300;
+  const DETAIL = 220;
   const buckets = new Map<string, Tree[]>();
   for (const t of trees) {
     const key = `${t.species}|${Math.floor(t.x / TILE)}|${Math.floor(t.z / TILE)}`;

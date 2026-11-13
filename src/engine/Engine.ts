@@ -31,6 +31,7 @@ import { createMonument, createProps, placeLamps, type Props } from './props';
 import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
+import { createFences } from './fences';
 import { createGrass, type Grass } from './grass';
 import { applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
 import { createOrthoUniforms, findOrtho, loadOrtho, loadSatellite, satelliteSource } from './ortho';
@@ -458,6 +459,9 @@ export class Engine {
       this.scene.add(group);
       this.worldGroup = group;
       const village = villagePlan && createVillageLayers(villagePlan, world, hm, this.host);
+      // Настоящие заборы — когда придуманных («обустроенный посёлок») нет.
+      const fences = villagePlan?.estates ? undefined : createFences(world, hm, solid.footprints);
+      if (fences) group.add(fences.mesh);
       this.village = village;
       Object.assign(this.ctx, { hm, walls: solid.walls, roads, rect, city });
 
@@ -465,6 +469,7 @@ export class Engine {
       const editing = createEditing({
         host: this.host, world, hm, buildings, village, overview: this.overview, underlay: this.underlay, sculpt,
         level,
+        shiftExtra: fences?.shiftGround,
         groundChanged: (area) => {
           useStore.getState().set({ terrainRev: useStore.getState().terrainRev + 1 });
           terrain.refresh(area);
@@ -483,6 +488,7 @@ export class Engine {
           buildings.mesh.visible = visible;
           trees.group.visible = visible;
           grass.setVisible(visible);
+          if (fences) fences.mesh.visible = visible;
           village?.setVisible(visible);
         },
         pickables: () => [buildings.mesh, ...(village?.pickables() ?? [])],
@@ -503,7 +509,7 @@ export class Engine {
         onBump: (strength: number) => soundscape.bumped(strength),
       });
       this.worldDisposers = [
-        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
+        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => fences?.dispose(), () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
         () => terrain.group.traverse((o) => (o as { geometry?: BufferGeometry }).geometry?.dispose()),
       ];
       this.world = world;

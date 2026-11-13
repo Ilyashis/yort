@@ -76,6 +76,8 @@ export interface EditingDeps {
   /** Поменялось, кто мешает пройти: убранные дома OSM, свои дома, скрытые участки. */
   obstaclesChanged: (edits: Edits, hiddenPlots: ReadonlySet<string>) => void;
   setCityVisible: (visible: boolean) => void;
+  /** Остальное, что стоит на земле и должно ехать за ней (настоящие заборы). */
+  shiftExtra?: (delta: (x: number, y: number) => number, area: { x0: number; x1: number; y0: number; y1: number }) => void;
   pickables: () => Object3D[];
 }
 
@@ -149,6 +151,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     hm.applyOffsets((x, z) => sculpt.field.offsetAt(x, -z), area);
     d.groundChanged(area);
     village?.shiftGround((x, y) => changeAt(change, x, y), changed);
+    d.shiftExtra?.((x, y) => changeAt(change, x, y), changed);
   };
   const brush = new TerrainBrush({
     city: host,
@@ -211,7 +214,9 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       const moved = d.level(edits);
       if (moved) {
         d.groundChanged(moved.area);
-        village?.shiftGround((x, y) => moved.delta(x, -y), { x0: moved.area.x0, x1: moved.area.x1, y0: -moved.area.z1, y1: -moved.area.z0 });
+        const local = { x0: moved.area.x0, x1: moved.area.x1, y0: -moved.area.z1, y1: -moved.area.z0 };
+        village?.shiftGround((x, y) => moved.delta(x, -y), local);
+        d.shiftExtra?.((x, y) => moved.delta(x, -y), local);
       }
     }
     const removed = new Set(edits.removedBuildings);

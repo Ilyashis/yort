@@ -77,7 +77,9 @@ export interface World {
   benches: P2[];
   trees: P2[];
   /** Настоящие деревья по своей съёмке: место, высота и радиус кроны (м), порода. */
-  surveyTrees: { x: number; z: number; height: number; radius: number; spruce: boolean }[];
+  surveyTrees: { x: number; z: number; height: number; radius: number; spruce: boolean; dense?: boolean }[];
+  /** Настоящие заборы (линии в координатах мира), снятые с картинки-рендера. */
+  surveyFences: P2[][];
   /** Снято ли это место съёмкой: там деревья не сажаются наугад. */
   surveyed: (x: number, z: number) => boolean;
   /** Цвета домов по съёмке с дрона: id → крыша и стены. */
@@ -194,7 +196,7 @@ interface SurveyFile {
 }
 
 interface TreeSurveyFile {
-  trees?: [number, number, number, number, 'b' | 's'][];
+  trees?: [number, number, number, number, 'b' | 's', (0 | 1)?][];
   coverage?: { west: number; south: number; east: number; north: number; width: number; height: number; cells: string };
 }
 
@@ -213,7 +215,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -224,6 +226,8 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<SurveyFile>(territory, 'survey.json'),
     getJson<TreeSurveyFile>(territory, 'trees-survey.json'),
     getJson<StreetsFile>(territory, 'streets-survey.json'),
+    getJson<TreeSurveyFile>(territory, 'trees-render.json'),
+    getJson<{ fences?: number[][][] }>(territory, 'fences-render.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -266,11 +270,13 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     lamps: (streets?.lamps ?? []).map(point),
     benches: (streets?.benches ?? []).map(point),
     trees: (treesFile?.trees ?? []).map(point),
-    surveyTrees: (treeSurvey?.trees ?? []).map(([lon, lat, height, radius, kind]) => {
+    // Сначала деревья со съёмки с дрона (с настоящими высотами), потом — снятые с рендера там, где дрона нет.
+    surveyTrees: [...(treeSurvey?.trees ?? []), ...(treeRender?.trees ?? [])].map(([lon, lat, height, radius, kind, dense]) => {
       const [x, z] = frame.xz(lon, lat);
-      return { x, z, height, radius, spruce: kind === 's' };
+      return { x, z, height, radius, spruce: kind === 's', dense: dense === undefined ? undefined : dense === 1 };
     }),
-    surveyed: coverage(frame, treeSurvey?.coverage),
+    surveyed: ((a, b) => (x: number, z: number) => a(x, z) || b(x, z))(coverage(frame, treeSurvey?.coverage), coverage(frame, treeRender?.coverage)),
+    surveyFences: (fenceRender?.fences ?? []).map(line),
     surveyColours: survey?.houses ?? {},
     osmTimestamp: buildingsFile.metadata?.osmTimestamp,
   };
