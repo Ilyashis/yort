@@ -200,6 +200,28 @@ interface TreeSurveyFile {
   coverage?: { west: number; south: number; east: number; north: number; width: number; height: number; cells: string };
 }
 
+/**
+ * Русло речки (осевая линия с шириной в каждой точке) → полоски воды: по четырёхугольнику на каждое звено,
+ * соседние делят общую сторону, поэтому лента идёт без щелей и меняет ширину плавно.
+ */
+function riverGround(frame: Frame, rivers: readonly (readonly [number, number, number])[][]): GroundArea[] {
+  const out: GroundArea[] = [];
+  for (const river of rivers) {
+    const pts = river.map(([lon, lat]) => frame.xz(lon, lat));
+    const sides = pts.map((p, n): [P2, P2] => {
+      const a = pts[Math.max(0, n - 1)], b = pts[Math.min(pts.length - 1, n + 1)];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const half = river[n][2] / 2, nx = (-(b[1] - a[1]) / len) * half, nz = ((b[0] - a[0]) / len) * half;
+      return [[p[0] + nx, p[1] + nz], [p[0] - nx, p[1] - nz]];
+    });
+    for (let n = 0; n + 1 < sides.length; n++) {
+      const ring = normalizeRing([sides[n][0], sides[n + 1][0], sides[n + 1][1], sides[n][1]], true);
+      if (ring.length >= 3) out.push({ kind: 'water', rings: [ring] });
+    }
+  }
+  return out;
+}
+
 /** Сетка «где съёмка есть» (биты построчно с севера) → проверка точки мира. */
 function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: number) => boolean {
   if (!c) return () => false;
@@ -215,7 +237,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -229,6 +251,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<TreeSurveyFile>(territory, 'trees-render.json'),
     getJson<{ fences?: number[][][] }>(territory, 'fences-render.json'),
     getJson<{ footprints?: Record<string, number[][]> }>(territory, 'buildings-fit.json'),
+    getJson<{ rivers?: [number, number, number][][] }>(territory, 'water-render.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -268,9 +291,13 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     buildings,
     parts: footprints(partsFile?.features ?? []),
     groundRaw: groundFile?.features ?? [],
-    ground: (groundFile?.features ?? []).flatMap((f) =>
-      polygonsOf(frame, f).map((rings) => ({ kind: f.properties.kind, cover: f.properties.cover, rings })),
-    ),
+    ground: [
+      // Если русло снято с карты (water-render.json), грубая вода OSM не нужна.
+      ...(groundFile?.features ?? [])
+        .filter((f) => !(riverRender?.rivers?.length && f.properties.kind === 'water'))
+        .flatMap((f) => polygonsOf(frame, f).map((rings) => ({ kind: f.properties.kind, cover: f.properties.cover, rings }))),
+      ...riverGround(frame, riverRender?.rivers ?? []),
+    ],
     roads: (streets?.roads ?? []).map((r) => ({ ...r, pts: line(r.coords) })),
     // К тропам OSM — дороги, обведённые по своей съёмке.
     paths: [...(streets?.paths ?? []), ...(streetSurvey?.paths ?? [])].map((r) => ({ ...r, pts: line(r.coords) })),
