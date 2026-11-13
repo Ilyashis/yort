@@ -915,3 +915,86 @@ input[type='range']::-webkit-slider-thumb {
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* Правка рельефа на сцене */
+.round.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+.contour-panel {
+  top: 16px;
+  right: 16px;
+  width: 300px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.contour-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.contour-panel h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.contour-panel .icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.contour-panel p {
+  margin: 0;
+}
+.contour-panel .muted {
+  color: var(--dim);
+  font-size: 13px;
+}
+.contour-panel .segmented {
+  display: flex;
+}
+.contour-panel .segmented button {
+  flex: 1;
+  padding: 6px 4px;
+}
+.contour-more {
+  padding: 8px 10px;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.contour-more:hover {
+  color: var(--text);
+}
+.contour-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.contour-labels span,
+.contour-labels output {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #2a1606;
+  background: rgba(255, 252, 240, 0.82);
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.contour-labels span.spot {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+.contour-labels output {
+  transform: none;
+  color: var(--text);
+  background: rgba(17, 19, 24, 0.85);
+}

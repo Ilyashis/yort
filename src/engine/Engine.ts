@@ -31,6 +31,7 @@ import { createMonument, createProps, placeLamps, type Props } from './props';
 import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
+import { createContours } from './contours';
 import { createFences } from './fences';
 import { createGrass, type Grass } from './grass';
 import { applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
@@ -93,6 +94,7 @@ export class Engine {
   private village?: VillageLayers;
   private grass?: Grass;
   private showGround?: (mode: Ground) => void;
+  private contoursUpdate?: () => void;
   private treesUpdate?: (camera: { position: Vector3 }) => void;
   private soundscape?: Soundscape;
   private mode: Mode = 'overview';
@@ -271,7 +273,7 @@ export class Engine {
     Object.assign(this.ctx, { onWalk: undefined, onDrive: undefined, onBump: undefined });
     this.world = undefined;
     probe.current = undefined;
-    useStore.getState().set({ relief: null });
+    useStore.getState().set({ relief: null, contours: false, contourSpot: null, contourLabels: [], contourHover: null });
     this.miniMap = undefined;
     this.outline.visible = false;
   }
@@ -452,10 +454,12 @@ export class Engine {
       const trees = createTrees({ world, hm, roads, paths, footprints: solid.footprints, buildings: buildings.list, clearings: monument ? [[monument.x, monument.z, 22]] : [], yardTrees: villagePlan?.estates ? villagePlan.trees : undefined });
       if (token !== this.loadToken) return;
 
+      const contours = createContours({ world, hm, terrain: terrain.group, camera: this.camera, canvas: this.canvas, overview: this.overview, pickGround: (x, y) => this.host.pickGround(x, y) });
+      this.contoursUpdate = contours.update;
       const grass = createGrass(hm, masks!, rect, city, solid.footprints, ortho);
       this.grass = grass;
       this.treesUpdate = trees.update;
-      group.add(terrain.group, buildings.mesh, trees.group, grass.group);
+      group.add(terrain.group, buildings.mesh, trees.group, grass.group, contours.group);
       if (monument) group.add(monument.group);
       this.scene.add(group);
       this.worldGroup = group;
@@ -510,7 +514,7 @@ export class Engine {
         onBump: (strength: number) => soundscape.bumped(strength),
       });
       this.worldDisposers = [
-        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, () => fences?.dispose(), () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
+        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, contours.dispose, () => (this.contoursUpdate = undefined), () => fences?.dispose(), () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
         () => terrain.group.traverse((o) => (o as { geometry?: BufferGeometry }).geometry?.dispose()),
       ];
       this.world = world;
@@ -619,7 +623,7 @@ export class Engine {
 
   private pickAt(clientX: number, clientY: number): void {
     // Пока работает инструмент редактора или подложка, щелчки — их.
-    if (!this.buildings || useEditStore.getState().tool || useUnderlayStore.getState().mode) return;
+    if (!this.buildings || useEditStore.getState().tool || useUnderlayStore.getState().mode || useStore.getState().contours) return;
     const r = this.canvas.getBoundingClientRect();
     this.raycaster.setFromCamera(new Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1), this.camera);
     const hit = this.raycaster.intersectObject(this.buildings.mesh, false)[0];
@@ -680,6 +684,7 @@ export class Engine {
     mode.update(dt);
     for (const animator of this.animators) animator(dt);
     this.treesUpdate?.(this.camera);
+    this.contoursUpdate?.();
     if (urlParams.get('grass') !== '0') this.grass?.update(this.camera);
     this.atmosphere.update(this.camera, mode.focus, mode.shadowRadius, now);
 

@@ -3,6 +3,7 @@ import { TERRITORIES, findTerritory } from '../core/data';
 import { CAR_COLOURS } from '../engine/controls';
 import { probe } from '../engine/probe';
 import { useStore, type Ground, type Mode } from '../state/store';
+import { toggleContours } from './Contours';
 
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill={fill ? 'currentColor' : 'none'} stroke={fill ? 'none' : 'currentColor'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -19,6 +20,7 @@ const ICONS = {
   sound: 'M4 9.5h3l4.5-4v13l-4.5-4H4zM15 9a4 4 0 0 1 0 6M17.5 6.5a7.5 7.5 0 0 1 0 11',
   mute: 'M4 9.5h3l4.5-4v13l-4.5-4H4zM15.5 9.5l5 5M20.5 9.5l-5 5',
   top: 'M4 4h16v16H4zM4 12h16M12 4v16',
+  contours: 'M3 12c3-5 6 5 9 0s6 5 9 0M3 6.5c3-5 6 5 9 0s6 5 9 0M3 17.5c3-5 6 5 9 0s6 5 9 0',
   relief: 'M3 18l5.5-9 3.5 5 3-4 6 8zM3 21h18',
   tilt: 'M3 17l9-12 9 12zM7.5 11h9',
   close: 'M6 6l12 12M18 6L6 18',
@@ -149,12 +151,18 @@ export function Tools() {
   const topView = useStore((s) => s.topView);
   const carColour = useStore((s) => s.carColour);
   const sound = useStore((s) => s.sound);
+  const contours = useStore((s) => s.contours);
   const set = useStore((s) => s.set);
   return (
     <aside className="tools">
       {mode === 'overview' && (
         <button className="panel round" title={topView ? 'Вид под углом' : 'Вид сверху'} onClick={() => set({ topView: !topView })}>
           <Icon d={topView ? ICONS.tilt : ICONS.top} />
+        </button>
+      )}
+      {mode === 'overview' && (
+        <button className={`panel round ${contours ? 'on' : ''}`} title="Править рельеф на сцене: горизонтали поверх карты и отметки высот" aria-pressed={contours} onClick={toggleContours}>
+          <Icon d={ICONS.contours} />
         </button>
       )}
       {mode === 'overview' && (

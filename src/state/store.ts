@@ -46,6 +46,15 @@ interface State {
   stats: { buildings: number; trees: number; osm?: string } | null;
   /** Открыто окно «Рельеф»: центр куска земли (мир) и сторона, м. */
   relief: { x: number; z: number; size: number } | null;
+  /** Правка рельефа на сцене: горизонтали поверх всего, отметки высот щелчком. */
+  contours: boolean;
+  contourStep: number;
+  /** Выбранная отметка. */
+  contourSpot: string | null;
+  /** Высота под указателем (м над морем) и где он на экране. */
+  contourHover: { x: number; y: number; height: number } | null;
+  /** Подписи высот поверх сцены (пиксели холста). */
+  contourLabels: { x: number; y: number; text: string; spot?: boolean }[];
   /** Растёт, когда земля поменялась — окно «Рельеф» перечитывает высоты. */
   terrainRev: number;
   set: (patch: Partial<State>) => void;
@@ -94,6 +103,11 @@ export const useStore = create<State>((set) => ({
   hasRender: false,
   stats: null,
   relief: null,
+  contours: false,
+  contourStep: read('contourStep', 1),
+  contourSpot: null,
+  contourHover: null,
+  contourLabels: [],
   terrainRev: 0,
   set: (patch) => set(patch),
 }));
@@ -111,6 +125,7 @@ useStore.subscribe((s, prev) => {
   if (s.estates !== prev.estates) write('estates', s.estates);
   if (s.sound !== prev.sound) write('sound', s.sound);
   if (s.ground !== prev.ground) write('ground', s.ground);
+  if (s.contourStep !== prev.contourStep) write('contourStep', s.contourStep);
   if (s.help !== prev.help && !s.help) write('seenHelp', true);
   if (s.time !== prev.time && performance.now() - savedAt > 1000) {
     savedAt = performance.now();

@@ -39,7 +39,7 @@ const metres = (v: number, digits = 2) => v.toLocaleString('ru-RU', { minimumFra
 const newId = (prefix: string) => `${prefix}/${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
 
 /** Число, которое вводят руками: применяется по Enter или уходу из поля; кнопки двигают на шаг. */
-function Num({ value, step, digits, label, title, suffix, onChange }: { value: number; step: number; digits: number; label: string; title: string; suffix?: string; onChange: (value: number) => void }) {
+export function Num({ value, step, digits, label, title, suffix, onChange }: { value: number; step: number; digits: number; label: string; title: string; suffix?: string; onChange: (value: number) => void }) {
   const [draft, setDraft] = useState<string>();
   const apply = () => {
     const next = Number.parseFloat((draft ?? '').replace(',', '.').replace(/\s/g, ''));
@@ -69,7 +69,7 @@ function Num({ value, step, digits, label, title, suffix, onChange }: { value: n
   );
 }
 
-function Radius({ value, label, onChange }: { value: number; label: string; onChange: (radius: number) => void }) {
+export function Radius({ value, label, onChange }: { value: number; label: string; onChange: (radius: number) => void }) {
   return (
     <select value={value} aria-label={label} title="Докуда правка меняет землю" onChange={(e) => onChange(Number(e.target.value))}>
       {[...new Set([...RADII, value])].sort((m, k) => m - k).map((r) => (
