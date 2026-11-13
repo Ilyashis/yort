@@ -40,6 +40,7 @@ import { hashString } from '../utils/hash';
 import { chimneys, FENCE, FENCE_COLOR_HEX, fenceBoxes } from '../world/base/buildingDetails';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { findHouseModel } from '../world/village/houseModels';
+import { mirrorPartsX } from '../world/village/houseParts';
 import {
   ROAD_KINDS,
   footprintCorners,
@@ -351,10 +352,11 @@ export class EditLayer {
     // Пол — по верхней точке склона; цоколь, крыльцо и ступени уходят вниз до нижней.
     const site = siteOnSlope(local, this.heightAt);
     const foundation = Math.round((site.floor - site.low + FOOTING_DEPTH) * 10) / 10;
-    const key = `${ref.id}:${ref.seed}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
+    const key = `${ref.id}:${ref.seed}:${ref.mirror ? 'm' : ''}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
     let mesh = this.modelCache.get(key);
     if (!mesh) {
-      mesh = buildHouseMesh(model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation }), this.houseMaterials);
+      const plan = model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation });
+      mesh = buildHouseMesh(ref.mirror ? { ...plan, parts: mirrorPartsX(plan.parts) } : plan, this.houseMaterials);
       this.modelCache.set(key, mesh);
     }
     keys.add(key);

@@ -80,6 +80,8 @@ export interface World {
   surveyTrees: { x: number; z: number; height: number; radius: number; spruce: boolean; dense?: boolean }[];
   /** Настоящие заборы (линии в координатах мира), снятые с картинки-рендера. */
   surveyFences: P2[][];
+  /** Дворовые постройки, снятые с карты: прямоугольник (мир) и догадка о назначении. */
+  yardBuildings: { id: string; kind: 'garage' | 'banya' | 'shed'; ring: P2[] }[];
   /** Снято ли это место съёмкой: там деревья не сажаются наугад. */
   surveyed: (x: number, z: number) => boolean;
   /** Цвета домов по съёмке с дрона: id → крыша и стены. */
@@ -211,7 +213,8 @@ function riverGround(frame: Frame, rivers: readonly (readonly [number, number, n
     const sides = pts.map((p, n): [P2, P2] => {
       const a = pts[Math.max(0, n - 1)], b = pts[Math.min(pts.length - 1, n + 1)];
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      const half = river[n][2] / 2, nx = (-(b[1] - a[1]) / len) * half, nz = ((b[0] - a[0]) / len) * half;
+      // Не уже 3 м: маска воды — около 1,8 м на пиксель, более узкий ручей рвётся на пунктир.
+      const half = Math.max(3, river[n][2]) / 2, nx = (-(b[1] - a[1]) / len) * half, nz = ((b[0] - a[0]) / len) * half;
       return [[p[0] + nx, p[1] + nz], [p[0] - nx, p[1] - nz]];
     });
     for (let n = 0; n + 1 < sides.length; n++) {
@@ -237,7 +240,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender, yardRender] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -252,6 +255,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<{ fences?: number[][][] }>(territory, 'fences-render.json'),
     getJson<{ footprints?: Record<string, number[][]> }>(territory, 'buildings-fit.json'),
     getJson<{ rivers?: [number, number, number][][] }>(territory, 'water-render.json'),
+    getJson<{ buildings?: { id: string; kind: 'garage' | 'banya' | 'shed'; footprint: number[][] }[] }>(territory, 'outbuildings-render.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -312,6 +316,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     }),
     surveyed: ((a, b) => (x: number, z: number) => a(x, z) || b(x, z))(coverage(frame, treeSurvey?.coverage), coverage(frame, treeRender?.coverage)),
     surveyFences: (fenceRender?.fences ?? []).map(line),
+    yardBuildings: (yardRender?.buildings ?? []).map((b) => ({ id: b.id, kind: b.kind, ring: line(b.footprint) })).filter((b) => b.ring.length === 4),
     surveyColours: survey?.houses ?? {},
     osmTimestamp: buildingsFile.metadata?.osmTimestamp,
   };

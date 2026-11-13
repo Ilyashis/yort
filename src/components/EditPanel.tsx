@@ -164,6 +164,48 @@ export function EditPanel() {
           </div>
         </div>
 
+        {village && model && model.group === 'house' && (
+          <div className="field">
+            <span>Палисадник</span>
+            <div className="segmented segmented-small" role="group" aria-label="С какой стороны палисадник">
+              {(
+                [
+                  [0, 'С улицы', 'Перед уличным фасадом'],
+                  [3, 'Слева', 'Слева от дома, если смотреть с улицы'],
+                  [1, 'Справа', 'Справа от дома, если смотреть с улицы'],
+                  [2, 'Сзади', 'За домом'],
+                  [-1, 'Нет', 'Без палисадника'],
+                ] as [number, string, string][]
+              ).map(([side, label, title]) => (
+                <button key={side} type="button" title={title} className={(building.garden ?? 0) === side ? 'active' : ''} onClick={() => update({ garden: side })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {model && (
+          <div className="field">
+            <span>{model.id === 'veranda' ? 'Веранда' : 'Крыльцо и пристрой'}</span>
+            <div className="segmented segmented-small" role="group" aria-label="С какой стороны веранда и крыльцо">
+              {(
+                [
+                  [false, model.id === 'veranda' ? 'Справа' : 'Как есть', 'Как в модели'],
+                  [true, model.id === 'veranda' ? 'Слева' : 'Зеркально', 'Модель отражена слева направо'],
+                ] as [boolean, string, string][]
+              ).map(([mirror, label, title]) => (
+                <button
+                  key={String(mirror)} type="button" title={title} className={!!building.model!.mirror === mirror ? 'active' : ''}
+                  onClick={() => update({ model: { id: building.model!.id, seed: building.model!.seed, ...(mirror ? { mirror: true } : {}) } })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="field">
           <span>Модель дома</span>
           <div className="model-grid" role="group" aria-label="Модель дома">

@@ -223,7 +223,10 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     const replaced = new Set(edits.buildings.map((b) => b.source).filter((s): s is string => !!s));
     const deleted = new Set([...removed].filter((id) => !replaced.has(id)));
     buildings.setHidden(removed);
-    const hiddenPlots = village?.setEdits({ replaced: replacedOsmIds(edits), removedYards: new Set(edits.removedYards), deleted }) ?? new Set<string>();
+    const edited = edits.buildings
+      .filter((b) => b.model && b.footprint.length === 4)
+      .map((b) => ({ id: b.id, source: b.source, model: b.model!.id, rect: b.footprint.map(frame.toLocal), garden: b.garden ?? 0 }));
+    const hiddenPlots = village?.setEdits({ replaced: replacedOsmIds(edits), removedYards: new Set(edits.removedYards), deleted, edited }) ?? new Set<string>();
     // Дома тоже: под каждым домом в масках земли своё пятно (тень у стен, место без снимка) — оно должно
     // переезжать вместе с домом.
     const roadsKey = [edits.roads, edits.removedRoads, edits.removedYards, edits.buildings, edits.removedBuildings, [...hiddenPlots].sort().join()];

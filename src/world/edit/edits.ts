@@ -20,6 +20,8 @@ export type EditRoadKind = 'street' | 'lane' | 'track' | 'path';
 export interface HouseModelRef {
   id: HouseModelId;
   seed: number;
+  /** Модель отражена слева направо: веранда и крыльцо — с другой стороны. */
+  mirror?: boolean;
 }
 
 export interface EditedBuilding {
@@ -38,6 +40,11 @@ export interface EditedBuilding {
    * первая сторона — уличный фасад.
    */
   model?: HouseModelRef;
+  /**
+   * С какой стороны дома палисадник: 0 — у уличного фасада (так по умолчанию), 1 — справа, 2 — сзади,
+   * 3 — слева (если смотреть с улицы), −1 — палисадника нет.
+   */
+  garden?: number;
 }
 
 export interface EditedRoad {
@@ -286,7 +293,9 @@ export function parseEdits(value: unknown): Edits | undefined {
         const footprint = points(b.footprint);
         const model = parseModel(b.model, footprint.length);
         const { model: _drop, ...rest } = b;
-        return { ...rest, footprint, floors: clampFloors(Number(b.floors) || 1), ...(model ? { model } : {}) };
+        const garden = [-1, 0, 1, 2, 3].includes(b.garden as number) ? { garden: b.garden } : {};
+        const { garden: _g, ...plain } = rest;
+        return { ...plain, footprint, floors: clampFloors(Number(b.floors) || 1), ...(model ? { model } : {}), ...garden };
       })
       .filter((b) => b.footprint.length >= 3),
     removedBuildings: strings(v.removedBuildings),
@@ -329,9 +338,9 @@ export const clampFloors = (floors: number) => Math.min(Math.max(Math.round(floo
 
 function parseModel(value: unknown, corners: number): HouseModelRef | undefined {
   if (!value || typeof value !== 'object' || corners !== 4) return undefined;
-  const { id, seed } = value as Partial<HouseModelRef>;
+  const { id, seed, mirror } = value as Partial<HouseModelRef>;
   if (typeof id !== 'string' || !findHouseModel(id) || typeof seed !== 'number' || !Number.isFinite(seed)) return undefined;
-  return { id: id as HouseModelId, seed: Math.round(seed) };
+  return { id: id as HouseModelId, seed: Math.round(seed), ...(mirror === true ? { mirror: true } : {}) };
 }
 
 // --- дома-модели ---------------------------------------------------------------------------

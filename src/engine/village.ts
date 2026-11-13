@@ -15,7 +15,9 @@ import { decodeDetailFile, DetailHeights, type DetailTerrainFile } from '../worl
 import { openRing, signedArea } from '../world/base/roofGeometry';
 import { VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
 import { planEstates, type EstateInput, type EstatePlan } from '../world/village/estates';
-import { chooseVillageModel, modelFacadeShift, type VillageHouse } from '../world/village/villagePlan';
+import { hashString } from '../utils/hash';
+import { modelFootprint } from '../world/edit/edits';
+import { chooseVillageModel, modelFacadeShift, VILLAGE_VARIANTS, type VillageHouse } from '../world/village/villagePlan';
 import { createLocalFrame, type Vec2 } from '../world/walk/localFrame';
 import { tame } from './buildings';
 import type { HeightMap } from './terrain';
@@ -76,6 +78,38 @@ function bare(plan: EstatePlan): EstatePlan {
   };
 }
 
+/** Модели, перед которыми бывает палисадник (жилые дома). */
+const GARDEN_MODELS = new Set(['izba', 'pyatistenok', 'veranda', 'hipped', 'brick']);
+const GARDEN_DEPTH = 3.4;
+
+/**
+ * Палисадник у стороны дома: side 0 — уличный фасад (первая сторона прямоугольника), 1 — справа, 2 — сзади,
+ * 3 — слева, если смотреть с улицы. Глубина — до GARDEN_DEPTH м, но не залезая на дорогу; не помещается
+ * (меньше 1,2 м) — палисадника нет.
+ */
+export function gardenSite(world: World, id: string, model: string, rect: readonly Vec2[], side: number): GardenSite | undefined {
+  if (!GARDEN_MODELS.has(model) || side < 0 || rect.length !== 4) return undefined;
+  const a = rect[side % 4], b = rect[(side + 1) % 4];
+  const width = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (width < 3) return undefined;
+  // Прямоугольник обходится против часовой: наружу от стороны — вправо от её направления.
+  const toStreet: Vec2 = [(b[1] - a[1]) / width, -(b[0] - a[0]) / width];
+  const origin: Vec2 = [(a[0] + b[0]) / 2 + toStreet[0] * 0.25, (a[1] + b[1]) / 2 + toStreet[1] * 0.25];
+  let depth = GARDEN_DEPTH;
+  for (const road of world.roads) {
+    for (let n = 0; n + 1 < road.pts.length; n++) {
+      const p = toLocal(road.pts[n]), q = toLocal(road.pts[n + 1]);
+      const dx = q[0] - p[0], dy = q[1] - p[1], l2 = dx * dx + dy * dy || 1;
+      const t = Math.min(1, Math.max(0, ((origin[0] - p[0]) * dx + (origin[1] - p[1]) * dy) / l2));
+      const nx = p[0] + dx * t - origin[0], ny = p[1] + dy * t - origin[1];
+      // Дорога считается, только если она со стороны палисадника.
+      if (nx * toStreet[0] + ny * toStreet[1] > 0) depth = Math.min(depth, Math.hypot(nx, ny) - road.width / 2 - 1.2);
+    }
+  }
+  if (depth < 1.2) return undefined;
+  return { owner: `${id}:0`, origin, toStreet, width, depth, seed: 1 + (hashString(id) % 997) };
+}
+
 export function planVillage(world: World, withEstates: boolean): VillagePlan | undefined {
   if (world.territory.kind !== 'village') return undefined;
   const roads = world.roads.map((r) => ({ coords: r.pts.map(toLocal), width: r.width }));
@@ -122,17 +156,19 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
     estates = bare(planEstates(input));
   }
 
-  const outbuildings: VillageHouse[] = (estates?.plots ?? []).flatMap((p) => p.outbuildings.map((b) => ({ id: b.id, model: b.model, seed: b.seed, rect: b.rect })));
+  // Дворовые постройки с карты: гараж и сарай — моделью сарая (ворота гаража — длинной стороной к улице),
+  // баня — баней. Прямоугольник ставится фасадом к ближайшей улице.
+  const outbuildings: VillageHouse[] = world.yardBuildings.map((b) => ({
+    id: b.id,
+    model: b.kind === 'banya' ? 'banya' : 'shed',
+    seed: 1 + (hashString(b.id) % VILLAGE_VARIANTS),
+    rect: modelFootprint(ringLocal(b.ring), roadLines),
+  }));
 
-  // Палисадники: от стены дома-модели до уличного забора.
-  const byId = new Map(houses.map((h) => [h.id, h]));
-  const gardens: GardenSite[] = (estates?.plots ?? []).flatMap((p) => {
-    if (!p.palisade) return [];
-    const { origin, toStreet, width, depth } = p.palisade;
-    const house = byId.get(p.id.slice(0, p.id.lastIndexOf(':')));
-    const shift = house ? modelFacadeShift(house, origin, toStreet) : 0;
-    const at: Vec2 = [origin[0] + toStreet[0] * shift, origin[1] + toStreet[1] * shift];
-    return [{ owner: p.id, origin: at, toStreet, width, depth: depth - shift, seed: p.seed }];
+  // Палисадники: у каждого жилого дома-модели, по умолчанию — перед уличным фасадом.
+  const gardens: GardenSite[] = houses.flatMap((h) => {
+    const site = gardenSite(world, h.id, h.model, h.rect, 0);
+    return site ? [site] : [];
   });
 
   const plots = estates?.plots ?? [];
@@ -146,7 +182,8 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
     vegetable: plots.flatMap((p) => (p.garden ? [p.garden.ring.map(toWorld)] : [])),
     pads: outbuildings.map((b) => b.rect.map(toWorld)),
     trees: plots.flatMap((p) => p.trees.map(toWorld)),
-    plotGround: plots.map((p) => ({ id: p.id, driveway: p.driveway?.map(toWorld), garden: p.garden?.ring.map(toWorld), pads: p.outbuildings.map((b) => b.rect.map(toWorld)) })),
+    // Каждая постройка — своя запись: по ней она мешает пройти и получает площадку на земле.
+    plotGround: outbuildings.map((b) => ({ id: `${b.id}:0`, pads: [b.rect.map(toWorld)] })),
   };
 }
 
@@ -187,6 +224,8 @@ function plotYards(plan: EstatePlan): Yard[] {
 
 /** Что из правок касается деревни. */
 export interface VillageEdits {
+  /** Дома-модели из правок: палисадник у них — со своей стороны (или его нет). */
+  edited?: readonly { id: string; source?: string; model: string; rect: Vec2[]; garden: number }[];
   /** Дома OSM, заменённые правкой или убранные: модель не рисуем. */
   replaced: ReadonlySet<string>;
   /** Дворы с убранным забором и дома, удалённые совсем (их двор уходит целиком). */
@@ -216,11 +255,9 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
   const models = plan.houses.length ? new VillageModelsLayer(host, frame, heightAt, plan.houses, noCsm) : undefined;
   const estateLayer = plan.estates ? new EstateLayer(host, heightAt, undefined, plan.estates) : undefined;
   const estateModels = plan.outbuildings.length ? new VillageModelsLayer(host, frame, heightAt, plan.outbuildings, noCsm, 60) : undefined;
-  let gardens: FrontGardensLayer | undefined;
-  if (plan.gardens.length) {
-    gardens = new FrontGardensLayer(host, heightAt, undefined);
-    gardens.setSites(plan.gardens);
-  }
+  const gardens = new FrontGardensLayer(host, heightAt, undefined);
+  gardens.setSites(plan.gardens);
+  let gardenKey = '';
   const yards = plan.estates ? plotYards(plan.estates) : [];
   const outbuildingsOf = new Map((plan.estates?.plots ?? []).map((p) => [p.id, p.outbuildings.map((b) => b.id)]));
   const yardOwner = (houseId: string) => houseId.slice(0, houseId.lastIndexOf(':'));
@@ -234,12 +271,23 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
       const id = models.buildingFromPick(hit);
       return id && hit ? { id, distance: hit.distance } : undefined;
     },
-    setEdits: ({ replaced, removedYards, deleted }) => {
+    setEdits: ({ replaced, removedYards, deleted, edited = [] }) => {
+      // Палисадники: у нетронутых домов — как в плане, у изменённых — по их новому месту и выбранной стороне.
+      const key = JSON.stringify(edited) + [...replaced].sort().join();
+      if (key !== gardenKey) {
+        gardenKey = key;
+        const moved = new Set(edited.map((e) => e.source ?? e.id));
+        const own = edited.flatMap((e) => {
+          const site = gardenSite(world, e.source ?? e.id, e.model, e.rect, e.garden);
+          return site ? [site] : [];
+        });
+        gardens.setSites([...plan.gardens.filter((g) => !moved.has(g.owner.slice(0, g.owner.lastIndexOf(':'))) && !replaced.has(g.owner.slice(0, g.owner.lastIndexOf(':')))), ...own]);
+      }
       const hidden = new Set([...removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]);
       models?.setHidden(replaced);
       estateLayer?.setHidden(hidden);
       estateModels?.setHidden(new Set([...hidden].flatMap((id) => outbuildingsOf.get(id) ?? [])));
-      gardens?.setHidden(new Set(removedYards), deleted);
+      gardens.setHidden(new Set(removedYards), new Set());
       return hidden;
     },
     shiftGround: (delta, area) => {
@@ -253,7 +301,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
       models?.destroy();
       estateLayer?.destroy();
       estateModels?.destroy();
-      gardens?.destroy();
+      gardens.destroy();
     },
   };
 }

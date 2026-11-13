@@ -960,6 +960,17 @@ export function flagpole(x: number, y: number, z: number, height: number, kind: 
 }
 
 /** Повернуть детали вокруг вертикали через (0, 0) на angle (рад, против часовой). */
+/** Зеркальное отражение деталей слева направо (x → −x): веранда и крыльцо переезжают на другую сторону дома. */
+export function mirrorPartsX(parts: readonly HousePart[]): HousePart[] {
+  const m = (p: Vec3): Vec3 => [-p[0], p[1], p[2]];
+  return parts.map((p): HousePart => {
+    if (p.type === 'cylinder') return { ...p, from: m(p.from), to: m(p.to) };
+    // У плиты лицевая сторона — по обходу: после отражения обход разворачиваем.
+    if (p.type === 'slab') return { ...p, points: p.points.map(m).reverse() };
+    return { ...p, center: m(p.center), ...('angle' in p && p.angle !== undefined ? { angle: -p.angle } : {}) } as HousePart;
+  });
+}
+
 export function rotatePartsZ(parts: readonly HousePart[], angle: number): HousePart[] {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
