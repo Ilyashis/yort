@@ -36,7 +36,6 @@ export function PlaceBar() {
   const stats = useStore((s) => s.stats);
   const set = useStore((s) => s.set);
   const mode = useStore((s) => s.mode);
-  const estates = useStore((s) => s.estates);
   const ground = useStore((s) => s.ground);
   const groundCredit = useStore((s) => s.groundCredit);
   const hasPhoto = useStore((s) => s.hasPhoto);
@@ -60,13 +59,6 @@ export function PlaceBar() {
         ))}
       </div>
       {current && <p className="about">{current.description}</p>}
-      {current?.kind === 'village' && (
-        <label className="switch" title="Участки вплотную, заборы, ворота, сараи и бани, палисадники — деревня, какой она могла бы быть">
-          <input type="checkbox" checked={estates} onChange={(e) => set({ estates: e.target.checked })} />
-          <i />
-          <span>Обустроенный посёлок</span>
-        </label>
-      )}
       <div className="ground-pick">
         <span>Земля</span>
         <div className="segmented" role="group" aria-label="Чем раскрашена земля">

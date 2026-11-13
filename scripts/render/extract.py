@@ -97,6 +97,62 @@ def simplify(points, tolerance):
     return np.vstack([simplify(points[: k + 1], tolerance)[:-1], simplify(points[k:], tolerance)])
 
 
+def join(fences, gap=7.0, reach=6.0):
+    """Собрать отрезки в связные заборы: куски одной прямой с разрывом до gap метров сливаются (калитки,
+    тень дерева), а свободный конец дотягивается по прямой до reach метров, если упирается в другой забор —
+    так закрываются углы участков."""
+    segs = [np.array(f, float) for f in fences]
+
+    def unit(v):
+        n = np.hypot(*v)
+        return v / n if n else v
+
+    # 1. Слить куски, лежащие на одной прямой.
+    merged = True
+    while merged:
+        merged = False
+        ends = np.array([p for f in segs for p in (f[0], f[-1])])
+        from scipy.spatial import cKDTree
+        tree = cKDTree(ends)
+        for a_i, b_i in sorted(tree.query_pairs(gap)):
+            fa, fb = a_i // 2, b_i // 2
+            if fa == fb:
+                continue
+            A = segs[fa] if a_i % 2 else segs[fa][::-1]   # A кончается в общей точке
+            B = segs[fb][::-1] if b_i % 2 else segs[fb]   # B начинается в общей точке
+            da, db = unit(A[-1] - A[-2]), unit(B[1] - B[0])
+            link = B[0] - A[-1]
+            if da @ db > 0.96 and (np.hypot(*link) < 0.5 or abs(da[0] * link[1] - da[1] * link[0]) < 1.2) and link @ da > -0.5:
+                segs[fa] = np.vstack([A, B])
+                segs.pop(fb)
+                merged = True
+                break
+
+    # 2. Дотянуть свободные концы до ближайшего забора.
+    boxes = [(g.min(0) - reach, g.max(0) + reach) for g in segs]
+    for k, f in enumerate(segs):
+        for end in (0, -1):
+            p = f[end]
+            d = unit(p - f[1 if end == 0 else -2])
+            near = [j for j, (lo, hi) in enumerate(boxes) if j != k and (p >= lo).all() and (p <= hi).all()]
+            best = None
+            for j in near:
+                g = segs[j]
+                for q0, q1 in zip(g[:-1], g[1:]):
+                    e = q1 - q0
+                    den = d[0] * e[1] - d[1] * e[0]
+                    if abs(den) < 1e-9:
+                        continue
+                    w = q0 - p
+                    t = (w[0] * e[1] - w[1] * e[0]) / den
+                    s_ = (w[0] * d[1] - w[1] * d[0]) / den
+                    if 0.05 < t <= reach and -0.05 <= s_ <= 1.05 and (best is None or t < best):
+                        best = t
+            if best is not None:
+                f[end] = p + d * best
+    return segs
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('image')
@@ -146,12 +202,12 @@ def main():
             c = np.array(way['coords'], float)
             x, y = t.local(c[:, 0], c[:, 1])
             rd.line([tuple(v) for v in to_px(np.stack([x, y], 1))], fill=1, width=int((way['width'] + 3) / mpp))
-        dark = (hat > 22) & (ndimage.minimum_filter(luma, size=3) < 62) & (yard < 70)
+        dark = (hat > 22) & (ndimage.minimum_filter(luma, size=3) < 62) & (yard < 45)
         dark &= ~ndimage.binary_dilation(built, iterations=2) & ~np.array(road, bool)
         y0, y1 = np.nonzero(dark.any(1))[0][[0, -1]]
         x0, x1 = np.nonzero(dark.any(0))[0][[0, -1]]
         mk = ndimage.binary_dilation(dark[y0:y1 + 1, x0:x1 + 1]).astype(np.uint8)
-        half = int(round(9 / mpp))  # линия длиной ~18 м
+        half = int(round(6 / mpp))  # линия длиной ~12 м
         steps = np.arange(-half, half + 1)
         found = np.zeros(mk.shape, bool)
         shift = lambda arr, dr, dc: np.roll(arr, (dr, dc), (0, 1))
@@ -164,7 +220,7 @@ def main():
             off = 2.5 / mpp
             nr, nc = int(round(off * np.cos(theta))), int(round(-off * np.sin(theta)))
             n = len(steps)
-            hit = (resp >= 0.93 * n) & (shift(resp, nr, nc) <= 0.3 * n) & (shift(resp, -nr, -nc) <= 0.3 * n)
+            hit = (resp >= 0.9 * n) & (shift(resp, nr, nc) <= 0.4 * n) & (shift(resp, -nr, -nc) <= 0.4 * n)
             if not hit.any():
                 continue
             support = np.zeros(mk.shape, bool)
@@ -191,6 +247,7 @@ def main():
                 pts = np.array(run)
                 if len(pts) >= 2 and np.hypot(*np.diff(pts, axis=0).T).sum() * mpp >= 10:
                     fences.append(to_world(np.c_[pts[:, 1], pts[:, 0]]))
+        fences = join(fences)
         total = sum(np.hypot(*np.diff(f, axis=0).T).sum() for f in fences)
         out = []
         for f in fences:

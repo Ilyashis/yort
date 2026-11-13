@@ -234,7 +234,6 @@ export class Engine {
       }
       if (s.carColour !== prev.carColour) this.drive.setColour(CAR_COLOURS[s.carColour] ?? CAR_COLOURS[0]);
       if (s.topView !== prev.topView) this.overview.setView(s.topView);
-      if (s.estates !== prev.estates && this.world?.territory.kind === 'village') void this.load(this.world.territory);
       if (s.sound !== prev.sound) this.soundscape?.setEnabled(s.sound);
       if (s.ground !== prev.ground) this.showGround?.(s.ground);
     });
@@ -296,7 +295,8 @@ export class Engine {
 
       progress(city ? 'Строим рельеф' : 'Размечаем участки и выравниваем рельеф');
       await breathe();
-      const villagePlan = planVillage(world, useStore.getState().estates);
+      // Придуманных участков («обустроенный посёлок») больше нет: заборы — только настоящие, с карты.
+      const villagePlan = planVillage(world, false);
       const hm = new HeightMap(world, want, city ? 5 : 3, shapedHeights(world, villagePlan));
       const rect = hm.rect;
       // Правки места — до постройки слоёв: всё встаёт на уже поправленную землю.
