@@ -38,6 +38,7 @@ export function PlaceBar() {
   const ground = useStore((s) => s.ground);
   const groundCredit = useStore((s) => s.groundCredit);
   const hasPhoto = useStore((s) => s.hasPhoto);
+  const hasRender = useStore((s) => s.hasRender);
   const current = findTerritory(place);
   if (mode !== 'overview') return null;
   return (
@@ -72,11 +73,12 @@ export function PlaceBar() {
               ['drawn', 'Рисунок', 'Земля нарисована движком по данным карты'],
               ['drone', 'Дрон', 'Снимок своей съёмки с дрона (июль 2023)'],
               ['satellite', 'Спутник', 'Спутниковый снимок — загружается из сети'],
+              ['render', 'Карта', 'Сгенерированная карта деревни (вид сверху)'],
             ] as [Ground, string, string][]
           )
-            .filter(([id]) => id !== 'drone' || hasPhoto)
+            .filter(([id]) => (id !== 'drone' || hasPhoto) && (id !== 'render' || hasRender))
             .map(([id, label, title]) => (
-              <button key={id} type="button" title={title} className={(ground === 'drone' && !hasPhoto ? 'drawn' : ground) === id ? 'on' : ''} onClick={() => set({ ground: id })}>
+              <button key={id} type="button" title={title} className={((ground === 'drone' && !hasPhoto) || (ground === 'render' && !hasRender) ? 'drawn' : ground) === id ? 'on' : ''} onClick={() => set({ ground: id })}>
                 {label}
               </button>
             ))}

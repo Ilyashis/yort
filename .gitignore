@@ -14,3 +14,7 @@ dist/
 
 .DS_Store
 *.log
+
+# Сгенерированная карта деревни (сделана из чужого спутникового снимка) — только локально
+public/data/territories/*/render.webp
+public/data/territories/*/render.json

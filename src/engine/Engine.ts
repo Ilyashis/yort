@@ -410,12 +410,12 @@ export class Engine {
       // Чем красить землю: рисунком, снимком с дрона или спутниковым. Снимки грузятся в фоне и только когда
       // выбраны; земля и трава подхватывают их на лету.
       const ortho = createOrthoUniforms();
-      const orthoFile = await findOrtho(world);
+      const [orthoFile, renderFile] = await Promise.all([findOrtho(world), findOrtho(world, 'render')]);
       if (token !== this.loadToken) return;
       const photos: Partial<Record<Ground, { texture: Texture; rect: [number, number, number, number] }>> = {};
       const pending = new Set<Ground>();
       const showGround = (mode: Ground) => {
-        const want = mode === 'drone' && !orthoFile ? 'drawn' : mode;
+        const want = (mode === 'drone' && !orthoFile) || (mode === 'render' && !renderFile) ? 'drawn' : mode;
         const ready = want === 'drawn' ? undefined : photos[want];
         if (ready) {
           ortho.uOrtho.value = ready.texture;
@@ -430,6 +430,7 @@ export class Engine {
           showGround(useStore.getState().ground);
         };
         if (want === 'drone') void loadOrtho(world, orthoFile!, anisotropy).then(keep).catch(() => pending.delete(want));
+        else if (want === 'render') void loadOrtho(world, renderFile!, anisotropy, 'render').then(keep).catch(() => pending.delete(want));
         else {
           const source = satelliteSource();
           const satellite = loadSatellite(world, source, anisotropy, () => token === this.loadToken);
@@ -441,7 +442,7 @@ export class Engine {
         }
       };
       this.showGround = showGround;
-      useStore.getState().set({ hasPhoto: !!orthoFile, groundCredit: '' });
+      useStore.getState().set({ hasPhoto: !!orthoFile, hasRender: !!renderFile, groundCredit: '' });
       showGround(useStore.getState().ground);
       const terrainMaterial = createTerrainMaterial(masks!, rect, city, this.underlay, ortho);
       const terrain = createTerrainMeshes(hm, terrainMaterial);

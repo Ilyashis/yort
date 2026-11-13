@@ -37,10 +37,10 @@ interface OrthoFile {
 
 const base = (world: World) => `${import.meta.env.BASE_URL}data/territories/${world.territory.id}/`;
 
-/** Есть ли у места ортофото: его привязка или undefined. */
-export async function findOrtho(world: World): Promise<OrthoFile | undefined> {
+/** Есть ли у места снимок-текстура (ortho — съёмка с дрона, render — сгенерированная карта): привязка или undefined. */
+export async function findOrtho(world: World, name: 'ortho' | 'render' = 'ortho'): Promise<OrthoFile | undefined> {
   try {
-    const res = await fetch(`${base(world)}ortho.json`);
+    const res = await fetch(`${base(world)}${name}.json`);
     if (!res.ok || !(res.headers.get('content-type') ?? '').includes('json')) return undefined;
     return (await res.json()) as OrthoFile;
   } catch {
@@ -49,8 +49,8 @@ export async function findOrtho(world: World): Promise<OrthoFile | undefined> {
 }
 
 /** Загрузить снимок с дрона: текстура и её прямоугольник в мире. */
-export async function loadOrtho(world: World, file: OrthoFile, anisotropy: number): Promise<{ texture: Texture; rect: [number, number, number, number] }> {
-  const texture = await new TextureLoader().loadAsync(`${base(world)}ortho.webp`);
+export async function loadOrtho(world: World, file: OrthoFile, anisotropy: number, name: 'ortho' | 'render' = 'ortho'): Promise<{ texture: Texture; rect: [number, number, number, number] }> {
+  const texture = await new TextureLoader().loadAsync(`${base(world)}${name}.webp`);
   texture.colorSpace = SRGBColorSpace;
   texture.flipY = false;
   texture.generateMipmaps = true;

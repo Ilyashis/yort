@@ -5,7 +5,7 @@ import { TERRITORIES, findTerritory } from '../core/data';
 
 export type Mode = 'overview' | 'walk' | 'drive';
 /** Чем раскрашена земля: рисунком движка, снимком своей съёмки с дрона или спутниковым. */
-export type Ground = 'drawn' | 'drone' | 'satellite';
+export type Ground = 'drawn' | 'drone' | 'satellite' | 'render';
 
 export interface Selected {
   id: string;
@@ -41,6 +41,8 @@ interface State {
   groundCredit: string;
   /** У текущего места есть снимок с дрона. */
   hasPhoto: boolean;
+  /** У текущего места есть сгенерированная карта (лежит только локально). */
+  hasRender: boolean;
   stats: { buildings: number; trees: number; osm?: string } | null;
   /** Открыто окно «Рельеф»: центр куска земли (мир) и сторона, м. */
   relief: { x: number; z: number; size: number } | null;
@@ -86,9 +88,10 @@ export const useStore = create<State>((set) => ({
   carColour: read('car', 0),
   estates: read('estates', true),
   sound: read('sound', true),
-  ground: (['drawn', 'drone', 'satellite'] as Ground[]).find((g) => g === (urlParams.get('ground') ?? read('ground', 'drone'))) ?? 'drone',
+  ground: (['drawn', 'drone', 'satellite', 'render'] as Ground[]).find((g) => g === (urlParams.get('ground') ?? read('ground', 'drone'))) ?? 'drone',
   groundCredit: '',
   hasPhoto: false,
+  hasRender: false,
   stats: null,
   relief: null,
   terrainRev: 0,
