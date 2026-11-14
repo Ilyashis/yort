@@ -169,6 +169,18 @@ export function toneOf(color: string, base: string): number | undefined {
   return c.every((v, i) => Math.abs(v - Math.min(255, b[i]! * k)) <= 4) ? Number(k.toFixed(3)) : undefined;
 }
 
+/** Перекрасить кровлю и стены модели: деталь с меткой paint получает новый цвет с тем же оттенком. */
+export function repaintParts(parts: readonly HousePart[], colors: { roof?: string; wall?: string }): HousePart[] {
+  if (!colors.roof && !colors.wall) return parts as HousePart[];
+  return parts.map((p) => {
+    if (!('paint' in p) || !p.paint) return p;
+    const base = colors[p.paint.role];
+    if (!base || !/^#[0-9a-f]{6}$/i.test(base)) return p;
+    const rgb = hexToRgb(base);
+    return { ...p, color: rgbToHex(rgb.map((v) => Math.min(255, v * p.paint!.tone))) };
+  });
+}
+
 export function mixColor(a: string, b: string, t: number): string {
   const ca = hexToRgb(a);
   const cb = hexToRgb(b);

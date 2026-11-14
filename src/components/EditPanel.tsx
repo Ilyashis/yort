@@ -1,9 +1,10 @@
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { findTerritory } from '../core/data';
 import { useStore } from '../state/store';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { hashString } from '../utils/hash';
-import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
+import { HOUSE_MODELS, MODEL_ENTRANCE, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { cumulative, defaultGateAt, GATE_KINDS, GATE_ORDER, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import {
   BUILDING_KINDS,
@@ -14,6 +15,7 @@ import {
   ROOF_COLORS,
   clampFloors,
   plotKey,
+  setAddress,
   setPlotLift,
   removeBuilding,
   removeFence,
@@ -30,6 +32,7 @@ import {
   type EditedBuilding,
   type EditedFence,
   type FenceKind,
+  type HouseModelRef,
 } from '../world/edit/edits';
 
 const KINDS = Object.keys(BUILDING_KINDS) as EditBuildingKind[];
@@ -123,228 +126,214 @@ export function EditPanel() {
           ? `Модель ${fmt(plan.width)} × ${fmt(plan.depth)} м, контур ${fmt(w)} × ${fmt(d)} м — у этой модели другие пределы размеров.`
           : `${fmt(plan.width)} × ${fmt(plan.depth)} м по контуру, высота ${fmt(plan.height)} м.`;
     }
+    const ref = building.model;
+    const entrance = ref ? MODEL_ENTRANCE[ref.id] : undefined;
+    const setRef = (patch: Partial<HouseModelRef>) => {
+      if (!ref) return;
+      const next: HouseModelRef = { ...ref, ...patch };
+      // Значения «как у модели» не храним.
+      for (const k of Object.keys(next) as (keyof HouseModelRef)[]) if (next[k] === undefined) delete next[k];
+      update({ model: next });
+    };
+    const entranceSide = entrance ? (ref?.mirror ? (entrance.side === 'left' ? 'right' : 'left') : entrance.side) : undefined;
+    const hasVeranda = entrance?.veranda !== undefined ? (ref?.veranda ?? entrance.veranda) : false;
+    const wallColor = ref ? ref.wall : building.facadeColor;
+    const roofColor = ref ? ref.roof : building.roofColor;
+    const setWall = (color: string | undefined) => (ref ? setRef({ wall: color }) : color && update({ facadeColor: color }));
+    const setRoof = (color: string | undefined) => (ref ? setRef({ roof: color }) : color && update({ roofColor: color }));
+    const origin = fromMap ? (own ? 'Постройка с карты — изменена вами' : 'Постройка во дворе с карты') : fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом';
     return (
       <aside className="panel building-card edit-panel">
         {close}
         <h2>{model ? model.name : BUILDING_KINDS[building.kind].label}</h2>
-        <p className="muted">
-          {fromMap ? (own ? 'Постройка с карты — изменена вами' : 'Постройка во дворе с карты') : fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью; белые точки — растянуть,
-          чуть снаружи угла — повернуть
-        </p>
+        <p className="muted card-sub">{origin}. Тяните дом мышью; белые точки — растянуть, чуть снаружи угла — повернуть.</p>
 
-        {village && (
-          <div className="field">
-            <span>
-              Высота участка <b>{lift ? `${lift > 0 ? '+' : '−'}${fmt(Math.abs(lift))} м` : 'как у земли'}</b>
-            </span>
-            <div className="segmented segmented-small" role="group" aria-label="Высота участка">
-              <button type="button" onClick={() => setLift(lift - 0.5)} title="Опустить участок на полметра">
-                − 0,5
-              </button>
-              <button type="button" onClick={() => setLift(lift - 0.1)} title="Опустить на 10 см">
-                − 0,1
-              </button>
-              <button type="button" className={lift ? '' : 'active'} onClick={() => setLift(0)} title="Вернуть естественную высоту">
-                Авто
-              </button>
-              <button type="button" onClick={() => setLift(lift + 0.1)} title="Поднять на 10 см">
-                + 0,1
-              </button>
-              <button type="button" onClick={() => setLift(lift + 0.5)} title="Поднять участок на полметра">
-                + 0,5
-              </button>
-            </div>
-            <p className="muted">Двор выравнивается на этой высоте, улица рядом подстраивается под неё.</p>
-          </div>
-        )}
-
-        <div className="field">
-          <span>Повернуть дом</span>
-          <div className="segmented segmented-small" role="group" aria-label="Повернуть дом">
-            {(
-              [
-                [-90, '↺ 90°', 'Против часовой на четверть оборота'],
-                [-15, '↺ 15°', 'Против часовой на 15°'],
-                [-1, '↺ 1°', 'Против часовой на 1°'],
-                [1, '1° ↻', 'По часовой на 1°'],
-                [15, '15° ↻', 'По часовой на 15°'],
-                [90, '90° ↻', 'По часовой на четверть оборота'],
-              ] as [number, string, string][]
-            ).map(([degrees, label, title]) => (
-              <button key={degrees} type="button" title={title} onClick={() => update({ footprint: turned(building.footprint, degrees) })}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {village && model && model.group === 'house' && (
-          <div className="field">
-            <span>Палисадник</span>
-            <div className="segmented segmented-small" role="group" aria-label="С какой стороны палисадник">
-              {(
-                [
-                  [0, 'С улицы', 'Перед уличным фасадом'],
-                  [3, 'Слева', 'Слева от дома, если смотреть с улицы'],
-                  [1, 'Справа', 'Справа от дома, если смотреть с улицы'],
-                  [2, 'Сзади', 'За домом'],
-                  [-1, 'Нет', 'Без палисадника'],
-                ] as [number, string, string][]
-              ).map(([side, label, title]) => (
-                <button key={side} type="button" title={title} className={(building.garden ?? 0) === side ? 'active' : ''} onClick={() => update({ garden: side })}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {model && (
-          <div className="field">
-            <span>{model.id === 'veranda' ? 'Веранда' : 'Крыльцо и пристрой'}</span>
-            <div className="segmented segmented-small" role="group" aria-label="С какой стороны веранда и крыльцо">
-              {(
-                [
-                  [false, model.id === 'veranda' ? 'Справа' : 'Как есть', 'Как в модели'],
-                  [true, model.id === 'veranda' ? 'Слева' : 'Зеркально', 'Модель отражена слева направо'],
-                ] as [boolean, string, string][]
-              ).map(([mirror, label, title]) => (
-                <button
-                  key={String(mirror)} type="button" title={title} className={!!building.model!.mirror === mirror ? 'active' : ''}
-                  onClick={() => update({ model: { id: building.model!.id, seed: building.model!.seed, ...(mirror ? { mirror: true } : {}) } })}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="field">
-          <span>Модель дома</span>
-          <div className="model-grid" role="group" aria-label="Модель дома">
-            <button type="button" className={!model ? 'active' : ''} onClick={() => setModel(undefined)} title="Простой объём: тип, этажи, крыша и цвета">
-              Объём
-            </button>
-          </div>
-          {MODEL_GROUPS.map(({ group, label }) => (
-            <div key={group}>
-              <div className="model-group">{label}</div>
-              <div className="model-grid" role="group" aria-label={label}>
+        <Section id="kind" title="Вид дома">
+          <select
+            className="model-select"
+            value={model?.id ?? ''}
+            aria-label="Модель дома"
+            onChange={(e) => setModel((e.target.value || undefined) as HouseModelId | undefined)}
+          >
+            <option value="">Простой объём — этажи, крыша, цвета</option>
+            {MODEL_GROUPS.map(({ group, label }) => (
+              <optgroup key={group} label={label}>
                 {HOUSE_MODELS.filter((m) => m.group === group).map((m) => (
-                  <button key={m.id} type="button" className={model?.id === m.id ? 'active' : ''} onClick={() => setModel(m.id)} title={m.description}>
-                    {m.short}
-                  </button>
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
                 ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {model ? (
-          <>
-            <p className="muted model-note">{sizeNote}</p>
-            <div className="button-row">
-              <button
-                type="button"
-                className="button"
-                onClick={() => commit(upsertBuilding(useEditStore.getState().edits, withModel(building, { ...building.model!, seed: building.model!.seed + 1 })))}
-              >
-                Другая окраска
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={() => commit(upsertBuilding(useEditStore.getState().edits, { ...building, footprint: turnFacade(building.footprint) }))}
-                title="Фасад — на соседнюю сторону контура"
-              >
-                Развернуть фасад
-              </button>
-            </div>
-            <a className="model-link" href="/houses.html" target="_blank" rel="noreferrer">
-              Все модели в мастерской ↗
-            </a>
-          </>
-        ) : (
-          <>
-            <div className="segmented segmented-small" role="group" aria-label="Тип дома">
-              {KINDS.map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  className={building.kind === kind ? 'active' : ''}
-                  onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : building.floors })}
-                >
-                  {BUILDING_KINDS[kind].label}
-                </button>
-              ))}
-            </div>
-
-            {building.kind !== 'shed' && (
-              <label className="field">
-                <span>
-                  Этажей <b>{building.floors}</b>
-                </span>
-                <input
-                  type="range"
-                  min={1}
-                  max={building.kind === 'house' ? 3 : 30}
-                  step={1}
-                  value={building.floors}
-                  onChange={(e) => update({ floors: clampFloors(Number(e.target.value)) })}
-                />
-              </label>
-            )}
-
-            <div className="field">
-              <span>Крыша</span>
-              <div className="segmented segmented-small" role="group" aria-label="Крыша">
-                {ROOFS.map(({ roof, label }) => (
-                  <button key={roof} type="button" className={building.roof === roof ? 'active' : ''} onClick={() => update({ roof })}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="field">
-              <span>Стены</span>
-              <div className="swatches" role="group" aria-label="Цвет стен">
-                {FACADE_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    aria-label={color}
-                    className={building.facadeColor === color ? 'active' : ''}
-                    style={{ background: color }}
-                    onClick={() => update({ facadeColor: color })}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {building.roof !== 'flat' && (
-              <div className="field">
-                <span>Кровля</span>
-                <div className="swatches" role="group" aria-label="Цвет кровли">
-                  {ROOF_COLORS.map((color) => (
+              </optgroup>
+            ))}
+          </select>
+          {model ? (
+            <>
+              <p className="muted model-note">{model.description} {sizeNote}</p>
+              <a className="model-link" href="/houses.html" target="_blank" rel="noreferrer">
+                Все модели в мастерской ↗
+              </a>
+            </>
+          ) : (
+            <>
+              <Row label="Тип">
+                <div className="segmented segmented-small" role="group" aria-label="Тип дома">
+                  {KINDS.map((kind) => (
                     <button
-                      key={color}
+                      key={kind}
                       type="button"
-                      aria-label={color}
-                      className={building.roofColor === color ? 'active' : ''}
-                      style={{ background: color }}
-                      onClick={() => update({ roofColor: color })}
-                    />
+                      className={building.kind === kind ? 'active' : ''}
+                      onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : building.floors })}
+                    >
+                      {BUILDING_KINDS[kind].label}
+                    </button>
                   ))}
                 </div>
+              </Row>
+              {building.kind !== 'shed' && (
+                <Row label={`Этажей: ${building.floors}`}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={building.kind === 'house' ? 3 : 30}
+                    step={1}
+                    value={building.floors}
+                    onChange={(e) => update({ floors: clampFloors(Number(e.target.value)) })}
+                  />
+                </Row>
+              )}
+              <Row label="Крыша">
+                <div className="segmented segmented-small" role="group" aria-label="Крыша">
+                  {ROOFS.map(({ roof, label }) => (
+                    <button key={roof} type="button" className={building.roof === roof ? 'active' : ''} onClick={() => update({ roof })}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </Row>
+            </>
+          )}
+        </Section>
+
+        <Section id="colors" title="Цвет">
+          <Row label="Стены">
+            <Swatches colors={FACADE_COLORS} value={wallColor} onPick={setWall} auto={!!ref} label="Цвет стен" />
+          </Row>
+          {(ref || building.roof !== 'flat') && (
+            <Row label="Крыша">
+              <Swatches colors={ROOF_COLORS} value={roofColor} onPick={setRoof} auto={!!ref} label="Цвет крыши" />
+            </Row>
+          )}
+          {ref && (
+            <button type="button" className="button button-small" onClick={() => commit(upsertBuilding(useEditStore.getState().edits, withModel(building, { ...ref, seed: ref.seed + 1 })))}>
+              Другая окраска модели
+            </button>
+          )}
+        </Section>
+
+        {ref && entrance && (
+          <Section id="entrance" title="Вход, крыльцо, веранда">
+            <Row label="Вход с улицы">
+              <div className="segmented segmented-small" role="group" aria-label="С какой стороны вход">
+                {(['left', 'right'] as const).map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    className={entranceSide === side ? 'active' : ''}
+                    title={side === 'left' ? 'Вход слева, если смотреть с улицы' : 'Вход справа, если смотреть с улицы'}
+                    onClick={() => setRef({ mirror: side !== entrance.side ? true : undefined })}
+                  >
+                    {side === 'left' ? '← Слева' : 'Справа →'}
+                  </button>
+                ))}
               </div>
+            </Row>
+            <Row label="Крыльцо">
+              <Toggle value={ref.porch !== false} onChange={(on) => setRef({ porch: on ? undefined : false })} label="Крыльцо со ступенями" />
+            </Row>
+            {entrance.veranda !== undefined && (
+              <Row label="Веранда">
+                <Toggle
+                  value={hasVeranda}
+                  onChange={(on) => setRef({ veranda: on === entrance.veranda ? undefined : on })}
+                  label="Застеклённая веранда у входа"
+                />
+              </Row>
             )}
-          </>
+          </Section>
         )}
 
-        <div className="button-row">
-          <button type="button" className="button" onClick={remove}>
+        {village && (
+          <Section id="address" title="Адрес">
+            <AddressField key={plotKey(building)} addressKey={plotKey(building)} plate={!!model && model.group !== 'small'} />
+          </Section>
+        )}
+
+        {village && (
+          <Section id="plot" title="Участок">
+            {model && model.group === 'house' && (
+              <Row label="Палисадник">
+                <div className="segmented segmented-small" role="group" aria-label="С какой стороны палисадник">
+                  {(
+                    [
+                      [0, 'С улицы', 'Перед уличным фасадом'],
+                      [3, 'Слева', 'Слева от дома, если смотреть с улицы'],
+                      [1, 'Справа', 'Справа от дома, если смотреть с улицы'],
+                      [2, 'Сзади', 'За домом'],
+                      [-1, 'Нет', 'Без палисадника'],
+                    ] as [number, string, string][]
+                  ).map(([side, label, title]) => (
+                    <button key={side} type="button" title={title} className={(building.garden ?? 0) === side ? 'active' : ''} onClick={() => update({ garden: side })}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </Row>
+            )}
+            <Row label={`Высота участка: ${lift ? `${lift > 0 ? '+' : '−'}${fmt(Math.abs(lift))} м` : 'как у земли'}`}>
+              <div className="segmented segmented-small" role="group" aria-label="Высота участка">
+                <button type="button" onClick={() => setLift(lift - 0.5)} title="Опустить участок на полметра">− 0,5</button>
+                <button type="button" onClick={() => setLift(lift - 0.1)} title="Опустить на 10 см">− 0,1</button>
+                <button type="button" className={lift ? '' : 'active'} onClick={() => setLift(0)} title="Вернуть естественную высоту">Авто</button>
+                <button type="button" onClick={() => setLift(lift + 0.1)} title="Поднять на 10 см">+ 0,1</button>
+                <button type="button" onClick={() => setLift(lift + 0.5)} title="Поднять участок на полметра">+ 0,5</button>
+              </div>
+            </Row>
+          </Section>
+        )}
+
+        <Section id="place" title="Положение">
+          <Row label="Повернуть">
+            <div className="segmented segmented-small" role="group" aria-label="Повернуть дом">
+              {(
+                [
+                  [-90, '↺ 90°', 'Против часовой на четверть оборота'],
+                  [-15, '↺ 15°', 'Против часовой на 15°'],
+                  [-1, '↺ 1°', 'Против часовой на 1°'],
+                  [1, '1° ↻', 'По часовой на 1°'],
+                  [15, '15° ↻', 'По часовой на 15°'],
+                  [90, '90° ↻', 'По часовой на четверть оборота'],
+                ] as [number, string, string][]
+              ).map(([degrees, label, title]) => (
+                <button key={degrees} type="button" title={title} onClick={() => update({ footprint: turned(building.footprint, degrees) })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Row>
+          {model && (
+            <button
+              type="button"
+              className="button button-small"
+              onClick={() => commit(upsertBuilding(useEditStore.getState().edits, { ...building, footprint: turnFacade(building.footprint) }))}
+              title="Фасад — на соседнюю сторону контура"
+            >
+              Развернуть фасад к другой стороне
+            </button>
+          )}
+        </Section>
+
+        <div className="button-row card-footer">
+          <button type="button" className="button button-danger" onClick={remove}>
             Убрать дом <kbd>Del</kbd>
           </button>
         </div>
@@ -389,7 +378,7 @@ export function EditPanel() {
     <aside className="panel building-card edit-panel">
       {close}
       <h2>Забор</h2>
-      <p className="muted">{own ? 'Тяните забор мышью, чтобы подвинуть; белые точки — изломы, их можно тянуть по одной; чуть снаружи точки — повернуть' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
+      <p className="muted">{own ? 'Тяните забор мышью, чтобы подвинуть; белые точки — изломы, их можно тянуть по одной (прилипают к соседним заборам); полупрозрачная посередине — потяните, чтобы добавить излом; двойной щелчок по точке — убрать её; чуть снаружи точки — повернуть' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
       {ownFence && (
         <div className="field">
           <span>Вид забора</span>
@@ -495,6 +484,137 @@ function FenceGates({ fence }: { fence: EditedFence }) {
         );
       })}
       {gates.length > 0 && <p className="muted">Синие точки над забором — ворота: тяните их мышью вдоль забора.</p>}
+    </div>
+  );
+}
+
+/** Адрес дома: улица (с подсказкой из названий улиц) и номер; сохраняется по Enter или при уходе из поля. */
+function AddressField({ addressKey, plate }: { addressKey: string; plate: boolean }) {
+  const saved = useEditStore((s) => s.edits.addresses?.[addressKey]);
+  const book = useEditStore((s) => s.addressBook);
+  const osm = book.osm[addressKey];
+  const current = saved ?? osm;
+  const [street, setStreet] = useState(current?.street ?? '');
+  const [number, setNumber] = useState(current?.number ?? '');
+  useEffect(() => {
+    setStreet(current?.street ?? '');
+    setNumber(current?.number ?? '');
+  }, [current?.street, current?.number]);
+  const used = Object.values(useEditStore.getState().edits.addresses ?? {}).map((a) => a.street);
+  const streets = [...new Set([...book.streets, ...used].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+  const save = () => {
+    if (street.trim() === (current?.street ?? '') && number.trim() === (current?.number ?? '')) return;
+    const store = useEditStore.getState();
+    store.commit(setAddress(store.edits, addressKey, { street, number }));
+  };
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+  };
+  return (
+    <div className="field address-field">
+      <small className="muted">{saved ? 'Указан вами' : osm ? 'Из OpenStreetMap' : 'Не указан'}</small>
+      <div className="address-inputs">
+        <input
+          type="text"
+          list="citia-streets"
+          placeholder="Улица"
+          value={street}
+          maxLength={80}
+          onChange={(e) => setStreet(e.target.value)}
+          onBlur={save}
+          onKeyDown={onKey}
+          aria-label="Улица"
+        />
+        <input
+          type="text"
+          placeholder="№"
+          value={number}
+          maxLength={16}
+          onChange={(e) => setNumber(e.target.value)}
+          onBlur={save}
+          onKeyDown={onKey}
+          aria-label="Номер дома"
+        />
+      </div>
+      <datalist id="citia-streets">
+        {streets.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+      <p className="muted">
+        {plate ? 'Табличка с улицей и номером висит у правого угла фасада.' : 'Табличка появится, когда у дома будет модель.'}
+        {saved && osm ? ' Сотрите оба поля — вернётся адрес из OSM.' : ''}
+      </p>
+    </div>
+  );
+}
+
+/** Раздел карточки: сворачивается, открытость запоминается в браузере. */
+function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  const storageKey = `citia:card:${id}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(storageKey) !== '0';
+    } catch {
+      return true;
+    }
+  });
+  return (
+    <details
+      className="card-section"
+      open={open}
+      onToggle={(e) => {
+        const now = (e.currentTarget as HTMLDetailsElement).open;
+        setOpen(now);
+        try {
+          localStorage.setItem(storageKey, now ? '1' : '0');
+        } catch {
+          // Хранилище недоступно — раздел просто не запомнится.
+        }
+      }}
+    >
+      <summary>{title}</summary>
+      <div className="card-section-body">{children}</div>
+    </details>
+  );
+}
+
+/** Строка раздела: подпись слева, управление справа (на узкой карточке — под подписью). */
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="card-row">
+      <span className="card-row-label">{label}</span>
+      <div className="card-row-control">{children}</div>
+    </div>
+  );
+}
+
+/** Есть / нет. */
+function Toggle({ value, onChange, label }: { value: boolean; onChange: (on: boolean) => void; label: string }) {
+  return (
+    <div className="segmented segmented-small" role="group" aria-label={label}>
+      <button type="button" className={value ? 'active' : ''} onClick={() => !value && onChange(true)}>
+        Есть
+      </button>
+      <button type="button" className={!value ? 'active' : ''} onClick={() => value && onChange(false)}>
+        Нет
+      </button>
+    </div>
+  );
+}
+
+/** Цвета кружками; auto — первый кружок «как в модели». */
+function Swatches({ colors, value, onPick, auto, label }: { colors: readonly string[]; value: string | undefined; onPick: (color: string | undefined) => void; auto: boolean; label: string }) {
+  return (
+    <div className="swatches" role="group" aria-label={label}>
+      {auto && (
+        <button type="button" className={`swatch-auto ${!value ? 'active' : ''}`} title="Как в модели" aria-label="Как в модели" onClick={() => onPick(undefined)}>
+          A
+        </button>
+      )}
+      {colors.map((color) => (
+        <button key={color} type="button" aria-label={color} title={color} className={value === color ? 'active' : ''} style={{ background: color }} onClick={() => onPick(color)} />
+      ))}
     </div>
   );
 }

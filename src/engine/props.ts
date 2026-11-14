@@ -18,7 +18,6 @@ import {
   Quaternion,
   Vector3,
 } from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { World } from '../core/data';
 import type { P2 } from '../core/geo';
@@ -235,60 +234,5 @@ export function createProps(world: World, hm: HeightMap, lamps: readonly Lamp[],
       glow.visible = k > 0.01;
     },
     dispose: () => disposables.forEach((d) => d.dispose()),
-  };
-}
-
-export interface Monument {
-  group: Group;
-  /** Контур пьедестала — препятствие. */
-  ring: P2[];
-  x: number;
-  z: number;
-  dispose: () => void;
-}
-
-const SALAVAT = { lon: 55.9258453, lat: 54.7184771, heading: 250, model: 'models/salavat-yulaev.glb' };
-
-/** Памятник Салавату Юлаеву: гранитный пьедестал со ступенями и бронзовая статуя (модель GLB). */
-export function createMonument(world: World, hm: HeightMap): Monument | undefined {
-  if (world.territory.id !== 'ufa-center') return undefined;
-  const [x, z] = world.frame.xz(SALAVAT.lon, SALAVAT.lat);
-  const group = new Group();
-  group.position.set(x, hm.at(x, z), z);
-  group.rotation.y = (-SALAVAT.heading * Math.PI) / 180;
-  const granite = (hex: string) => new MeshStandardMaterial({ color: hex, roughness: 0.62, metalness: 0.05 });
-  const mats = [granite('#a29b92'), granite('#857c74'), granite('#6f6862')];
-  const add = (geometry: BufferGeometry, mat: number, y: number) => {
-    const mesh = new Mesh(geometry, mats[mat]);
-    mesh.position.y = y;
-    mesh.castShadow = mesh.receiveShadow = true;
-    group.add(mesh);
-  };
-  add(new CylinderGeometry(7.2, 7.2, 3.25, 40), 0, 0.25 - 3.25 / 2);
-  add(new CylinderGeometry(6.4, 6.4, 0.25, 40), 0, 0.375);
-  add(new BoxGeometry(4.8, 0.45, 7.1), 2, 0.5 + 0.225);
-  add(new BoxGeometry(4.2, 3.0, 6.5), 1, 0.95 + 1.5);
-  add(new BoxGeometry(4.6, 0.35, 6.9), 0, 3.95 + 0.175);
-  new GLTFLoader().load(`${import.meta.env.BASE_URL}${SALAVAT.model}`, (gltf) => {
-    gltf.scene.position.y = 4.3;
-    gltf.scene.traverse((o) => {
-      if ((o as Mesh).isMesh) o.castShadow = o.receiveShadow = true;
-    });
-    group.add(gltf.scene);
-  });
-  const h = (SALAVAT.heading * Math.PI) / 180;
-  const ring: P2[] = ([[-2.4, -3.55], [2.4, -3.55], [2.4, 3.55], [-2.4, 3.55]] as P2[]).map(([lx, lz]) => [
-    x + lx * Math.cos(h) - lz * Math.sin(h),
-    z + lx * Math.sin(h) + lz * Math.cos(h),
-  ]);
-  return {
-    group,
-    ring,
-    x,
-    z,
-    dispose: () => {
-      mats.forEach((mm) => mm.dispose());
-      group.traverse((o) => (o as Mesh).geometry?.dispose());
-    },
   };
 }

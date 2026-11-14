@@ -19,7 +19,8 @@ import { TerrainBrush } from '../three/TerrainBrush';
 import { UnderlayLayer } from '../three/UnderlayLayer';
 import { changeAt, changeRect, replayStrokes, SculptField, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import type { BaseBuildingFeature } from '../world/base/types';
-import { addStroke, replacedOsmIds, ROAD_KINDS, type Edits, type LonLat } from '../world/edit/edits';
+import { addStroke, modelOptions, parseOsmAddress, plateText, plotKey, replacedOsmIds, ROAD_KINDS, type Edits, type HouseAddress, type LonLat } from '../world/edit/edits';
+import { AddressPlates, type PlateItem } from '../three/AddressPlates';
 import { createLocalFrame, type LocalFrame } from '../world/walk/localFrame';
 import type { BuildingSet } from './buildings';
 import type { Rect } from './shared';
@@ -127,6 +128,68 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   };
 
   const editLayer = new EditLayer(host, frame, heightAt, isVillage);
+  // Адресные таблички: адрес из правок, иначе из OSM (addr:street + addr:housenumber).
+  const plates = new AddressPlates(host, heightAt);
+  const osmAddresses: Record<string, HouseAddress> = {};
+  for (const b of world.buildings) {
+    const address = parseOsmAddress(b.props.address);
+    if (address) osmAddresses[b.props.id] = address;
+  }
+  const streetNames = [...new Set([...world.roads.map((r) => r.name), ...Object.values(osmAddresses).map((a) => a.street)].filter((n): n is string => !!n))].sort((a, b) => a.localeCompare(b, 'ru'));
+  useEditStore.getState().setAddressBook({ streets: streetNames, osm: osmAddresses });
+  // Оси дорог в локальных метрах (y — на север).
+  const roadAxes = world.roads.map((r) => r.pts.map(([x, z]): [number, number] => [x, -z]));
+  /** Стена контура, обращённая к ближайшей дороге, и её внешняя нормаль. */
+  const streetWall = (ring: [number, number][]): { wall: [[number, number], [number, number]]; normal: [number, number] } | undefined => {
+    const pts = ring.length > 1 && ring[0]![0] === ring[ring.length - 1]![0] && ring[0]![1] === ring[ring.length - 1]![1] ? ring.slice(0, -1) : ring;
+    if (pts.length < 3) return undefined;
+    const area = pts.reduce((s, p, i) => s + p[0] * pts[(i + 1) % pts.length]![1] - pts[(i + 1) % pts.length]![0] * p[1], 0);
+    let best: { d: number; wall: [[number, number], [number, number]]; normal: [number, number] } | undefined;
+    pts.forEach((a, i) => {
+      const b = pts[(i + 1) % pts.length]!;
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 2) return;
+      // Наружу: для обхода против часовой — вправо от направления стены.
+      const sign = area > 0 ? 1 : -1;
+      const normal: [number, number] = [((b[1] - a[1]) / len) * sign, (-(b[0] - a[0]) / len) * sign];
+      const probe: [number, number] = [(a[0] + b[0]) / 2 + normal[0] * 3, (a[1] + b[1]) / 2 + normal[1] * 3];
+      let d = Number.POSITIVE_INFINITY;
+      for (const axis of roadAxes) for (let k = 1; k < axis.length; k++) d = Math.min(d, segDistance(probe, axis[k - 1]!, axis[k]!));
+      if (!best || d < best.d) best = { d, wall: [a, b], normal };
+    });
+    return best && { wall: best.wall, normal: best.normal };
+  };
+  const layPlates = (edits: Edits) => {
+    const address = (key: string) => edits.addresses?.[key] ?? osmAddresses[key];
+    const replaced = replacedOsmIds(edits);
+    const removed = new Set(edits.removedBuildings);
+    const items: PlateItem[] = [];
+    for (const h of village?.models?.houses ?? []) {
+      const a = !replaced.has(h.id) && !removed.has(h.id) ? address(h.id) : undefined;
+      if (a) items.push({ id: h.id, rect: h.rect, model: h.model, seed: h.seed, text: plateText(a) });
+    }
+    const modelled = new Set((village?.models?.houses ?? []).map((h) => h.id));
+    for (const b of edits.buildings) {
+      const a = address(plotKey(b));
+      if (!a) continue;
+      const ring = b.footprint.map(frame.toLocal);
+      if (b.model && b.footprint.length === 4) items.push({ id: b.id, rect: ring, model: b.model.id, seed: b.model.seed, text: plateText(a), exact: { mirror: b.model.mirror, options: modelOptions(b.model) } });
+      else {
+        const wall = streetWall(ring);
+        if (wall) items.push({ id: b.id, ...wall, text: plateText(a) });
+      }
+    }
+    // Здания OSM без модели (школа, магазин): табличка на стене, что смотрит на ближайшую дорогу.
+    for (const f of world.buildings) {
+      const id = f.props.id;
+      if (modelled.has(id) || replaced.has(id) || removed.has(id) || f.props.minHeight > 0) continue;
+      const a = address(id);
+      const ring = a && f.rings[0]?.map(([x, z]): [number, number] => [x, -z]);
+      const wall = ring && streetWall(ring);
+      if (a && wall) items.push({ id, ...wall, text: plateText(a) });
+    }
+    plates.update(items);
+  };
   const osmBuildings = world.buildings.map((b) => ({
     type: 'Feature',
     id: b.props.id,
@@ -148,6 +211,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     yardModels: village?.yardModels,
     mapFences: d.mapFences ?? [],
   });
+  useEditStore.getState().setMapFenceIds((d.mapFences ?? []).map((f) => f.id));
 
   // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
   const followGround = (change: SculptChange) => {
@@ -249,6 +313,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       d.roadsChanged(edits, hiddenPlots);
     }
     editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
+    layPlates(edits);
     showSelection();
   };
   applyEdits();
@@ -284,6 +349,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       brush.destroy();
       editor.destroy();
       editLayer.destroy();
+      plates.destroy();
       d.underlay.set(undefined);
       host.canvas.style.cursor = '';
       const s = useEditStore.getState();
@@ -293,4 +359,11 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       s.select(undefined);
     },
   };
+}
+
+function segDistance(p: [number, number], a: [number, number], b: [number, number]): number {
+  const abx = b[0] - a[0], aby = b[1] - a[1];
+  const l2 = abx * abx + aby * aby;
+  const t = l2 ? Math.min(1, Math.max(0, ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2)) : 0;
+  return Math.hypot(p[0] - a[0] - abx * t, p[1] - a[1] - aby * t);
 }

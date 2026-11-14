@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseModelRef } from '../world/edit/edits';
+import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseAddress, type HouseModelRef } from '../world/edit/edits';
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptMode } from '../world/base/sculpt';
+import type { SnapKind } from '../world/edit/snapLine';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
 export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'terrain';
@@ -41,6 +42,17 @@ function saveEdits(territoryId: string, edits: Edits): void {
   }
 }
 
+export interface DrawingInfo {
+  kind: 'road' | 'fence';
+  /** Поставлено точек. */
+  points: number;
+  /** Длина отрезка от последней точки до курсора, м. */
+  segment: number;
+  /** Длина всей линии вместе с этим отрезком, м. */
+  total: number;
+  snap?: SnapKind;
+}
+
 interface EditState {
   territoryId?: string;
   edits: Edits;
@@ -56,6 +68,12 @@ interface EditState {
   sculpt: SculptSettings;
   /** Короткое сообщение внизу экрана (почему нельзя поставить дом и т. п.). */
   notice?: { text: string; at: number };
+  /** Линия, которую сейчас ставят по точкам: длины для подсказки и к чему прилипла точка. */
+  drawing?: DrawingInfo;
+  /** Заборы с карты (ключи) — для кнопки «убрать все заборы с карты». */
+  mapFenceIds: string[];
+  /** Названия улиц (подсказка в поле адреса) и адреса домов из OSM (по id дома). */
+  addressBook: { streets: string[]; osm: Record<string, HouseAddress> };
   /** Дом для правки по id: уже изменённый или дом OSM в виде правки (регистрирует сцена). */
   resolveBuilding?: (id: string) => EditedBuilding | undefined;
   /** Поставить модель на место дома (фасадом к улице) или снять её (регистрирует сцена — знает улицы). */
@@ -75,6 +93,9 @@ interface EditState {
   /** Заменить все правки (импорт из файла, сброс). */
   replace: (next: Edits) => void;
   notify: (text: string) => void;
+  setDrawing: (drawing: DrawingInfo | undefined) => void;
+  setMapFenceIds: (ids: string[]) => void;
+  setAddressBook: (book: { streets: string[]; osm: Record<string, HouseAddress> }) => void;
   setResolver: (resolve: ((id: string) => EditedBuilding | undefined) | undefined) => void;
   setModelApplier: (apply: ((building: EditedBuilding, model: HouseModelRef | undefined) => EditedBuilding) | undefined) => void;
 }
@@ -116,6 +137,18 @@ export const useEditStore = create<EditState>()((set, get) => ({
   },
   replace: (next) => get().commit(next),
   notify: (text) => set({ notice: { text, at: Date.now() } }),
+  mapFenceIds: [],
+  setDrawing: (drawing) => {
+    const now = get().drawing;
+    // Курсор двигается каждый кадр — не будим интерфейс, если цифры на экране не поменялись.
+    if (!drawing && !now) return;
+    if (drawing && now && now.kind === drawing.kind && now.points === drawing.points && now.snap === drawing.snap &&
+        Math.abs(now.segment - drawing.segment) < 0.05 && Math.abs(now.total - drawing.total) < 0.05) return;
+    set({ drawing });
+  },
+  setMapFenceIds: (mapFenceIds) => set({ mapFenceIds }),
+  addressBook: { streets: [], osm: {} },
+  setAddressBook: (addressBook) => set({ addressBook }),
   setResolver: (resolveBuilding) => set({ resolveBuilding }),
   setModelApplier: (applyModel) => set({ applyModel }),
 }));

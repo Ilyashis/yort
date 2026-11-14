@@ -49,6 +49,7 @@ import {
   type LonLat,
 } from '../world/edit/edits';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
+import { removeVertex, segmentLength, snapPoint, type Snap } from '../world/edit/snapLine';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
@@ -62,6 +63,10 @@ import { isTypingTarget } from './OverviewControls';
 const CLICK_PX = 5;
 /** Дорога «тянется от любой дороги»: начало и конец прилипают к осям ближе этого, м. */
 const ROAD_SNAP_M = 10;
+/** Точка забора прилипает к соседнему углу или линии ближе этого, px на экране. */
+const SNAP_PX = 14;
+/** Два щелчка по точке забора быстрее этого — убрать точку, мс. */
+const DOUBLE_CLICK_MS = 450;
 /** Дом выравнивается по улице, если она ближе этого, м. */
 const ALIGN_TO_STREET_M = 60;
 const MIN_HOUSE_SIDE = 3;
@@ -81,7 +86,7 @@ type Drag =
   | { type: 'resize'; original: EditedBuilding; index: number; current: EditedBuilding }
   // Свой забор: перенос целиком, перенос одной точки, поворот вокруг середины.
   | { type: 'fmove'; id: string; original: Vec2[]; start: Vec2; current: Vec2[]; at: ScreenPoint }
-  | { type: 'fvertex'; id: string; original: Vec2[]; index: number; current: Vec2[] }
+  | { type: 'fvertex'; id: string; original: Vec2[]; index: number; current: Vec2[]; at: ScreenPoint; inserted?: boolean }
   | { type: 'frotate'; id: string; original: Vec2[]; center: Vec2; startAngle: number; current: Vec2[] }
   | { type: 'fgate'; id: string; line: Vec2[]; index: number; gates: FenceGateSpec[] };
 
@@ -240,7 +245,7 @@ export class EditorTool {
       this.drag = { type: 'house', start: point, dir: this.streetDirection(point) };
       this.setCamera(false);
     } else if ((tool === 'road' || tool === 'fence') && point) {
-      const start = tool === 'road' ? this.snapToRoad(point) : point;
+      const start = tool === 'road' ? this.snapToRoad(point) : this.pending ? point : (this.fenceSnap(point, position)?.point ?? point);
       if (this.pending && this.pending.kind !== tool) this.dropPending();
       this.drag = { type: 'line', kind: tool, points: [start], at: position };
       this.setCamera(false);
@@ -271,6 +276,7 @@ export class EditorTool {
       if (screenDistance(drag.at, position) <= CLICK_PX) return;
       const last = drag.points[drag.points.length - 1]!;
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
+      useEditStore.getState().setDrawing({ kind: drag.kind, points: drag.points.length, segment: 0, total: lengthOf([...drag.points, point]) });
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
     } else if (drag.type === 'fgate') {
       // Ворота едут вдоль забора: середина проёма — ближайшая к курсору точка линии.
@@ -282,7 +288,15 @@ export class EditorTool {
       layer.setLineHandles(drag.line.map(this.ctx.frame.toLonLat), drag.gates);
     } else if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
       if (drag.type === 'fmove') drag.current = translate(drag.original, [point[0] - drag.start[0], point[1] - drag.start[1]]);
-      else if (drag.type === 'fvertex') drag.current = drag.original.map((p, i) => (i === drag.index ? point : p));
+      else if (drag.type === 'fvertex') {
+        // Точка прилипает к углам и линиям других заборов — участки смыкаются без щелей.
+        const snap = this.fenceSnap(point, position, drag.id);
+        this.ctx.layer.setSnapMarker(snap);
+        const at = snap?.point ?? point;
+        const closed = isClosed(drag.original);
+        const last = drag.original.length - 1;
+        drag.current = drag.original.map((p, i) => (i === drag.index || (closed && ((drag.index === 0 && i === last) || (drag.index === last && i === 0))) ? at : p));
+      }
       else drag.current = rotate(drag.original, drag.center, Math.atan2(point[1] - drag.center[1], point[0] - drag.center[0]) - drag.startAngle);
       layer.previewLine(drag.current.map(this.ctx.frame.toLonLat), 'fence');
     } else if (drag.type === 'move') {
@@ -306,10 +320,27 @@ export class EditorTool {
       // Инструмент сменили мышью — недорисованную линию бросаем; иначе тянем «резинку» к курсору.
       if (tool !== this.pending.kind) this.dropPending();
       else {
-        const point = this.ground(position);
-        if (point) this.ctx.layer.previewLine([...this.pending.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
+        const raw = this.ground(position);
+        if (raw) {
+          const snap = this.pending.kind === 'fence' ? this.fenceSnap(raw, position) : undefined;
+          const point = snap?.point ?? raw;
+          this.ctx.layer.setSnapMarker(snap);
+          this.ctx.layer.previewLine([...this.pending.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
+          const last = this.pending.points[this.pending.points.length - 1]!;
+          useEditStore.getState().setDrawing({
+            kind: this.pending.kind,
+            points: this.pending.points.length,
+            segment: segmentLength(last, point),
+            total: lengthOf([...this.pending.points, point]),
+            snap: snap?.kind,
+          });
+        }
       }
-    }
+    } else if (tool === 'fence' && !useUnderlayStore.getState().mode) {
+      // Первая точка тоже прилипает — метка показывает, куда она встанет.
+      const raw = this.ground(position);
+      this.ctx.layer.setSnapMarker(raw ? this.fenceSnap(raw, position) : undefined);
+    } else this.ctx.layer.setSnapMarker(undefined);
     const canvas = this.ctx.city.canvas;
     const editable = tool === 'select' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
     const active = editable && selection?.type === 'building';
@@ -365,11 +396,17 @@ export class EditorTool {
     if (drag.type === 'line') {
       // Щелчок (без протяжки) или линия уже ставится по точкам — это очередная точка.
       if (this.pending || screenDistance(drag.at, position) <= CLICK_PX || drag.points.length < 2) {
-        this.addPoint(drag.kind, this.ground(position) ?? drag.points[0]!);
+        this.addPoint(drag.kind, this.ground(position) ?? drag.points[0]!, position);
         return;
       }
-      // Протяжка — линия «кистью», как карандашом.
-      this.commitLine(drag.kind, simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3));
+      // Протяжка — линия «кистью», как карандашом; конец забора прилипает, как и начало.
+      useEditStore.getState().setDrawing(undefined);
+      const points = simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3);
+      if (drag.kind === 'fence') {
+        const end = this.fenceSnap(points[points.length - 1]!, position);
+        if (end) points[points.length - 1] = end.point;
+      }
+      this.commitLine(drag.kind, points);
       return;
     }
     if (drag.type === 'fgate') {
@@ -381,8 +418,21 @@ export class EditorTool {
       return;
     }
     if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
+      layer.setSnapMarker(undefined);
       if (drag.type === 'fmove' && screenDistance(drag.at, position) <= CLICK_PX) return;
       const fence = store.edits.fences.find((f) => f.id === drag.id);
+      if (drag.type === 'fvertex' && screenDistance(drag.at, position) <= CLICK_PX) {
+        // Щелчок по точке без протяжки; второй подряд по той же — убрать её.
+        if (drag.inserted) return layer.render(store.edits, undefined);
+        const last = this.vertexClick;
+        this.vertexClick = { id: drag.id, index: drag.index, time: performance.now() };
+        if (!fence || !last || last.id !== drag.id || last.index !== drag.index || performance.now() - last.time > DOUBLE_CLICK_MS) return;
+        this.vertexClick = undefined;
+        const line = removeVertex(drag.original, drag.index);
+        if (!line) return store.notify('У забора должно остаться хотя бы две точки — чтобы убрать весь забор, нажмите Delete');
+        store.commit(upsertFence(store.edits, { ...fence, line: line.map(this.ctx.frame.toLonLat) }));
+        return;
+      }
       // Вид, цвет и ворота остаются при забору — меняется только линия.
       if (fence && drag.current !== drag.original) store.commit(upsertFence(store.edits, { ...fence, line: drag.current.map(this.ctx.frame.toLonLat) }));
       return;
@@ -409,7 +459,13 @@ export class EditorTool {
       const original = fence.line.map(this.ctx.frame.toLocal);
       const handle = this.ctx.layer.hit(position[0], position[1]).handle;
       if (handle?.handle === 'gate' && fence.gates?.[handle.index]) return { type: 'fgate', id: fence.id, line: original, index: handle.index, gates: fence.gates };
-      if (handle?.handle === 'corner') return { type: 'fvertex', id: fence.id, original, index: handle.index, current: original };
+      if (handle?.handle === 'corner') return { type: 'fvertex', id: fence.id, original, index: handle.index, current: original, at: position };
+      if (handle?.handle === 'mid') {
+        // Середина отрезка: здесь появляется новый излом, его сразу тянут.
+        const a = original[handle.index]!, b = original[handle.index + 1]!;
+        const line = [...original.slice(0, handle.index + 1), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] as Vec2, ...original.slice(handle.index + 1)];
+        return { type: 'fvertex', id: fence.id, original: line, index: handle.index + 1, current: line, at: position, inserted: true };
+      }
       if (handle?.handle === 'rotate') {
         const center = centroidOf(original);
         return { type: 'frotate', id: fence.id, original, center, startAngle: Math.atan2(point[1] - center[1], point[0] - center[0]), current: original };
@@ -552,8 +608,8 @@ export class EditorTool {
   }
 
   /** Очередная точка: щелчок по последней точке (или двойной щелчок) — закончить, по первой — замкнуть забор. */
-  private addPoint(kind: 'road' | 'fence', raw: Vec2): void {
-    const point = kind === 'road' && !this.pending ? this.snapToRoad(raw) : raw;
+  private addPoint(kind: 'road' | 'fence', raw: Vec2, position?: ScreenPoint): void {
+    const point = kind === 'road' ? (this.pending ? raw : this.snapToRoad(raw)) : ((position && this.fenceSnap(raw, position)?.point) ?? raw);
     if (!this.pending) {
       this.pending = { kind, points: [point] };
       useEditStore.getState().notify(kind === 'road' ? 'Ставьте точки дороги. Двойной щелчок или Enter — готово, Backspace — убрать точку' : 'Ставьте точки забора. Щелчок по первой точке замкнёт участок; двойной щелчок или Enter — готово');
@@ -579,6 +635,37 @@ export class EditorTool {
   private dropPending(): void {
     this.pending = undefined;
     this.ctx.layer.previewLine(undefined);
+    this.ctx.layer.setSnapMarker(undefined);
+    useEditStore.getState().setDrawing(undefined);
+  }
+
+  /** Последний щелчок по точке своего забора — второй подряд её убирает. */
+  private vertexClick?: { id: string; index: number; time: number };
+
+  /** Сколько метров земли под курсором в одном пикселе экрана. */
+  private metresPerPixel(position: ScreenPoint): number | undefined {
+    const a = this.ground(position);
+    const b = this.ground([position[0] + 20, position[1]]);
+    return a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) / 20 : undefined;
+  }
+
+  /**
+   * Куда встанет точка забора: к углу или линии соседнего забора (своего, с карты или уже поставленным
+   * точкам этой же линии), иначе под прямым углом к предыдущему отрезку. except — забор, который правят.
+   */
+  private fenceSnap(raw: Vec2, position: ScreenPoint, except?: string): Snap | undefined {
+    const mpp = this.metresPerPixel(position);
+    const tolerance = Math.min(6, Math.max(0.3, (mpp ?? 0.1) * SNAP_PX));
+    const { edits } = useEditStore.getState();
+    const gone = new Set(edits.removedFences ?? []);
+    const lines: Vec2[][] = [
+      ...edits.fences.filter((f) => f.id !== except).map((f) => f.line.map(this.ctx.frame.toLocal)),
+      ...(this.ctx.mapFences ?? []).filter((f) => !gone.has(f.id)).map((f) => f.line),
+    ];
+    const pending = this.pending?.kind === 'fence' ? this.pending.points : [];
+    // Свои уже поставленные точки (кроме последней — от неё идёт отрезок) тоже притягивают.
+    if (pending.length >= 2) lines.push(pending.slice(0, -1));
+    return snapPoint(raw, lines, tolerance, pending[pending.length - 1], pending[pending.length - 2]);
   }
 
   /** Готовая линия — в правки: дорога прилипает концами к соседним, слишком короткое не берём. */
@@ -594,6 +681,8 @@ export class EditorTool {
 
   private cancelDrag(): void {
     this.drag = undefined;
+    this.ctx.layer.setSnapMarker(undefined);
+    useEditStore.getState().setDrawing(this.pending ? useEditStore.getState().drawing : undefined);
     this.releasePointer();
     this.setCamera(true);
     this.ctx.layer.preview(undefined);
@@ -738,3 +827,6 @@ export class EditorTool {
 }
 
 export type { Handle };
+
+const lengthOf = (line: readonly Vec2[]) => line.reduce((sum, p, i) => (i ? sum + segmentLength(line[i - 1]!, p) : 0), 0);
+const isClosed = (line: readonly Vec2[]) => line.length > 3 && line[0]![0] === line[line.length - 1]![0] && line[0]![1] === line[line.length - 1]![1];

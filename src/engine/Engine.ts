@@ -27,7 +27,7 @@ import { RingIndex, RoadIndex, SegmentGrid } from '../core/spatial';
 import { urlParams, useStore, type Ground, type Mode } from '../state/store';
 import { createBuildings, type Building, type BuildingSet } from './buildings';
 import { CAR_COLOURS, Drive, Overview, Walk, type Ctx, type Player } from './controls';
-import { createMonument, createProps, placeLamps, type Props } from './props';
+import { createProps, placeLamps, type Props } from './props';
 import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
@@ -343,7 +343,6 @@ export class Engine {
       progress('Строим здания');
       await breathe();
       const buildings = createBuildings(world, hm, new RoadIndex(world.roads), villagePlan?.replaced);
-      const monument = createMonument(world, hm);
       const lonLatRing = (ring: [number, number][]): P2[] => ring.map(([lon, lat]) => world.frame.xz(lon, lat));
 
       /** Кто мешает пройти и где нельзя ставить фонари и деревья — с учётом правок. */
@@ -374,7 +373,6 @@ export class Engine {
           footprints.add(ring);
           addWalls(ring, -1);
         }
-        if (monument) addWalls(monument.ring, -1);
         return { footprints, walls };
       };
       let solid = obstacles(edits0, new Set());
@@ -452,7 +450,7 @@ export class Engine {
 
       progress('Сажаем деревья');
       await breathe();
-      const trees = createTrees({ world, hm, roads, paths, footprints: solid.footprints, buildings: buildings.list, clearings: monument ? [[monument.x, monument.z, 22]] : [], yardTrees: villagePlan?.estates ? villagePlan.trees : undefined });
+      const trees = createTrees({ world, hm, roads, paths, footprints: solid.footprints, buildings: buildings.list, clearings: [], yardTrees: villagePlan?.estates ? villagePlan.trees : undefined });
       if (token !== this.loadToken) return;
 
       const contours = createContours({ world, hm, terrain: terrain.group, camera: this.camera, canvas: this.canvas, overview: this.overview, pickGround: (x, y) => this.host.pickGround(x, y) });
@@ -461,7 +459,6 @@ export class Engine {
       this.grass = grass;
       this.treesUpdate = trees.update;
       group.add(terrain.group, buildings.mesh, trees.group, grass.group, contours.group);
-      if (monument) group.add(monument.group);
       this.scene.add(group);
       this.worldGroup = group;
       const village = villagePlan && createVillageLayers(villagePlan, world, hm, this.host);
@@ -517,7 +514,7 @@ export class Engine {
         onBump: (strength: number) => soundscape.bumped(strength),
       });
       this.worldDisposers = [
-        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, contours.dispose, () => (this.contoursUpdate = undefined), () => fences?.dispose(), () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => monument?.dispose(), () => terrainMaterial.dispose(),
+        editing.dispose, () => village?.dispose(), () => masks?.dispose(), buildings.dispose, trees.dispose, grass.dispose, contours.dispose, () => (this.contoursUpdate = undefined), () => fences?.dispose(), () => (this.grass = undefined), () => Object.values(photos).forEach((photo) => photo.texture.dispose()), () => props?.dispose(), () => terrainMaterial.dispose(),
         () => terrain.group.traverse((o) => (o as { geometry?: BufferGeometry }).geometry?.dispose()),
       ];
       this.world = world;
@@ -529,7 +526,7 @@ export class Engine {
       this.walk.exit();
       this.drive.exit();
       this.overview.enter();
-      this.overview.flyTo(monument ? monument.x * 0.5 : 0, monument ? monument.z * 0.5 : 0, city ? 950 : 1250, true);
+      this.overview.flyTo(0, 0, city ? 950 : 1250, true);
       this.camera.fov = 45;
       this.camera.updateProjectionMatrix();
       this.applyTime();

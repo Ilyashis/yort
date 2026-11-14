@@ -23,7 +23,20 @@ export interface HouseModelRef {
   seed: number;
   /** Модель отражена слева направо: веранда и крыльцо — с другой стороны. */
   mirror?: boolean;
+  /** Без крыльца (по умолчанию крыльцо есть). */
+  porch?: false;
+  /** Веранда у входа: есть или нет; не задано — как у модели по умолчанию. */
+  veranda?: boolean;
+  /** Свои цвета стен и кровли (#rrggbb); не заданы — окраска модели. */
+  wall?: string;
+  roof?: string;
 }
+
+/** Опции построения модели из правки: крыльцо и веранда. */
+export const modelOptions = (ref: HouseModelRef) => ({
+  ...(ref.porch === false ? { porch: false } : {}),
+  ...(ref.veranda !== undefined ? { veranda: ref.veranda } : {}),
+});
 
 export interface EditedBuilding {
   id: string;
@@ -102,6 +115,47 @@ export interface Edits {
   shapes?: TerrainShape[];
   /** Горизонтали, проведённые от руки: вдоль линии земля встаёт на её высоту. */
   lines?: TerrainLine[];
+  /** Адреса домов (табличка на фасаде): ключ — id дома OSM или своего дома (plotKey). */
+  addresses?: Record<string, HouseAddress>;
+}
+
+/** Адрес дома: улица и номер, как на табличке. */
+export interface HouseAddress {
+  street: string;
+  number: string;
+}
+
+/** Адрес из OSM («улица Ленина, 85») — улица и номер. */
+export function parseOsmAddress(text: string | undefined): HouseAddress | undefined {
+  if (!text) return undefined;
+  const m = /^(.*?),\s*([^,]+)$/.exec(text.trim());
+  if (m) return { street: m[1]!.trim(), number: m[2]!.trim() };
+  return /\d/.test(text) ? { street: '', number: text.trim() } : { street: text.trim(), number: '' };
+}
+
+const STREET_SHORT: [RegExp, string][] = [
+  [/^улица\s+/i, 'ул. '],
+  [/\s+улица$/i, ' ул.'],
+  [/^переулок\s+/i, 'пер. '],
+  [/\s+переулок$/i, ' пер.'],
+  [/^проспект\s+/i, 'пр-т '],
+  [/^площадь\s+/i, 'пл. '],
+];
+
+/** Надпись таблички: улица (сокращённо, как пишут на табличках) и номер — двумя строками. */
+export function plateText(address: HouseAddress): string {
+  let street = address.street.trim();
+  for (const [re, short] of STREET_SHORT) street = street.replace(re, short);
+  return [street, address.number.trim()].filter(Boolean).join('\n');
+}
+
+/** Поставить или убрать (пустой адрес) адрес дома. */
+export function setAddress(edits: Edits, key: string, address: HouseAddress | undefined): Edits {
+  const next = { ...(edits.addresses ?? {}) };
+  const street = address?.street.trim() ?? '', number = address?.number.trim() ?? '';
+  if (street || number) next[key] = { street, number };
+  else delete next[key];
+  return { ...edits, addresses: next };
 }
 
 export interface TerrainLine {
@@ -306,7 +360,8 @@ export function isEmpty(edits: Edits): boolean {
     !Object.keys(edits.plotLifts ?? {}).length &&
     !edits.spots?.length &&
     !edits.shapes?.length &&
-    !edits.lines?.length
+    !edits.lines?.length &&
+    !Object.keys(edits.addresses ?? {}).length
   );
 }
 
@@ -367,6 +422,11 @@ export function parseEdits(value: unknown): Edits | undefined {
     spots: arr<TerrainSpot>(v.spots)
       .filter((s) => s && typeof s.id === 'string' && points([s.at]).length === 1 && Number.isFinite(s.height) && Number.isFinite(s.radius))
       .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
+    addresses: Object.fromEntries(
+      Object.entries(v.addresses && typeof v.addresses === 'object' ? v.addresses : {})
+        .filter((e): e is [string, HouseAddress] => !!e[1] && typeof e[1].street === 'string' && typeof e[1].number === 'string')
+        .map(([k, a]) => [k, { street: a.street.slice(0, 80), number: a.number.slice(0, 16) }]),
+    ),
     lines: arr<TerrainLine>(v.lines)
       .filter((l) => l && typeof l.id === 'string' && Number.isFinite(l.height) && Number.isFinite(l.radius))
       .map((l) => ({ ...l, path: points(l.path) }))
@@ -385,9 +445,18 @@ export const clampFloors = (floors: number) => Math.min(Math.max(Math.round(floo
 
 function parseModel(value: unknown, corners: number): HouseModelRef | undefined {
   if (!value || typeof value !== 'object' || corners !== 4) return undefined;
-  const { id, seed, mirror } = value as Partial<HouseModelRef>;
+  const { id, seed, mirror, porch, veranda, wall, roof } = value as Partial<HouseModelRef>;
   if (typeof id !== 'string' || !findHouseModel(id) || typeof seed !== 'number' || !Number.isFinite(seed)) return undefined;
-  return { id: id as HouseModelId, seed: Math.round(seed), ...(mirror === true ? { mirror: true } : {}) };
+  const hex = (c: unknown) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c);
+  return {
+    id: id as HouseModelId,
+    seed: Math.round(seed),
+    ...(mirror === true ? { mirror: true } : {}),
+    ...(porch === false ? { porch: false as const } : {}),
+    ...(typeof veranda === 'boolean' ? { veranda } : {}),
+    ...(hex(wall) ? { wall } : {}),
+    ...(hex(roof) ? { roof } : {}),
+  };
 }
 
 // --- дома-модели ---------------------------------------------------------------------------

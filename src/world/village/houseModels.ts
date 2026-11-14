@@ -17,6 +17,7 @@ import {
   logWallTop,
   mixColor,
   pentRoof,
+  mirrorPartsX,
   pipe,
   plinth,
   porch,
@@ -107,7 +108,23 @@ export interface HouseOptions {
    * крыльца, ступени и подол юрты уходят вниз на столько — дом не висит в воздухе.
    */
   foundation?: number;
+  /** Крыльцо со ступенями у входа (по умолчанию есть). */
+  porch?: boolean;
+  /** Застеклённая веранда у входа: у «дома с верандой» — по умолчанию есть, у избы, вальмового и кирпичного — по желанию. */
+  veranda?: boolean;
 }
+
+/**
+ * Что можно менять у модели: с какой стороны вход (если смотреть с улицы; зеркало модели — другая сторона),
+ * есть ли крыльцо и можно ли пристроить веранду (и есть ли она по умолчанию).
+ */
+export const MODEL_ENTRANCE: Partial<Record<HouseModelId, { side: 'left' | 'right'; porch: boolean; veranda?: boolean }>> = {
+  izba: { side: 'left', porch: true, veranda: false },
+  pyatistenok: { side: 'left', porch: true },
+  veranda: { side: 'right', porch: true, veranda: true },
+  hipped: { side: 'right', porch: true, veranda: false },
+  brick: { side: 'right', porch: true, veranda: false },
+};
 
 export interface HousePlan {
   id: HouseModelId;
@@ -267,20 +284,23 @@ function planIzba(o: HouseOptions = {}): HousePlan {
       { ...style, shutters: undefined, top: 'simple', apron: false },
     ),
   );
-  parts.push(
-    ...porch(walls.left, {
-      u: doorU,
-      width: 1.5,
-      depth: 1.1,
-      floor,
-      wallOut: r,
-      canopy: false,
-      wood: shade(look.log, 1.05),
-      roof: look.roof,
-      roofSurface: look.roofSurface,
-      trim: style.trim,
-    }),
-  );
+  if (o.veranda) sideVeranda(parts, 'left', { vx: W / 2 + r, vy0: -D / 2 + 1.6, vy1: D / 2 - 0.6, Vw: 2.4, hp, top, look: { wall: shade(look.log, 1.1), roof: look.roof, roofSurface: look.roofSurface, foundation: look.foundation, door: look.door }, trim: style.trim, dice, porch: o.porch !== false });
+  else if (o.porch !== false) {
+    parts.push(
+      ...porch(walls.left, {
+        u: doorU,
+        width: 1.5,
+        depth: 1.1,
+        floor,
+        wallOut: r,
+        canopy: false,
+        wood: shade(look.log, 1.05),
+        roof: look.roof,
+        roofSurface: look.roofSurface,
+        trim: style.trim,
+      }),
+    );
+  }
   const cx = W * 0.14;
   const cy = D * 0.1;
   parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
@@ -366,20 +386,22 @@ function planPyatistenok(o: HouseOptions = {}): HousePlan {
   const y1 = y0 + Ds + 0.35;
   const ex = Ws / 2 + 0.25;
   parts.push(leanToRoof([-ex, y0, hiZ + 0.05], [ex, y0, hiZ + 0.05], [ex, y1, loZ - 0.05], [-ex, y1, loZ - 0.05], look.roof, look.roofSurface));
-  parts.push(
-    ...porch(sWalls.left, {
-      u: sDoorU,
-      width: 1.5,
-      depth: 1.0,
-      floor: hp + 0.05,
-      wallOut: 0.05,
-      canopy: false,
-      wood: shade(look.log, 1.05),
-      roof: look.roof,
-      roofSurface: look.roofSurface,
-      trim: style.trim,
-    }),
-  );
+  if (o.porch !== false) {
+    parts.push(
+      ...porch(sWalls.left, {
+        u: sDoorU,
+        width: 1.5,
+        depth: 1.0,
+        floor: hp + 0.05,
+        wallOut: 0.05,
+        canopy: false,
+        wood: shade(look.log, 1.05),
+        roof: look.roof,
+        roofSurface: look.roofSurface,
+        trim: style.trim,
+      }),
+    );
+  }
   const cx = -W * 0.16;
   const cy = cross - D / 2 + 1.2;
   parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
@@ -459,6 +481,8 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
 
   for (const u of fitWindows(W, win.w, !!style.shutters, 3)) windowIn(parts, openings.front, walls.front, u, win.z0, win.w, win.h, wall, style, dice);
   windowIn(parts, openings.right, walls.right, 0.95, win.z0, 0.8, win.h, wall, { ...style, shutters: undefined }, dice);
+  const sideDoorU = D / 2 + 0.6;
+  if (o.veranda === false) doorIn(parts, openings.right, walls.right, sideDoorU, hp + 0.05, 0.9, 1.9, t / 2, look.door, style.trim);
   for (const u of spread(D, 3, D / 3.4)) windowIn(parts, openings.left, walls.left, u, win.z0, win.w, win.h, wall, style, dice);
   windowIn(parts, openings.back, walls.back, W * 0.65, win.z0, 0.8, 1.1, wall, { ...style, shutters: undefined }, dice);
   for (const [key, f] of Object.entries(walls) as [keyof typeof walls, WallFrame][]) {
@@ -479,14 +503,44 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
     ),
   );
 
+  if (o.veranda !== false) {
+    verandaAnnex(parts, { vx: W / 2 + t / 2, vy0, vy1, Vw, hp, top, look, trim: style.trim, dice, porch: o.porch !== false });
+  } else if (o.porch !== false) {
+    // Без веранды вход — прямо в дом с правой стены, с крыльцом.
+    parts.push(
+      ...porch(walls.right, { u: sideDoorU, width: 1.4, depth: 1.0, floor: hp + 0.05, wallOut: t / 2, canopy: false, wood: '#8a6a4a', roof: look.roof, roofSurface: look.roofSurface, trim: style.trim }),
+    );
+  }
+  const cx = -W * 0.15;
+  const cy = D * 0.08;
+  parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
+  return finish('veranda', parts, W, D, rect(W + t, D + t), { roof: look.roof, wall: look.wall });
+}
+
+/** Веранда у входа на боковой стене: справа (+x) — как есть, слева — отражение правой. */
+function sideVeranda(parts: HousePart[], side: 'left' | 'right', o: Parameters<typeof verandaAnnex>[1]): void {
+  const annex: HousePart[] = [];
+  verandaAnnex(annex, o);
+  parts.push(...(side === 'right' ? annex : mirrorPartsX(annex)));
+}
+
+/** Веранда с правой стороны дома (x от vx до vx + Vw, y от vy0 до vy1): дощатый низ, стёкла, односкатная крыша, крыльцо спереди. */
+function verandaAnnex(
+  parts: HousePart[],
+  o: {
+    vx: number; vy0: number; vy1: number; Vw: number; hp: number; top: number;
+    look: { wall: string; roof: string; roofSurface: Surface; foundation: string; door: string };
+    trim: string; dice: Dice; porch: boolean;
+  },
+): void {
+  const { vx, vy0, vy1, Vw, hp, top, dice } = o;
   // Веранда: дощатый низ, частые стёкла в белых рамах, односкатная крыша под свесом дома.
-  const vx = W / 2 + t / 2;
   const Vd = vy1 - vy0;
   const vWalls = rectWalls(Vw, Vd, vx + Vw / 2, (vy0 + vy1) / 2);
-  const panel = dice.chance(0.5) ? style.trim : look.wall;
+  const panel = dice.chance(0.5) ? o.trim : o.look.wall;
   const vh = 1.95;
   const lowH = 0.85;
-  parts.push(plinth(Vw + 0.06, Vd + 0.06, hp, look.foundation, vx + Vw / 2, (vy0 + vy1) / 2));
+  parts.push(plinth(Vw + 0.06, Vd + 0.06, hp, o.look.foundation, vx + Vw / 2, (vy0 + vy1) / 2));
   const lit = dice.next();
   const doorU = 0.7;
   const glaze = (f: WallFrame, from: number, to: number) => {
@@ -512,7 +566,7 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
       parts.push(wallBox(f, (doorU + 0.45 + f.length) / 2, 0, hp + lowH / 2, [f.length - doorU - 0.45, 0.08, lowH], panel, 'boards'));
       parts.push(wallBox(f, (doorU - 0.45) / 2, 0, hp + lowH / 2, [Math.max(0.02, doorU - 0.45), 0.08, lowH], panel, 'boards'));
       glaze(f, doorU + 0.5, f.length);
-      parts.push(...doorParts(f, doorU, hp + 0.02, 0.85, 1.85, 0.04, 0, look.door, '#f2efe6'));
+      parts.push(...doorParts(f, doorU, hp + 0.02, 0.85, 1.85, 0.04, 0, o.look.door, '#f2efe6'));
     } else {
       parts.push(wallBox(f, f.length / 2, 0, hp + lowH / 2, [f.length, 0.08, lowH], panel, 'boards'));
       glaze(f, 0, f.length);
@@ -531,7 +585,7 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
   const loZ = hp + vh + 0.11;
   const ox = vx + Vw + 0.3;
   const slope = (hiZ - loZ) / (ox - vx);
-  parts.push(leanToRoof([vx, vy0 - 0.3, hiZ], [vx, vy1 + 0.3, hiZ], [ox, vy1 + 0.3, loZ], [ox, vy0 - 0.3, loZ], look.roof, look.roofSurface));
+  parts.push(leanToRoof([vx, vy0 - 0.3, hiZ], [vx, vy1 + 0.3, hiZ], [ox, vy1 + 0.3, loZ], [ox, vy0 - 0.3, loZ], o.look.roof, o.look.roofSurface));
   // Треугольники над верандой спереди и сзади.
   for (const f of [vWalls.front, vWalls.back]) {
     const front = f === vWalls.front;
@@ -552,6 +606,7 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
         ];
     parts.push(wallSlab(f, 0, pts, 0.06, panel, 'boards'));
   }
+  if (!o.porch) return;
   parts.push(
     ...porch(vWalls.front, {
       u: doorU,
@@ -561,15 +616,11 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
       wallOut: 0.04,
       canopy: false,
       wood: dice.pick(['#8a6a4a', '#9a7650']),
-      roof: look.roof,
-      roofSurface: look.roofSurface,
-      trim: style.trim,
+      roof: o.look.roof,
+      roofSurface: o.look.roofSurface,
+      trim: o.trim,
     }),
   );
-  const cx = -W * 0.15;
-  const cy = D * 0.08;
-  parts.push(...chimney(cx, cy, top - 0.3, Math.max(roof.heightAt(cx, cy) + 0.7, roof.ridge + 0.35), '#a4523b'));
-  return finish('veranda', parts, W, D, rect(W + t, D + t), { roof: look.roof, wall: look.wall });
 }
 
 /** Слуховое окно-«светёлка» на переднем скате вальмовой крыши: стенка с окном, щёчки, двускатный козырёк. */
@@ -702,20 +753,23 @@ function planHipped(o: HouseOptions = {}): HousePlan {
   for (const f of Object.values(walls)) parts.push(wallBox(f, f.length / 2, t / 2 + overhang / 2, roof.eave - 0.06, [f.length + 2 * overhang, overhang, 0.03], style.trim));
   const yf = -D / 2 + 0.7;
   frontDormer(parts, yf, roof.heightAt(0, yf), pitch, look.wallSurface === 'plaster' ? style.trim : look.wall, look.wallSurface, look.roof, look.roofSurface, style, dice);
-  parts.push(
-    ...porch(walls.right, {
-      u: doorU,
-      width: 1.6,
-      depth: 1.2,
-      floor,
-      wallOut: t / 2,
-      canopy: leanCanopy(seat, pitch, t / 2, overhang, t / 2 + 1.2 + 0.15, floor + 2.0),
-      wood: dice.pick(['#8a6a4a', '#9a7650', '#7a6a5a']),
-      roof: look.roof,
-      roofSurface: look.roofSurface,
-      trim: style.trim,
-    }),
-  );
+  if (o.veranda) sideVeranda(parts, 'right', { vx: W / 2 + t / 2, vy0: -D / 2 + 1.8, vy1: D / 2 - 0.6, Vw: 2.4, hp, top: Math.min(top, roof.eave + 0.3), look, trim: style.trim, dice, porch: o.porch !== false });
+  else if (o.porch !== false) {
+    parts.push(
+      ...porch(walls.right, {
+        u: doorU,
+        width: 1.6,
+        depth: 1.2,
+        floor,
+        wallOut: t / 2,
+        canopy: leanCanopy(seat, pitch, t / 2, overhang, t / 2 + 1.2 + 0.15, floor + 2.0),
+        wood: dice.pick(['#8a6a4a', '#9a7650', '#7a6a5a']),
+        roof: look.roof,
+        roofSurface: look.roofSurface,
+        trim: style.trim,
+      }),
+    );
+  }
   const cx = W * 0.18;
   const cy = D * 0.12;
   parts.push(...chimney(cx, cy, top - 0.3, roof.heightAt(cx, cy) + 0.75, '#a4523b'));
@@ -772,20 +826,23 @@ function planBrick(o: HouseOptions = {}): HousePlan {
   parts.push(...roof.parts);
   for (const f of Object.values(walls)) parts.push(wallBox(f, f.length / 2, t / 2 + overhang / 2, roof.eave - 0.06, [f.length + 2 * overhang, overhang, 0.03], '#e9e7e1'));
   // Крыльцо с навесом на двух столбах.
-  parts.push(
-    ...porch(walls.right, {
-      u: doorU,
-      width: 2.0,
-      depth: 1.5,
-      floor: hp + 0.05,
-      wallOut: t / 2,
-      canopy: leanCanopy(seat, pitch, t / 2, overhang, t / 2 + 1.5 + 0.15, hp + 0.05 + 2.1),
-      wood: '#8f8b84',
-      roof: roofColor,
-      roofSurface: 'metal',
-      trim: '#e9e7e1',
-    }),
-  );
+  if (o.veranda) sideVeranda(parts, 'right', { vx: W / 2 + t / 2, vy0: -D / 2 + 1.8, vy1: D / 2 - 0.6, Vw: 2.4, hp, top: Math.min(top, roof.eave + 0.3), look: { wall: decor, roof: roofColor, roofSurface: 'metal', foundation: '#9d9a92', door: '#5a3a2e' }, trim: '#ffffff', dice, porch: o.porch !== false });
+  else if (o.porch !== false) {
+    parts.push(
+      ...porch(walls.right, {
+        u: doorU,
+        width: 2.0,
+        depth: 1.5,
+        floor: hp + 0.05,
+        wallOut: t / 2,
+        canopy: leanCanopy(seat, pitch, t / 2, overhang, t / 2 + 1.5 + 0.15, hp + 0.05 + 2.1),
+        wood: '#8f8b84',
+        roof: roofColor,
+        roofSurface: 'metal',
+        trim: '#e9e7e1',
+      }),
+    );
+  }
   const cx = -W * 0.2;
   const cy = D * 0.15;
   parts.push(...chimney(cx, cy, top - 0.3, roof.heightAt(cx, cy) + 0.8, decor));

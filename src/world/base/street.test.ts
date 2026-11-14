@@ -4,7 +4,6 @@ import { Collider } from '../walk/collider';
 import { createLocalFrame, insidePolygon, toLocalPolygon, type Vec2 } from '../walk/localFrame';
 import type { GroundFeature } from './environment';
 import { facadeStyle, findStreetFrontBuildings } from './facades';
-import { landmarkObstacle } from './pedestal';
 import { EMPTY_STREETS, orientBenches, placeLamps, roadMarkings, sampleAlong, type StreetsData } from './streetFurniture';
 import type { BaseBuildingFeature, BaseBuildingProperties } from './types';
 
@@ -119,15 +118,5 @@ describe('facades', () => {
   it('высотки получают ленточные окна, остальные — стабильный тип по id', () => {
     expect(facadeStyle(props('way/9', { levels: 12, height: 38 }), false).variant).toBe(2);
     expect(facadeStyle(props('way/7'), false)).toEqual(facadeStyle(props('way/7'), false));
-  });
-});
-
-describe('landmarkObstacle', () => {
-  it('пьедестал памятника не пускает пешехода', () => {
-    const position = ll([0, 0]);
-    const obstacle = landmarkObstacle({ id: 'test', name: 'Тест', position, heading: 250, kind: 'equestrian-statue' });
-    const collider = new Collider([obstacle], frame);
-    expect(collider.isBlocked([0, 0])).toBe(true);
-    expect(collider.isBlocked([0, 10])).toBe(false);
   });
 });

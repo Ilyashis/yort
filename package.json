@@ -15,8 +15,7 @@
     "data:fetch:terrain": "node scripts/fetch-dem.mjs",
     "data:fetch:buildings": "node scripts/fetch-osm-buildings.mjs",
     "data:fetch:environment": "node scripts/fetch-osm-environment.mjs",
-    "data:drone-terrain": "node scripts/drone-terrain.mjs",
-    "models:statue": "node scripts/sculpt-statue.mjs"
+    "data:drone-terrain": "node scripts/drone-terrain.mjs"
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",

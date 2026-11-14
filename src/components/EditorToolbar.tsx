@@ -4,6 +4,7 @@ import { useEditStore, type EditTool } from '../store/useEditStore';
 import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { EMPTY_EDITS, ROAD_KINDS, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
+import { formatMetres, type SnapKind } from '../world/edit/snapLine';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
 import { SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptMode } from '../world/base/sculpt';
 
@@ -33,7 +34,7 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
     tool: 'fence',
     label: 'Забор',
     key: 'B',
-    hint: 'Щёлкайте — забор пойдёт по точкам; щелчок по первой точке замкнёт участок, Enter — готово, Backspace — убрать точку. Или ведите с зажатой кнопкой.',
+    hint: 'Щёлкайте по углам участка — забор пойдёт по точкам. Точка прилипает к углам и линиям соседних заборов (жёлтая метка) и встаёт под прямым углом (голубая). Или ведите с зажатой кнопкой.',
     icon: <path d="M3 17V6l2-2 2 2v11M9 17V6l2-2 2 2v11M15 17V6l2-2 2 2v11M2 9h18M2 14h18" />,
   },
   {
@@ -48,6 +49,15 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
 const SCULPT_ORDER: SculptMode[] = ['raise', 'lower', 'flatten', 'smooth'];
 
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
+
+const SNAP_TEXT: Record<SnapKind, string> = {
+  vertex: 'прилипло к углу забора',
+  line: 'прилипло к линии забора',
+  angle: 'прямой угол',
+};
+
+const FENCE_SELECTED_HINT =
+  'Забор: тяните белые точки; полупрозрачная точка посередине отрезка — потяните, чтобы добавить излом; двойной щелчок по точке — убрать её. Delete — убрать забор.';
 const NOTICE_MS = 3200;
 
 /**
@@ -72,6 +82,9 @@ export function EditorToolbar() {
   const redo = useEditStore((s) => s.redo);
   const edits = useEditStore((s) => s.edits);
   const notice = useEditStore((s) => s.notice);
+  const drawing = useEditStore((s) => s.drawing);
+  const selectionType = useEditStore((s) => s.selection?.type);
+  const mapFenceIds = useEditStore((s) => s.mapFenceIds);
   const [menu, setMenu] = useState(false);
   const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
   const [underlayOpen, setUnderlayOpen] = useState(false);
@@ -133,10 +146,23 @@ export function EditorToolbar() {
       {visibleNotice && <div className="editor-notice">{visibleNotice}</div>}
       {underlayMode ? (
         <div className="editor-hint editor-hint-accent">{underlayMode === 'move' ? MOVE_HINT : alignHint(underlayMode, align)}</div>
+      ) : drawing && (tool === 'road' || tool === 'fence') ? (
+        <div className="editor-hint editor-hint-drawing">
+          <span className="editor-measure">
+            <b>{formatMetres(drawing.segment)}</b> отрезок · {formatMetres(drawing.total)} всего · точек {drawing.points}
+            {drawing.snap && <em className={`editor-snap editor-snap-${drawing.snap}`}>{SNAP_TEXT[drawing.snap]}</em>}
+          </span>
+          <span className="editor-keys">
+            {drawing.kind === 'fence' && drawing.points >= 3 && 'Щелчок по первой точке — замкнуть · '}
+            <kbd>Enter</kbd> готово · <kbd>Backspace</kbd> убрать точку · <kbd>Esc</kbd> бросить
+          </span>
+        </div>
       ) : (
         active && (
           <div className="editor-hint">
-            {active.tool === 'house' && houseModel
+            {active.tool === 'select' && selectionType === 'fence'
+              ? FENCE_SELECTED_HINT
+              : active.tool === 'house' && houseModel
               ? `Клик по земле — поставить «${findHouseModel(houseModel)?.name}» фасадом к ближайшей улице; растяните — дом встанет по размеру.`
               : active.tool === 'terrain'
                 ? `${SCULPT_MODES[sculpt.mode].hint} [ и ] — размер кисти.`
@@ -217,6 +243,23 @@ export function EditorToolbar() {
               <output>{Math.round(sculpt.strength * 100)}%</output>
             </label>
           </div>
+        </div>
+      )}
+      {tool === 'fence' && mapFenceIds.length > 0 && (
+        <div className="segmented editor-kinds" role="group" aria-label="Заборы с карты">
+          <button
+            type="button"
+            title="Убрать все заборы, найденные на карте, чтобы обвести участки самому (вернуть — «Отменить»)"
+            disabled={mapFenceIds.every((id) => edits.removedFences?.includes(id))}
+            onClick={() => {
+              const store = useEditStore.getState();
+              const removed = new Set([...(store.edits.removedFences ?? []), ...mapFenceIds]);
+              store.commit({ ...store.edits, removedFences: [...removed] });
+              store.notify('Заборы с карты убраны — обводите участки по «Карте». Вернуть — «Отменить» (Ctrl+Z)');
+            }}
+          >
+            Убрать заборы с карты
+          </button>
         </div>
       )}
       {tool === 'road' && (

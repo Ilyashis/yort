@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { TERRITORIES, findTerritory } from '../core/data';
+import { findTerritory } from '../core/data';
 import { CAR_COLOURS } from '../engine/controls';
 import { probe } from '../engine/probe';
 import { useStore, type Ground, type Mode } from '../state/store';
@@ -51,13 +51,7 @@ export function PlaceBar() {
           <small>цифровая копия · v2</small>
         </div>
       </div>
-      <div className="segmented" role="tablist" aria-label="Населённый пункт">
-        {TERRITORIES.map((t) => (
-          <button key={t.id} role="tab" aria-selected={t.id === place} className={t.id === place ? 'on' : ''} onClick={() => set({ place: t.id })}>
-            {t.shortName}
-          </button>
-        ))}
-      </div>
+      {current && <h1 className="place-name">{current.name}</h1>}
       {current && <p className="about">{current.description}</p>}
       <div className="ground-pick">
         <span>Земля</span>

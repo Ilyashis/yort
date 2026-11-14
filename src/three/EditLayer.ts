@@ -41,10 +41,11 @@ import { chimneys, FENCE, FENCE_COLOR_HEX } from '../world/base/buildingDetails'
 import { fenceWithGates, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { findHouseModel } from '../world/village/houseModels';
-import { mirrorPartsX } from '../world/village/houseParts';
+import { mirrorPartsX, repaintParts } from '../world/village/houseParts';
 import {
   ROAD_KINDS,
   footprintCorners,
+  modelOptions,
   modelPlacement,
   nearestOnLines,
   rotateHandle,
@@ -64,6 +65,7 @@ import { MergedBuilder } from './merged';
 import { MeshBuilder } from './meshBuilder';
 import { hookMaterial } from './shaderHooks';
 import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
+import { midpoints, type Snap } from '../world/edit/snapLine';
 
 const SELECTED = new Color('#f5a524');
 const INVALID = new Color('#e5484d');
@@ -90,6 +92,11 @@ interface HandleStyle {
 const CORNER_STYLE: HandleStyle = { size: 17, fill: '#ffffff', outline: '#1b1f27', ring: 2 };
 const ROTATE_STYLE: HandleStyle = { size: 19, fill: '#f5a524', outline: '#ffffff', ring: 2 };
 const GATE_STYLE: HandleStyle = { size: 21, fill: '#2f8fdc', outline: '#ffffff', ring: 2 };
+/** Середина отрезка забора: потянуть — вставить излом. Меньше и прозрачнее угловой ручки. */
+const MID_STYLE: HandleStyle = { size: 13, fill: 'rgba(255,255,255,0.55)', outline: 'rgba(27,31,39,0.8)', ring: 2 };
+/** Метка прилипания: куда встанет точка (жёлтая — к углу или линии соседнего забора, голубая — прямой угол). */
+const SNAP_STYLE: HandleStyle = { size: 15, fill: '#ffd23f', outline: '#1b1f27', ring: 3 };
+const ANGLE_STYLE: HandleStyle = { size: 13, fill: '#5ad1ff', outline: '#1b1f27', ring: 3 };
 
 /** Докуда от угла дома (снаружи) тянется зона «повернуть», пикселей. */
 const ROTATE_RING_PX = 38;
@@ -101,7 +108,7 @@ const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
 )}") 13 13, alias`;
 
 /** Ручка выделенного дома: угол (растянуть) или поворот. */
-export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' } | { handle: 'gate'; index: number };
+export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' } | { handle: 'gate'; index: number } | { handle: 'mid'; index: number };
 
 /** Собранные меши правок; у треугольников стен и крыш — номер дома в ids. */
 interface Assembly {
@@ -139,6 +146,10 @@ export class EditLayer {
   private readonly cornerPoints: Points;
   private readonly rotatePoints: Points;
   private readonly gatePoints: Points;
+  private readonly midPoints: Points;
+  private readonly snapPoints: Points;
+  private readonly anglePoints: Points;
+  private snapShown = false;
   private main?: Assembly;
   private previewed?: Assembly;
   private line?: Line2;
@@ -165,8 +176,11 @@ export class EditLayer {
     this.cornerPoints = handlePoints(CORNER_STYLE);
     this.rotatePoints = handlePoints(ROTATE_STYLE);
     this.gatePoints = handlePoints(GATE_STYLE);
+    this.midPoints = handlePoints(MID_STYLE);
+    this.snapPoints = handlePoints(SNAP_STYLE);
+    this.anglePoints = handlePoints(ANGLE_STYLE);
     this.group.name = 'edits';
-    this.group.add(this.cornerPoints, this.rotatePoints, this.gatePoints);
+    this.group.add(this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints);
     city.scene.add(this.group);
   }
 
@@ -203,6 +217,17 @@ export class EditLayer {
     this.city.requestRender();
   }
 
+  /** Метка прилипания под курсором, пока ставят точки забора (локальные метры); undefined — спрятать. */
+  setSnapMarker(snap: Snap | undefined): void {
+    // Курсор ходит каждый кадр — пустую метку второй раз не стираем.
+    if (!snap && !this.snapShown) return;
+    this.snapShown = !!snap;
+    const at = snap && toThree(snap.point[0], snap.point[1], this.heightAt(snap.point[0], snap.point[1]) + 0.3);
+    setPoints(this.snapPoints, at && snap.kind !== 'angle' ? [at] : []);
+    setPoints(this.anglePoints, at && snap.kind === 'angle' ? [at] : []);
+    this.city.requestRender();
+  }
+
   /** Подсветка выделенной дороги или забора (линии по земле). */
   highlight(lines: LonLat[][]): void {
     for (const line of this.highlights) this.removeLine(line);
@@ -231,6 +256,7 @@ export class EditLayer {
     setPoints(this.cornerPoints, this.handleSpots.filter((s) => s.handle.handle === 'corner').map((s) => s.position));
     setPoints(this.rotatePoints, this.handleSpots.filter((s) => s.handle.handle === 'rotate').map((s) => s.position));
     setPoints(this.gatePoints, []);
+    setPoints(this.midPoints, []);
     this.city.requestRender();
   }
 
@@ -249,6 +275,13 @@ export class EditLayer {
       size: GATE_STYLE.size,
     }));
     this.handleSpots.push(...gateSpots);
+    const midSpots = midpoints(local).map(([x, y], index) => ({
+      handle: { handle: 'mid', index } as Handle,
+      position: toThree(x, y, this.heightAt(x, y) + FENCE.street + 0.4),
+      size: MID_STYLE.size,
+    }));
+    this.handleSpots.push(...midSpots);
+    setPoints(this.midPoints, midSpots.map((s) => s.position));
     setPoints(this.cornerPoints, corners);
     setPoints(this.rotatePoints, []);
     setPoints(this.gatePoints, gateSpots.map((s) => s.position));
@@ -310,7 +343,7 @@ export class EditLayer {
     this.removeLine(this.line);
     for (const line of this.highlights) this.removeLine(line);
     this.highlights = [];
-    for (const points of [this.cornerPoints, this.rotatePoints, this.gatePoints]) {
+    for (const points of [this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints]) {
       points.geometry.dispose();
       const material = points.material as PointsMaterial;
       material.map?.dispose();
@@ -378,11 +411,12 @@ export class EditLayer {
     // Пол — по верхней точке склона; цоколь, крыльцо и ступени уходят вниз до нижней.
     const site = siteOnSlope(local, this.heightAt);
     const foundation = Math.round((site.floor - site.low + FOOTING_DEPTH) * 10) / 10;
-    const key = `${ref.id}:${ref.seed}:${ref.mirror ? 'm' : ''}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
+    const key = `${ref.id}:${ref.seed}:${ref.mirror ? 'm' : ''}:${ref.porch === false ? 'np' : ''}:${ref.veranda ?? ''}:${ref.wall ?? ''}:${ref.roof ?? ''}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
     let mesh = this.modelCache.get(key);
     if (!mesh) {
-      const plan = model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation });
-      mesh = buildHouseMesh(ref.mirror ? { ...plan, parts: mirrorPartsX(plan.parts) } : plan, this.houseMaterials);
+      const plan = model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation, ...modelOptions(ref) });
+      const parts = repaintParts(plan.parts, { wall: ref.wall, roof: ref.roof });
+      mesh = buildHouseMesh({ ...plan, parts: ref.mirror ? mirrorPartsX(parts) : parts }, this.houseMaterials);
       this.modelCache.set(key, mesh);
     }
     keys.add(key);
@@ -565,6 +599,7 @@ export class EditLayer {
     if (!found) return undefined;
     if (found.handle.handle === 'rotate') return ROTATE_CURSOR;
     if (found.handle.handle === 'gate') return 'ew-resize';
+    if (found.handle.handle === 'mid') return 'copy';
     return found.dx * found.dy > 0 ? 'nwse-resize' : 'nesw-resize';
   }
 
