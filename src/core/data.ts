@@ -240,7 +240,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender, yardRender] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender, yardRender, streetRender] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -256,6 +256,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<{ footprints?: Record<string, number[][]> }>(territory, 'buildings-fit.json'),
     getJson<{ rivers?: [number, number, number][][] }>(territory, 'water-render.json'),
     getJson<{ buildings?: { id: string; kind: 'garage' | 'banya' | 'shed'; footprint: number[][] }[] }>(territory, 'outbuildings-render.json'),
+    getJson<StreetsFile & { widths?: Record<string, number> }>(territory, 'streets-render.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -302,9 +303,10 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
         .flatMap((f) => polygonsOf(frame, f).map((rings) => ({ kind: f.properties.kind, cover: f.properties.cover, rings }))),
       ...riverGround(frame, riverRender?.rivers ?? []),
     ],
-    roads: (streets?.roads ?? []).map((r) => ({ ...r, pts: line(r.coords) })),
+    // Ширина дорог — как на карте, если её удалось измерить (streets-render.json).
+    roads: (streets?.roads ?? []).map((r, i) => ({ ...r, width: streetRender?.widths?.[i] ?? r.width, pts: line(r.coords) })),
     // К тропам OSM — дороги, обведённые по своей съёмке.
-    paths: [...(streets?.paths ?? []), ...(streetSurvey?.paths ?? [])].map((r) => ({ ...r, pts: line(r.coords) })),
+    paths: [...(streets?.paths ?? []), ...(streetSurvey?.paths ?? []), ...(streetRender?.paths ?? [])].map((r) => ({ ...r, pts: line(r.coords) })),
     crossings: (streets?.crossings ?? []).map(line),
     lamps: (streets?.lamps ?? []).map(point),
     benches: (streets?.benches ?? []).map(point),
