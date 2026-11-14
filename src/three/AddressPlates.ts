@@ -13,7 +13,7 @@ import { modelPlacement } from '../world/edit/edits';
 import { platePlacement, PLATE_SIZE } from '../world/village/addressPlate';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { mirrorPartsX } from '../world/village/houseParts';
-import { fitPreset } from '../world/village/villagePlan';
+import { fitPreset, fitScale } from '../world/village/villagePlan';
 import type { Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { toThree } from './coords';
@@ -107,8 +107,9 @@ export class AddressPlates {
       const plan = findHouseModel(item.model)!.plan({ seed: item.seed, width: place.width, depth: place.depth, ...item.exact.options });
       const parts = item.exact.mirror ? mirrorPartsX(plan.parts) : plan.parts;
       const at = platePlacement(parts, plan.width, plan.depth);
+      const [sx, sz] = fitScale(plan.width, plan.depth, place.width, place.depth);
       return new Matrix4()
-        .compose(toThree(place.center[0], place.center[1], site.floor), new Quaternion().setFromAxisAngle(UP, place.angle), new Vector3(1, 1, 1))
+        .compose(toThree(place.center[0], place.center[1], site.floor), new Quaternion().setFromAxisAngle(UP, place.angle), new Vector3(sx, 1, sz))
         .multiply(new Matrix4().makeTranslation(at.x, at.z, -at.y));
     }
     const fit = fitPreset(item.model, place.width, place.depth);

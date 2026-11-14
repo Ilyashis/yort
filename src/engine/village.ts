@@ -16,8 +16,9 @@ import { openRing, signedArea } from '../world/base/roofGeometry';
 import { VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
 import { planEstates, type EstateInput, type EstatePlan } from '../world/village/estates';
 import { hashString } from '../utils/hash';
-import { modelFootprint } from '../world/edit/edits';
-import { chooseVillageModel, modelFacadeShift, VILLAGE_VARIANTS, type VillageHouse } from '../world/village/villagePlan';
+import { modelFootprint, modelPlacement } from '../world/edit/edits';
+import { chooseVillageModel, drawnRect, fitPreset, fitScale, modelFacadeShift, VILLAGE_VARIANTS, type VillageHouse } from '../world/village/villagePlan';
+import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { createLocalFrame, type Vec2 } from '../world/walk/localFrame';
 import { tame } from './buildings';
 import type { HeightMap } from './terrain';
@@ -76,6 +77,27 @@ function bare(plan: EstatePlan): EstatePlan {
       }),
     })),
   };
+}
+
+/**
+ * Где модель стоит на самом деле: прямоугольник rect, сжатый до размера модели. Дома деревни — пресет и
+ * масштаб (fitPreset), свои — план по контуру и масштаб (exact, как в EditLayer). Палисадник ставится
+ * у этого фасада, а не у края контура: иначе у большого контура он отходит от дома.
+ */
+function modelRect(model: string, rect: readonly Vec2[], exact = false): Vec2[] {
+  const found = findHouseModel(model as HouseModelId);
+  if (!found || rect.length !== 4) return rect as Vec2[];
+  const place = modelPlacement(rect);
+  let w: number, d: number;
+  if (exact) {
+    const plan = found.plan({ width: place.width, depth: place.depth });
+    const [sx, sy] = fitScale(plan.width, plan.depth, place.width, place.depth);
+    [w, d] = [plan.width * sx, plan.depth * sy];
+  } else {
+    const fit = fitPreset(model as HouseModelId, place.width, place.depth);
+    [w, d] = [fit.size[0] * fit.scale[0], fit.size[1] * fit.scale[1]];
+  }
+  return drawnRect(rect, Math.min(w, place.width), Math.min(d, place.depth));
 }
 
 /** Модели, перед которыми бывает палисадник (жилые дома). */
@@ -167,7 +189,7 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
 
   // Палисадники: у каждого жилого дома-модели, по умолчанию — перед уличным фасадом.
   const gardens: GardenSite[] = houses.flatMap((h) => {
-    const site = gardenSite(world, h.id, h.model, h.rect, 0);
+    const site = gardenSite(world, h.id, h.model, modelRect(h.model, h.rect), 0);
     return site ? [site] : [];
   });
 
@@ -281,7 +303,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
         gardenKey = key;
         const moved = new Set(edited.map((e) => e.source ?? e.id));
         const own = edited.flatMap((e) => {
-          const site = gardenSite(world, e.source ?? e.id, e.model, e.rect, e.garden);
+          const site = gardenSite(world, e.source ?? e.id, e.model, modelRect(e.model, e.rect, true), e.garden);
           return site ? [site] : [];
         });
         gardens.setSites([...plan.gardens.filter((g) => !moved.has(g.owner.slice(0, g.owner.lastIndexOf(':'))) && !replaced.has(g.owner.slice(0, g.owner.lastIndexOf(':')))), ...own]);

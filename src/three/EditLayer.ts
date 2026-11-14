@@ -66,6 +66,7 @@ import { MeshBuilder } from './meshBuilder';
 import { hookMaterial } from './shaderHooks';
 import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 import { midpoints, type Snap } from '../world/edit/snapLine';
+import { fitScale } from '../world/village/villagePlan';
 
 const SELECTED = new Color('#f5a524');
 const INVALID = new Color('#e5484d');
@@ -146,6 +147,8 @@ export class EditLayer {
   private readonly houseMaterials: HouseMaterials;
   /** Геометрия моделей по виду и размеру — перетаскивание и перерисовка не пересобирают дом. */
   private readonly modelCache = new Map<string, HouseMesh>();
+  /** Размер плана модели в кэше (модель ограничена своими пределами размеров). */
+  private readonly planSizes = new Map<string, [number, number]>();
   private readonly cornerPoints: Points;
   private readonly rotatePoints: Points;
   private readonly gatePoints: Points;
@@ -433,13 +436,18 @@ export class EditLayer {
       const parts = repaintParts(plan.parts, { wall: ref.wall, roof: ref.roof });
       mesh = buildHouseMesh({ ...plan, parts: ref.mirror ? mirrorPartsX(parts) : parts }, this.houseMaterials);
       this.modelCache.set(key, mesh);
+      this.planSizes.set(key, [plan.width, plan.depth]);
     }
+    // Модель шире или уже своих пределов — подгоняем масштабом под контур, как дома деревни.
+    const [planW, planD] = this.planSizes.get(key) ?? [place.width, place.depth];
+    const [sx, sz] = fitScale(planW, planD, place.width, place.depth);
     keys.add(key);
     const group = mesh.group.clone();
     group.name = `edit-model:${b.id}`;
     group.userData['buildingId'] = b.id;
     group.position.copy(toThree(place.center[0], place.center[1], site.floor));
     group.rotation.y = place.angle;
+    group.scale.set(sx, 1, sz);
     this.group.add(group);
     return group;
   }
@@ -451,6 +459,7 @@ export class EditLayer {
       if (used.has(key)) continue;
       mesh.dispose();
       this.modelCache.delete(key);
+      this.planSizes.delete(key);
     }
   }
 

@@ -241,7 +241,10 @@ function shrub(parts: HousePart[], xEdge: number, side: number, yWall: number, d
   const x = xEdge - side * rx;
   const y = yWall - ry;
   const green = dice.pick(LEAVES);
-  parts.push(blob([x, y, rz * 0.92], [rx, ry, rz], green, far ? 0 : 1, dice.range(0, Math.PI)));
+  const turn = dice.range(0, Math.PI);
+  // Куст — не шар: середина и несколько комков вокруг, светлее кверху, темнее у земли.
+  parts.push(blob([x, y, rz * 0.85], [rx * 0.8, ry * 0.8, rz * 0.85], shade(green, 0.82), far ? 0 : 1, turn));
+  if (!far) bushLumps(parts, x, y, rx, ry, rz, green, turn);
   // Цветущая сирень; кости тянем и вдали — чтобы следующие кусты стояли там же.
   const lilac = dice.chance(0.35);
   const bloom = dice.pick(['#b48ad6', '#c9a3e3', '#f2efe6']);
@@ -249,6 +252,28 @@ function shrub(parts: HousePart[], xEdge: number, side: number, yWall: number, d
     const a = (k / 4) * Math.PI * 2 + dice.next();
     const z = rz * (1.25 + dice.range(-0.15, 0.2));
     if (!far && lilacAllowed && lilac) parts.push(blob([x + Math.cos(a) * rx * 0.7, y + Math.sin(a) * ry * 0.7, z], [0.2, 0.2, 0.17], bloom, 0));
+  }
+}
+
+/**
+ * Комки листвы вокруг середины куста или кроны (x, y): пять шапок по кругу, разной высоты и оттенка.
+ * Без костей — раскладка зависит только от размеров и поворота, сад вблизи и вдали один.
+ */
+function bushLumps(parts: HousePart[], x: number, y: number, rx: number, ry: number, rz: number, green: string, turn: number, z0 = rz * 0.8): void {
+  for (let k = 0; k < 5; k++) {
+    const a = turn + (k / 5) * Math.PI * 2 + Math.sin(k * 7.1 + turn) * 0.4;
+    const reach = 0.55 + 0.15 * Math.sin(k * 3.3 + turn * 2);
+    const up = 0.15 * Math.cos(k * 5.7 + turn);
+    const r = 0.5 + 0.1 * Math.sin(k * 2.3 + turn * 3);
+    parts.push(
+      blob(
+        [x + Math.cos(a) * rx * reach, y + Math.sin(a) * ry * reach, z0 + rz * up],
+        [rx * r, ry * r, rz * r * 0.85],
+        shade(green, 0.95 + 0.18 * (k % 3) / 2),
+        1,
+        a,
+      ),
+    );
   }
 }
 
@@ -284,9 +309,13 @@ function tree(parts: HousePart[], x: number, D: number, kind: 'birch' | 'rowan' 
     const a = dice.range(0, Math.PI);
     if (kind === 'birch' && !far) parts.push(box([x, y, z], [spec.r * 2.05, spec.r * 2.05, 0.05], '#3a3632', a));
   }
-  parts.push(blob([x, y, zc], crown, spec.color, detail, dice.range(0, Math.PI)));
-  // Вторая шапка кроны — объёмнее и неровнее.
-  if (!far) parts.push(blob([x + crown[0] * 0.35, y + crown[1] * 0.1, zc + crown[2] * 0.45], [crown[0] * 0.65, crown[1] * 0.65, crown[2] * 0.55], shade(spec.color, 1.08), detail));
+  const turn = dice.range(0, Math.PI);
+  parts.push(blob([x, y, zc], [crown[0] * 0.85, crown[1] * 0.85, crown[2] * 0.85], shade(spec.color, 0.85), detail, turn));
+  // Крона из шапок: верхняя и несколько боковых — неровная, светлее кверху.
+  if (!far) {
+    parts.push(blob([x + crown[0] * 0.25, y + crown[1] * 0.1, zc + crown[2] * 0.55], [crown[0] * 0.6, crown[1] * 0.6, crown[2] * 0.5], shade(spec.color, 1.1), detail, turn + 0.7));
+    bushLumps(parts, x, y, crown[0], crown[1], crown[2], spec.color, turn, zc - crown[2] * 0.15);
+  }
   const apples = dice.chance(0.6);
   const appleColor = dice.pick(['#c8392b', '#d9b23a']);
   const fruit = kind === 'rowan' ? '#d4442c' : kind === 'apple' && apples ? appleColor : undefined;

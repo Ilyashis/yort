@@ -127,6 +127,30 @@ export function fitPreset(id: HouseModelId, width: number, depth: number): { pre
   return { preset: best, size: [w, d], scale: [clampScale(width / w), clampScale(depth / d)] };
 }
 
+/** Масштаб, которым модель размером planW × planD подгоняется под прямоугольник width × depth (как дома деревни). */
+export function fitScale(planW: number, planD: number, width: number, depth: number): [number, number] {
+  const clampScale = (s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  return [clampScale(width / planW), clampScale(depth / planD)];
+}
+
+/**
+ * Прямоугольник, который модель занимает на самом деле: середина и оси — как у rect (первая сторона —
+ * уличный фасад), стороны — width × depth. Модель вписана в rect не всегда: масштаб подгонки ограничен.
+ */
+export function drawnRect(rect: readonly Vec2[], width: number, depth: number): Vec2[] {
+  const [a, b, c, d] = rect as [Vec2, Vec2, Vec2, Vec2];
+  const center: Vec2 = [(a[0] + b[0] + c[0] + d[0]) / 4, (a[1] + b[1] + c[1] + d[1]) / 4];
+  const along = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, across = Math.hypot(c[0] - b[0], c[1] - b[1]) || 1;
+  const kx = width / along, ky = depth / across;
+  // Каждый угол — от середины: составляющая вдоль фасада × kx, поперёк × ky.
+  const u: Vec2 = [(b[0] - a[0]) / along, (b[1] - a[1]) / along];
+  return rect.map((p) => {
+    const dx = p[0] - center[0], dy = p[1] - center[1];
+    const s = dx * u[0] + dy * u[1], t = -dx * u[1] + dy * u[0];
+    return [center[0] + u[0] * s * kx - u[1] * t * ky, center[1] + u[1] * s * kx + u[0] * t * ky];
+  });
+}
+
 /** Прямоугольник, раздвинутый на margin метров во все стороны (для расчистки деревьев у стен). */
 export function growRect(rect: readonly Vec2[], margin: number): Vec2[] {
   const [p0, p1, p2] = rect as [Vec2, Vec2, Vec2];

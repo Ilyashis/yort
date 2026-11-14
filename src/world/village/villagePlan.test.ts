@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../walk/localFrame';
 import { modelPlacement } from '../edit/edits';
-import { MAX_SCALE, MIN_SCALE, chooseVillageModel, fitPreset, modelFacadeShift, sizePresets } from './villagePlan';
+import { MAX_SCALE, MIN_SCALE, chooseVillageModel, drawnRect, fitPreset, modelFacadeShift, sizePresets } from './villagePlan';
 import { HOUSE_MODELS } from './houseModels';
 
 /** Прямоугольник w (вдоль x) × d (вдоль y) с центром (cx, cy). */
@@ -102,5 +102,23 @@ describe('модели для домов деревни', () => {
     const big = chooseVillageModel('big', rect(12, 21), [street]);
     expect(big).toBeDefined();
     expect(modelFacadeShift(big!, [0, -10.5], [0, -1])).toBeLessThan(-1);
+  });
+});
+
+describe('прямоугольник модели', () => {
+  it('сжимается к середине вдоль и поперёк фасада, углы — по порядку', () => {
+    const rect: [number, number][] = [
+      [0, 0],
+      [20, 0],
+      [20, 10],
+      [0, 10],
+    ];
+    const out = drawnRect(rect, 10, 6);
+    expect(out.map((p) => p.map((v) => Math.round(v * 1000) / 1000))).toEqual([
+      [5, 2],
+      [15, 2],
+      [15, 8],
+      [5, 8],
+    ]);
   });
 });

@@ -249,6 +249,79 @@ class Parts {
     return this;
   }
 
+  /**
+   * Шапка листвы на конце ветки: шар из карточек вокруг centre (чуть приплюснутый) с тёмной сердцевиной.
+   * Из нескольких шапок крона получается неровной и «кустистой», а не одним яйцом. droop — доля прядей,
+   * свисающих вниз (берёза).
+   */
+  clump(centre: Vector3, radius: number, count: number, size: number, palette: Palette, rnd: () => number, droop = 0, cell: Cell = CELL.birchLeaf): this {
+    const squash = 0.78;
+    const core = (r: number, shade: number) => {
+      const g = new IcosahedronGeometry(r, 0).scale(1, squash, 1).translate(centre.x, centre.y, centre.z);
+      const top = new Color(palette.top).multiplyScalar(shade), bottom = new Color(palette.bottom).multiplyScalar(shade * 0.75), out = new Color();
+      this.add(g, (_y, ny) => out.copy(bottom).lerp(top, Math.min(1, Math.max(0, ny * 0.6 + 0.5))), () => cellUv(CELL.white, 0.5, 0.5), centre);
+    };
+    if (this.flat) {
+      core(radius * 0.92, 0.9);
+      return this;
+    }
+    core(radius * 0.5, 0.45);
+    for (let i = 0; i < count; i++) {
+      // Равномерно по сфере (золотая спираль) с разбросом; низ шапки реже — там тень.
+      const k = (i + 0.5) / count;
+      const y = 1 - 2 * k * (0.85 + rnd() * 0.15);
+      const a = i * 2.39996 + rnd() * 0.6;
+      const rr = Math.sqrt(Math.max(0, 1 - y * y));
+      const dir = new Vector3(Math.cos(a) * rr, y * squash, Math.sin(a) * rr);
+      const at = centre.clone().addScaledVector(dir, radius * (0.55 + rnd() * 0.45));
+      const normal = dir.clone().add(new Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.7)).normalize();
+      if (rnd() < droop * (0.6 - y * 0.4)) {
+        normal.y *= 0.1;
+        normal.normalize();
+        at.y -= size * 0.55;
+      }
+      this.card(at, normal, size * (0.7 + rnd() * 0.55), rnd() * Math.PI * 2, cell, palette, centre, 0.42);
+    }
+    return this;
+  }
+
+  /**
+   * Лиственное дерево: ствол, ветви вверх-наружу и шапки листвы на их концах. o.lobes — сколько шапок,
+   * o.spread — как далеко от ствола, o.lean — наклон ствола; кроны разные по зерну rnd.
+   */
+  broadleaf(o: {
+    trunkH: number; trunkR: number; bark: string; barkCell?: Cell; top: number; lobes: number; spread: number; lobeR: number;
+    cards: number; size: number; palette: Palette; droop: number; lean: number; rnd: () => number; base?: string;
+  }): this {
+    const { rnd } = o;
+    const leanA = rnd() * Math.PI * 2;
+    const lean = new Vector3(Math.cos(leanA) * o.lean, 0, Math.sin(leanA) * o.lean);
+    const trunkTop = new Vector3(lean.x * o.trunkH, o.trunkH, lean.z * o.trunkH);
+    if (o.base) this.limb([0, 0, 0], [0, 0.6, 0], o.trunkR * 1.1, o.trunkR, 6, o.base);
+    this.limb(o.base ? [0, 0.55, 0] : [0, 0, 0], [trunkTop.x, trunkTop.y, trunkTop.z], o.trunkR, o.trunkR * 0.55, this.flat ? 4 : 6, o.bark, o.barkCell);
+    // Вершина продолжает ствол.
+    const apex = new Vector3(trunkTop.x * 1.3, o.top - o.lobeR * 0.8, trunkTop.z * 1.3);
+    this.limb([trunkTop.x, trunkTop.y, trunkTop.z], [apex.x, apex.y, apex.z], o.trunkR * 0.55, o.trunkR * 0.2, this.flat ? 3 : 5, o.bark, o.barkCell);
+    const lobes: Vector3[] = [apex];
+    for (let k = 1; k < o.lobes; k++) {
+      const t = k / o.lobes;
+      const a = k * 2.39996 + rnd() * 0.7;
+      const h = o.trunkH + (o.top - o.lobeR - o.trunkH) * (0.15 + 0.8 * (1 - t) * (0.6 + rnd() * 0.4));
+      const reach = o.spread * (0.55 + rnd() * 0.45) * (0.7 + 0.3 * t);
+      const end = new Vector3(Math.cos(a) * reach + lean.x * h, h, Math.sin(a) * reach + lean.z * h);
+      // Ветка — от ствола (чуть ниже шапки) к шапке.
+      const fromY = Math.min(h - 0.4, o.trunkH + (h - o.trunkH) * 0.35);
+      const from = new Vector3(lean.x * fromY, fromY, lean.z * fromY);
+      if (!this.flat) this.limb([from.x, from.y, from.z], [end.x * 0.8, end.y - o.lobeR * 0.2, end.z * 0.8], o.trunkR * 0.42, o.trunkR * 0.15, 4, o.bark, o.barkCell);
+      lobes.push(end);
+    }
+    for (const c of lobes) {
+      const r = o.lobeR * (0.8 + rnd() * 0.4);
+      this.clump(c, r, Math.max(6, Math.round((o.cards / o.lobes) * (r / o.lobeR) ** 2)), o.size, o.palette, rnd, o.droop);
+    }
+    return this;
+  }
+
   /** Ярус еловых лап: карточки расходятся от ствола, свисают и перекрывают друг друга. */
   tier(y: number, length: number, count: number, turn: number, palette: Palette, rnd: () => number): this {
     if (this.flat) return this;
@@ -291,7 +364,7 @@ class Parts {
       cone(radius * 0.86, 1.25);
       return this;
     }
-    cone(radius * 0.36, 0.7);
+    cone(radius * 0.3, 0.42);
     for (let k = 0; k < tiers; k++) {
       const t = k / (tiers - 1);
       // Лапы короче кверху, ярусы наверху чаще.
@@ -329,37 +402,37 @@ class Parts {
 
 type Species = 'birch' | 'spruce' | 'birchLow' | 'spruceLow' | 'apple' | 'linden';
 
-function models(flat: boolean): Record<Species, BufferGeometry> {
-  const r = rng(77);
-  const make = () => Object.assign(new Parts(), { flat });
-  const B: Palette = { top: '#9cbc4e', bottom: '#5c8434' };
-  const S: Palette = { top: '#4d7a4c', bottom: '#142a1c' };
-  const BARK = '#4c3d30', WHITE = '#ffffff';
+/** Сколько вариантов у каждой породы: соседние деревья — не копии друг друга. */
+const VARIANTS = 3;
 
-  // Берёза: тонкий белый ствол с чёрными отметинами, тёмный у земли; крона одним яйцевидным объёмом,
-  // нижние пряди свисают.
-  const birch = make().limb([0, 0, 0], [0, 0.7, 0], 0.2, 0.17, 6, '#4a4540')
-    .limb([0, 0.6, 0], [0.06, 4.6, 0.04], 0.17, 0.1, 6, WHITE, CELL.birchBark).limb([0.06, 4.6, 0.04], [0.12, 9.0, 0.08], 0.1, 0.025, 5, WHITE, CELL.birchBark)
-    .limb([0.04, 3.4, 0], [1.1, 4.9, 0.4], 0.05, 0.02, 4, WHITE, CELL.birchBark).limb([0.04, 4.0, 0], [-1.0, 5.6, -0.5], 0.05, 0.02, 4, WHITE, CELL.birchBark)
-    .limb([0.06, 4.9, 0], [0.3, 6.4, 1.0], 0.045, 0.02, 4, WHITE, CELL.birchBark).limb([0.08, 5.7, 0], [-0.6, 7.1, 0.7], 0.04, 0.02, 4, WHITE, CELL.birchBark)
-    .canopy(3.0, 9.6, 2.0, CELL.birchLeaf, B, r, 130, 1.5, 0.75);
+function models(flat: boolean): Record<Species, BufferGeometry[]> {
+  const make = () => Object.assign(new Parts(), { flat });
+  const B: Palette = { top: '#a3c257', bottom: '#4f7a2f' };
+  const S: Palette = { top: '#5a8a55', bottom: '#1d3524' };
+  const BARK = '#4c3d30', WHITE = '#ffffff';
+  const list = <T,>(f: (r: () => number, v: number) => T): T[] => Array.from({ length: VARIANTS }, (_, v) => f(rng(77 + v * 131), v));
 
   return {
-    birch: birch.build(),
-    spruce: make().spruce(10.2, 2.9, 15, 10, S, BARK, r).build(),
-    birchLow: make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 18, 2.6, 0.6).build(),
-    spruceLow: make().spruce(10.0, 2.8, 5, 5, S, BARK, r).build(),
-    // Яблоня: низкий кривой ствол, раскидистые ветви, широкая круглая крона.
-    apple: make().limb([0, 0, 0], [0.1, 1.3, 0.05], 0.13, 0.1, 6, '#5a4a3c')
-      .limb([0.1, 1.2, 0.05], [1.0, 2.4, 0.4], 0.07, 0.035, 5, '#5a4a3c').limb([0.1, 1.2, 0.05], [-0.8, 2.6, -0.3], 0.07, 0.035, 5, '#5a4a3c')
-      .limb([0.1, 1.2, 0.05], [0.2, 2.9, -0.7], 0.06, 0.03, 5, '#5a4a3c')
-      .canopy(1.4, 4.4, 2.0, CELL.birchLeaf, { top: '#7da543', bottom: '#40692b' }, r, 70, 1.3, 0.25).build(),
-    // Липа: прямой тёмный ствол, густая высокая яйцевидная крона.
-    linden: make().trunk(4.2, 0.26, 0.16, 7, '#3f3832').limb([0, 3.4, 0], [1.3, 6.0, 0.4], 0.09, 0.04, 5, '#3f3832')
-      .limb([0, 3.6, 0], [-1.2, 6.4, -0.6], 0.09, 0.04, 5, '#3f3832')
-      .canopy(2.6, 12.0, 3.4, CELL.birchLeaf, { top: '#86ad48', bottom: '#3e6a2c' }, r, 190, 1.7, 0.45).build(),
+    // Берёза: тонкий белый ствол (тёмный у земли), ажурная крона из нескольких шапок, нижние пряди свисают.
+    birch: list((r) =>
+      make().broadleaf({ trunkH: 3.6 + r() * 0.8, trunkR: 0.17, bark: WHITE, barkCell: CELL.birchBark, base: '#4a4540', top: 9.4 + r() * 0.6, lobes: 7, spread: 1.8, lobeR: 1.35, cards: 150, size: 1.35, palette: B, droop: 0.7, lean: 0.03 + r() * 0.04, rnd: r }).build(),
+    ),
+    spruce: list((r, v) => make().spruce(10.2, 2.9 + v * 0.25, 19, 13, S, BARK, r).build()),
+    birchLow: list((r) => make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 18, 2.6, 0.6).build()),
+    spruceLow: list((r) => make().spruce(10.0, 2.8, 5, 5, S, BARK, r).build()),
+    // Яблоня: короткий кривой ствол, низкая раскидистая крона из шапок.
+    apple: list((r) =>
+      make().broadleaf({ trunkH: 1.2 + r() * 0.3, trunkR: 0.12, bark: '#5a4a3c', top: 4.3 + r() * 0.4, lobes: 5, spread: 1.5, lobeR: 1.05, cards: 80, size: 1.05, palette: { top: '#82a847', bottom: '#3f6a2b' }, droop: 0.05, lean: 0.08 + r() * 0.06, rnd: r }).build(),
+    ),
+    // Липа: прямой тёмный ствол, густой высокий купол.
+    linden: list((r) =>
+      make().broadleaf({ trunkH: 3.6 + r() * 0.6, trunkR: 0.27, bark: '#3f3832', top: 11.6 + r() * 0.8, lobes: 9, spread: 2.6, lobeR: 2.0, cards: 220, size: 1.6, palette: { top: '#8ab14b', bottom: '#3e6a2c' }, droop: 0.12, lean: 0.015, rnd: r }).build(),
+    ),
   };
 }
+
+/** Вариант модели по месту дерева — устойчиво, без генератора случайных чисел. */
+const variantAt = (x: number, z: number) => Math.abs(Math.floor(x * 7.31) * 73856093 ^ Math.floor(z * 5.17) * 19349663) % VARIANTS;
 
 interface Tree {
   x: number;
@@ -403,7 +476,7 @@ function scatter(ctx: TreeContext): Tree[] {
     const dense = t.dense ?? forests.some((g) => pointInPoly(t.x, t.z, g.rings));
     // Модели: берёза — 9,6 м высотой и 2 м радиусом, ель — 10,2 и 2,9 м.
     const s = Math.min(2.6, Math.max(0.25, t.height / (t.spruce ? 10.2 : 9.6)));
-    const wide = Math.min(1.7, Math.max(0.65, t.radius / (t.spruce ? 2.9 : 2.0) / s));
+    const wide = Math.min(1.7, Math.max(t.spruce ? 0.8 : 0.65, t.radius / (t.spruce ? 2.9 : 2.0) / s));
     trees.push({ x: t.x, z: t.z, s, wide, species: t.spruce ? (dense ? 'spruceLow' : 'spruce') : dense ? 'birchLow' : 'birch' });
   }
   /** Здесь съёмка уже показала, где деревья есть, а где нет — наугад не сажаем. */
@@ -530,7 +603,7 @@ export function createTrees(ctx: TreeContext): TreesLayer {
   const DETAIL = 220;
   const buckets = new Map<string, Tree[]>();
   for (const t of trees) {
-    const key = `${t.species}|${Math.floor(t.x / TILE)}|${Math.floor(t.z / TILE)}`;
+    const key = `${t.species}|${variantAt(t.x, t.z)}|${Math.floor(t.x / TILE)}|${Math.floor(t.z / TILE)}`;
     const list = buckets.get(key);
     if (list) list.push(t);
     else buckets.set(key, [t]);
@@ -538,15 +611,17 @@ export function createTrees(ctx: TreeContext): TreesLayer {
 
   const group = new Group();
   group.name = 'trees';
-  const placed: { mesh: InstancedMesh; list: Tree[]; species: Species; hidden: boolean[]; saved: (Matrix4 | undefined)[] }[] = [];
+  const placed: { mesh: InstancedMesh; list: Tree[]; species: Species; variant: number; hidden: boolean[]; saved: (Matrix4 | undefined)[] }[] = [];
   const ownMeshes: InstancedMesh[] = [];
   let own: readonly OwnTree[] = [];
   const mesh0 = new Matrix4();
   const m = new Matrix4(), q = new Quaternion(), up = new Vector3(0, 1, 0), pos = new Vector3(), scale = new Vector3(), tint = new Color();
   const rnd = rng(4242);
   for (const [key, list] of buckets) {
-    const species = key.split('|')[0] as Species;
-    const mesh = new InstancedMesh(geometries[species], material, list.length);
+    const [speciesKey, variantKey] = key.split('|');
+    const species = speciesKey as Species;
+    const variant = Number(variantKey);
+    const mesh = new InstancedMesh(geometries[species][variant]!, material, list.length);
     list.forEach((t, i) => {
       q.setFromAxisAngle(up, rnd() * Math.PI * 2);
       const wide = t.s * (t.wide ?? 0.85 + rnd() * 0.3);
@@ -555,7 +630,7 @@ export function createTrees(ctx: TreeContext): TreesLayer {
       const v = 0.82 + rnd() * 0.36;
       mesh.setColorAt(i, tint.setRGB(v * (0.95 + rnd() * 0.15), v, v * (0.9 + rnd() * 0.15)));
     });
-    placed.push({ mesh, list, species, hidden: [], saved: [] });
+    placed.push({ mesh, list, species, variant, hidden: [], saved: [] });
     const hero = !species.endsWith('Low');
     mesh.castShadow = hero;
     mesh.receiveShadow = true;
@@ -566,10 +641,10 @@ export function createTrees(ctx: TreeContext): TreesLayer {
     group,
     count: trees.length,
     update: (camera) => {
-      for (const { mesh, species } of placed) {
+      for (const { mesh, species, variant } of placed) {
         const c = mesh.boundingSphere!.center;
         const far = Math.hypot(c.x - camera.position.x, c.z - camera.position.z) > DETAIL;
-        const geometry = (far ? distant : geometries)[species];
+        const geometry = (far ? distant : geometries)[species][variant]!;
         if (mesh.geometry !== geometry) mesh.geometry = geometry;
       }
     },
@@ -600,10 +675,14 @@ export function createTrees(ctx: TreeContext): TreesLayer {
       }
       ownMeshes.length = 0;
       own = list;
-      const bySpecies = new Map<Species, OwnTree[]>();
-      for (const t of list) bySpecies.set(t.species, [...(bySpecies.get(t.species) ?? []), t]);
-      for (const [species, trees] of bySpecies) {
-        const mesh = new InstancedMesh(geometries[species], material, trees.length);
+      const bySpecies = new Map<string, OwnTree[]>();
+      for (const t of list) {
+        const key = `${t.species}|${Math.floor(hashUnit(t.id) * VARIANTS)}`;
+        bySpecies.set(key, [...(bySpecies.get(key) ?? []), t]);
+      }
+      for (const [key, trees] of bySpecies) {
+        const [species, variant] = key.split('|') as [Species, string];
+        const mesh = new InstancedMesh(geometries[species][Number(variant)]!, material, trees.length);
         trees.forEach((t, i) => {
           // Поворот и оттенок — от id: дерево не «мигает», когда соседнее двигают.
           const h = hashUnit(t.id);
@@ -644,7 +723,7 @@ export function createTrees(ctx: TreeContext): TreesLayer {
       own.map((t) => ({ id: t.id, x: t.x, y: ctx.hm.at(t.x, t.z) + (t.species === 'apple' ? 2.6 : t.species === 'linden' ? 7 : 5.5) * t.s, z: t.z })),
     dispose: () => {
       for (const mesh of ownMeshes) mesh.dispose();
-      [...Object.values(geometries), ...Object.values(distant)].forEach((g) => g.dispose());
+      [...Object.values(geometries), ...Object.values(distant)].flat().forEach((g) => g.dispose());
       material.dispose();
       atlas.dispose();
       group.children.forEach((c) => (c as InstancedMesh).dispose());
