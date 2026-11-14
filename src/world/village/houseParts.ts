@@ -354,7 +354,7 @@ export interface WindowStyle {
   /** Ставни (цвет) — или без них. */
   shutters?: string;
   /** Навершие наличника: кокошник, арка, простая доска, без наличника. */
-  top: 'kokoshnik' | 'arch' | 'simple' | 'none';
+  top: 'kokoshnik' | 'crown' | 'arch' | 'simple' | 'none';
   /** Резной подзор под подоконником. */
   apron: boolean;
   /** Переплёт: Т-образный (деревенский) или створки с форточкой (пластиковые). */
@@ -437,6 +437,10 @@ export function windowParts(p: WindowPlace, s: WindowStyle): HousePart[] {
       ),
     );
   }
+  // Накладки вторым цветом на боковых досках — как на резных наличниках.
+  if (s.top === 'kokoshnik' || s.top === 'crown') {
+    for (const side of [-1, 1]) for (const z of [z0 + 0.14, z0 + h - 0.1]) parts.push(wallBox(f, u + side * (w / 2 + 0.065), o + 0.04, z, [0.075, 0.016, 0.11], s.accent));
+  }
   const zt = z0 + h + 0.13;
   parts.push(wallBox(f, u, o + 0.045, zt, [w + 0.44, 0.09, 0.08], s.trim));
   const zb = zt + 0.04;
@@ -470,6 +474,22 @@ export function windowParts(p: WindowPlace, s: WindowStyle): HousePart[] {
     );
     // Карнизик по скатам навершия.
     parts.push(wallBox(f, u, o + 0.05, zb + 0.33, [0.16, 0.06, 0.05], s.trim));
+  } else if (s.top === 'crown') {
+    // «Корона»: цветная доска с белой дугой, карниз и три резных навершия.
+    const half = w / 2 + 0.2;
+    parts.push(wallSlab(f, o + 0.012, [[u - half, zb], [u + half, zb], [u + half * 0.86, zb + 0.17], [u - half * 0.86, zb + 0.17]], 0.03, s.accent));
+    const arc: [number, number][] = [];
+    for (let i = 0; i <= 6; i++) {
+      const a = (i / 6) * Math.PI;
+      arc.push([u + Math.cos(a) * half * 0.6, zb + 0.025 + Math.sin(a) * 0.11]);
+    }
+    parts.push(wallSlab(f, o + 0.026, arc, 0.02, s.trim));
+    parts.push(wallBox(f, u, o + 0.055, zb + 0.195, [w + 0.5, 0.11, 0.05], s.trim));
+    for (const [du, hw, hh] of [[0, 0.17, 0.24], [-half * 0.78, 0.1, 0.15], [half * 0.78, 0.1, 0.15]] as const) {
+      const z = zb + 0.22;
+      parts.push(wallSlab(f, o + 0.02, [[u + du - hw, z], [u + du + hw, z], [u + du + hw * 0.55, z + hh * 0.55], [u + du, z + hh], [u + du - hw * 0.55, z + hh * 0.55]], 0.025, s.trim));
+    }
+    parts.push(wallSlab(f, o + 0.032, [[u - 0.07, zb + 0.25], [u + 0.07, zb + 0.25], [u, zb + 0.37]], 0.012, s.accent));
   } else if (s.top === 'arch') {
     const half = w / 2 + 0.2;
     const arc: [number, number][] = [
@@ -625,6 +645,8 @@ export function gableEnd(
     surface: Surface;
     trim: string;
     towel: boolean;
+    /** Цветная полоса-подзор под причелинами. */
+    accent?: string;
   },
 ): HousePart[] {
   const L = f.length;
@@ -675,6 +697,11 @@ export function gableEnd(
       'wood',
     ),
   );
+  if (o.accent) {
+    const c = b + 0.11;
+    parts.push(wallSlab(f, out - 0.012, [[-o.side, o.eave - c], [L / 2, o.ridge - c], [L / 2, o.ridge - b], [-o.side, o.eave - b]], 0.02, o.accent, 'wood'));
+    parts.push(wallSlab(f, out - 0.012, [[L / 2, o.ridge - c], [L + o.side, o.eave - c], [L + o.side, o.eave - b], [L / 2, o.ridge - b]], 0.02, o.accent, 'wood'));
+  }
   if (o.towel) {
     const u = L / 2;
     parts.push(
@@ -694,6 +721,62 @@ export function gableEnd(
       ),
     );
   }
+  return parts;
+}
+
+/**
+ * Водоотлив — узкий скат поперёк фасада в основании фронтона: закрывает стык стены и фронтона,
+ * отводит воду от окон. Концы уходят под скаты крыши. Возвращает высоту, с которой начинается фронтон.
+ */
+export function pentRoof(
+  f: WallFrame,
+  o: { top: number; out: number; reach: number; side: number; eave: number; pitch: number; color: string; surface: Surface; trim: string },
+): { parts: HousePart[]; top: number } {
+  const L = f.length;
+  const tan = Math.tan((o.pitch * Math.PI) / 180);
+  const zi = o.top + 0.3;
+  const zo = o.top + 0.07;
+  // Где скат крыши проходит выше кромок водоотлива.
+  const under = (z: number) => Math.max(-o.side, (z + 0.03 - o.eave) / tan - o.side);
+  const ui = under(zi);
+  const uo = under(zo);
+  const n = outward(f);
+  const parts: HousePart[] = [
+    slab([at(f, uo, o.out + o.reach, zo), at(f, L - uo, o.out + o.reach, zo), at(f, L - ui, o.out, zi), at(f, ui, o.out, zi)], [n[0] * 0.5, n[1] * 0.5, 1], 0.04, o.color, o.surface),
+    wallBox(f, L / 2, o.out + o.reach - 0.03, zo - 0.07, [L - 2 * uo - 0.04, 0.03, 0.11], o.trim, 'wood'),
+  ];
+  return { parts, top: zi + 0.02 };
+}
+
+/**
+ * Убранство фронтона: «ёлочка» из цветных полос (stripes) или пояс с белыми планками в основании (belt).
+ * base — низ убранства (над водоотливом), top — где фронтон начинается на стене.
+ */
+export function gableDecor(
+  f: WallFrame,
+  o: { kind: 'stripes' | 'belt'; top: number; base: number; ridge: number; out: number; color: string; trim: string },
+): HousePart[] {
+  const L = f.length;
+  const apex = o.ridge - 0.04;
+  const H = apex - o.base;
+  const hw = ((L / 2) * H) / (apex - o.top);
+  const u = L / 2;
+  const parts: HousePart[] = [];
+  if (H < 0.6) return parts;
+  if (o.kind === 'stripes') {
+    for (const [a, b] of [[0.88, 0.74], [0.6, 0.46], [0.32, 0.18]] as const) {
+      for (const side of [-1, 1]) {
+        parts.push(wallSlab(f, o.out + 0.02, [[u + side * a * hw, o.base], [u + side * b * hw, o.base], [u, o.base + b * H], [u, o.base + a * H]], 0.02, o.color, 'boards'));
+      }
+    }
+    return parts;
+  }
+  const h = 0.2;
+  const len = 2 * hw * (1 - h / H) - 0.16;
+  parts.push(wallBox(f, u, o.out + 0.012, o.base + h / 2, [len, 0.024, h], o.color, 'boards'));
+  const count = Math.max(3, Math.round(len / 0.32));
+  for (let i = 0; i < count; i++) parts.push(wallBox(f, u + ((i + 0.5) / count - 0.5) * len, o.out + 0.03, o.base + h / 2, [0.11, 0.016, h - 0.06], o.trim));
+  parts.push(wallBox(f, u, o.out + 0.035, o.base + h + 0.02, [len + 0.1, 0.05, 0.04], o.trim, 'wood'));
   return parts;
 }
 

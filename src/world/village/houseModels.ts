@@ -8,6 +8,7 @@ import {
   chimney,
   Dice,
   doorParts,
+  gableDecor,
   gableEnd,
   gableRoof,
   hipRoof,
@@ -15,6 +16,7 @@ import {
   logWall,
   logWallTop,
   mixColor,
+  pentRoof,
   pipe,
   plinth,
   porch,
@@ -133,6 +135,46 @@ export interface HouseModel {
 
 // --- изба и пятистенок --------------------------------------------------------------------------
 
+/** Убранство уличного фасада: водоотлив, рисунок фронтона, доски на углах сруба. */
+interface FrontLook {
+  pent?: string;
+  gable: 'plain' | 'stripes' | 'belt';
+  /** Цвет полос и пояса на фронтоне, подзора под причелинами. */
+  second: string;
+  corners: boolean;
+}
+
+/** Крашеные стены, как на старых улицах: голубой, синий, бирюза, зелёный. */
+const WALL_PAINTS = ['#5b93c4', '#4f86b8', '#7fb0d6', '#3f8f8a', '#6a9f62', '#3f7fc0'];
+const PENTS = ['#8a3b30', '#7c3a2e', '#9a4a36', '#6b4a3a'];
+
+function frontLook(dice: Dice, wall: string, style: WindowStyle): FrontLook {
+  const gable = dice.pick(['plain', 'stripes', 'belt', 'belt'] as const);
+  return {
+    pent: dice.chance(0.7) ? dice.pick(PENTS) : undefined,
+    gable,
+    // Полосы — белым по цветному фронтону; пояс — вторым цветом резьбы.
+    second: gable === 'stripes' ? style.trim : style.accent === wall ? style.trim : style.accent,
+    corners: dice.chance(0.6),
+  };
+}
+
+/** Водоотлив и убранство на уличном фронтоне (после gableEnd). */
+function frontDecor(
+  parts: HousePart[],
+  f: WallFrame,
+  look: FrontLook,
+  g: { top: number; ridge: number; out: number; side: number; eave: number; pitch: number; reach: number; roofSurface: Surface; trim: string },
+) {
+  let base = g.top + 0.03;
+  if (look.pent) {
+    const pent = pentRoof(f, { top: g.top, out: g.out, reach: g.reach, side: g.side, eave: g.eave, pitch: g.pitch, color: look.pent, surface: g.roofSurface, trim: g.trim });
+    parts.push(...pent.parts);
+    base = pent.top;
+  }
+  if (look.gable !== 'plain') parts.push(...gableDecor(f, { kind: look.gable, top: g.top, base, ridge: g.ridge, out: g.out, color: look.second, trim: g.trim }));
+}
+
 interface LogHouseLook {
   dice: Dice;
   log: string;
@@ -143,28 +185,34 @@ interface LogHouseLook {
   roofSurface: Surface;
   foundation: string;
   door: string;
+  front: FrontLook;
 }
 
 function logLook(seed: number): LogHouseLook {
   const dice = new Dice(seed);
-  const log = dice.pick(LOGS);
+  // Каждый третий сруб выкрашен целиком.
+  const painted = dice.chance(0.34);
+  const log = painted ? dice.pick(WALL_PAINTS) : dice.pick(LOGS);
   const trim = dice.pick(TRIMS);
   const accent = dice.pick(ACCENTS);
   const slate = dice.chance(0.45);
   const paintedGable = dice.chance(0.6);
+  const style: WindowStyle = {
+    trim,
+    accent,
+    frame: '#f2efe6',
+    shutters: dice.chance(0.55) ? dice.pick(SHUTTERS) : undefined,
+    top: dice.pick(['kokoshnik', 'kokoshnik', 'crown', 'crown', 'arch', 'simple'] as const),
+    apron: dice.chance(0.7),
+    sash: 'cross',
+  };
+  const gable = painted ? (dice.chance(0.7) ? log : shade(log, 0.82)) : paintedGable ? dice.pick([accent, ...PAINTS]) : shade(log, 0.85);
   return {
     dice,
     log,
-    style: {
-      trim,
-      accent,
-      frame: '#f2efe6',
-      shutters: dice.chance(0.7) ? dice.pick(SHUTTERS) : undefined,
-      top: dice.pick(['kokoshnik', 'kokoshnik', 'arch', 'simple'] as const),
-      apron: dice.chance(0.7),
-      sash: 'cross',
-    },
-    gable: paintedGable ? dice.pick([accent, ...PAINTS]) : shade(log, 0.85),
+    style,
+    front: frontLook(dice, gable, style),
+    gable,
     gableSurface: 'boards',
     roof: slate ? dice.pick(SLATE) : dice.pick(METAL_ROOFS),
     roofSurface: slate ? 'slate' : 'metal',
@@ -207,7 +255,9 @@ function planIzba(o: HouseOptions = {}): HousePlan {
   parts.push(...roof.parts);
   // Фронтон опускаем на верхний венец торцевых стен (они на полбревна ниже боковых).
   const gable = { top: top - 0.16, ridge: roof.ridge, out: r - 0.02, side: 0.45, eave: roof.eave, color: look.gable, surface: look.gableSurface, trim: style.trim, towel: true };
-  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.55 }));
+  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.55, accent: look.front.second }));
+  frontDecor(parts, walls.front, look.front, { ...gable, pitch: 38, reach: 0.42, roofSurface: look.roofSurface });
+  if (look.front.corners) for (const u of [0, W]) parts.push(wallBox(walls.front, u, r + 0.26 + 0.016, (hp + top) / 2 - 0.08, [2 * r + 0.1, 0.03, top - hp - 0.16], style.trim, 'wood'));
   parts.push(...gableEnd(walls.back, { ...gable, overhang: 0.4, towel: false }));
   // Слуховое окошко на уличном фронтоне.
   parts.push(
@@ -278,7 +328,9 @@ function planPyatistenok(o: HouseOptions = {}): HousePlan {
   const roof = gableRoof({ w: W, d: D, top: roofSeat(top, r, 35), pitch: 35, side: 0.5, front: 0.6, back: 0.45, color: look.roof, surface: look.roofSurface });
   parts.push(...roof.parts);
   const gable = { top: top - 0.17, ridge: roof.ridge, out: r - 0.02, side: 0.5, eave: roof.eave, color: look.gable, surface: look.gableSurface, trim: style.trim, towel: true };
-  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.6 }));
+  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.6, accent: look.front.second }));
+  frontDecor(parts, walls.front, look.front, { ...gable, pitch: 35, reach: 0.45, roofSurface: look.roofSurface });
+  if (look.front.corners) for (const u of [0, W]) parts.push(wallBox(walls.front, u, r + 0.28 + 0.016, (hp + top) / 2 - 0.08, [2 * r + 0.1, 0.03, top - hp - 0.17], style.trim, 'wood'));
   parts.push(...gableEnd(walls.back, { ...gable, overhang: 0.45, towel: false }));
   parts.push(
     ...windowParts(
@@ -344,6 +396,7 @@ interface CladLook {
   roofSurface: Surface;
   foundation: string;
   door: string;
+  front: FrontLook;
 }
 
 function cladLook(seed: number, plaster = 0): CladLook {
@@ -352,19 +405,21 @@ function cladLook(seed: number, plaster = 0): CladLook {
   const wall = plastered ? dice.pick(PLASTER) : dice.pick(PAINTS);
   const trim = dice.pick(TRIMS);
   const slate = dice.chance(0.35);
+  const style: WindowStyle = {
+    trim: wall === '#e6dfcd' ? dice.pick(['#2f6fb0', '#3c9255']) : trim,
+    accent: dice.pick(ACCENTS),
+    frame: '#f2efe6',
+    shutters: dice.chance(0.45) ? dice.pick(SHUTTERS) : undefined,
+    top: dice.pick(['kokoshnik', 'crown', 'crown', 'arch', 'simple'] as const),
+    apron: dice.chance(0.6),
+    sash: 'cross',
+  };
   return {
     dice,
     wall,
     wallSurface: plastered ? 'plaster' : 'siding',
-    style: {
-      trim: wall === '#e6dfcd' ? dice.pick(['#2f6fb0', '#3c9255']) : trim,
-      accent: dice.pick(ACCENTS),
-      frame: '#f2efe6',
-      shutters: dice.chance(0.55) ? dice.pick(SHUTTERS) : undefined,
-      top: dice.pick(['kokoshnik', 'arch', 'simple'] as const),
-      apron: dice.chance(0.6),
-      sash: 'cross',
-    },
+    style,
+    front: frontLook(dice, wall, style),
     roof: slate ? dice.pick(SLATE) : dice.pick(METAL_ROOFS),
     roofSurface: slate ? 'slate' : 'metal',
     foundation: dice.pick(FOUNDATIONS),
@@ -413,11 +468,12 @@ function planVeranda(o: HouseOptions = {}): HousePlan {
   const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, 33), pitch: 33, side: 0.5, front: 0.55, back: 0.4, color: look.roof, surface: look.roofSurface });
   parts.push(...roof.parts);
   const gable = { top, ridge: roof.ridge, out: t / 2, side: 0.5, eave: roof.eave, color: look.wall, surface: 'boards' as Surface, trim: style.trim, towel: true };
-  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.55 }));
+  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.55, accent: look.front.second }));
+  frontDecor(parts, walls.front, look.front, { ...gable, pitch: 33, reach: 0.42, roofSurface: look.roofSurface });
   parts.push(...gableEnd(walls.back, { ...gable, overhang: 0.4, towel: false }));
   parts.push(
     ...windowParts(
-      { f: walls.front, u: W / 2, z0: top + 0.4, w: 0.6, h: 0.75, wallOut: t / 2 + 0.04, glassOut: t / 2 + 0.01, reveal: 0, dice },
+      { f: walls.front, u: W / 2, z0: top + 0.5, w: 0.6, h: 0.75, wallOut: t / 2 + 0.04, glassOut: t / 2 + 0.01, reveal: 0, dice },
       { ...style, shutters: undefined, top: 'arch', apron: false },
     ),
   );
