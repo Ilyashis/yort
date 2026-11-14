@@ -97,6 +97,9 @@ const MID_STYLE: HandleStyle = { size: 13, fill: 'rgba(255,255,255,0.55)', outli
 /** Метка прилипания: куда встанет точка (жёлтая — к углу или линии соседнего забора, голубая — прямой угол). */
 const SNAP_STYLE: HandleStyle = { size: 15, fill: '#ffd23f', outline: '#1b1f27', ring: 3 };
 const ANGLE_STYLE: HandleStyle = { size: 13, fill: '#5ad1ff', outline: '#1b1f27', ring: 3 };
+/** Где встанут деревья аллеи — зелёные точки; ластик — красные. */
+const PLANT_STYLE: HandleStyle = { size: 12, fill: '#5fd068', outline: '#1b1f27', ring: 2 };
+const ERASE_STYLE: HandleStyle = { size: 34, fill: 'rgba(229,72,77,0.35)', outline: '#e5484d', ring: 2 };
 
 /** Докуда от угла дома (снаружи) тянется зона «повернуть», пикселей. */
 const ROTATE_RING_PX = 38;
@@ -150,6 +153,8 @@ export class EditLayer {
   private readonly snapPoints: Points;
   private readonly anglePoints: Points;
   private snapShown = false;
+  private readonly plantPoints: Points;
+  private readonly erasePoints: Points;
   private main?: Assembly;
   private previewed?: Assembly;
   private line?: Line2;
@@ -179,8 +184,10 @@ export class EditLayer {
     this.midPoints = handlePoints(MID_STYLE);
     this.snapPoints = handlePoints(SNAP_STYLE);
     this.anglePoints = handlePoints(ANGLE_STYLE);
+    this.plantPoints = handlePoints(PLANT_STYLE);
+    this.erasePoints = handlePoints(ERASE_STYLE);
     this.group.name = 'edits';
-    this.group.add(this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints);
+    this.group.add(this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints, this.plantPoints, this.erasePoints);
     city.scene.add(this.group);
   }
 
@@ -225,6 +232,14 @@ export class EditLayer {
     const at = snap && toThree(snap.point[0], snap.point[1], this.heightAt(snap.point[0], snap.point[1]) + 0.3);
     setPoints(this.snapPoints, at && snap.kind !== 'angle' ? [at] : []);
     setPoints(this.anglePoints, at && snap.kind === 'angle' ? [at] : []);
+    this.city.requestRender();
+  }
+
+  /** Точки на земле (локальные метры): где встанут деревья аллеи или где прошёл ластик; [] — спрятать. */
+  setSnapMarkers(points: readonly Vec2[], kind: 'plant' | 'erase' = 'plant'): void {
+    const at = points.map(([x, y]) => toThree(x, y, this.heightAt(x, y) + 0.3));
+    setPoints(this.plantPoints, kind === 'plant' ? at : []);
+    setPoints(this.erasePoints, kind === 'erase' ? at : []);
     this.city.requestRender();
   }
 
@@ -343,7 +358,7 @@ export class EditLayer {
     this.removeLine(this.line);
     for (const line of this.highlights) this.removeLine(line);
     this.highlights = [];
-    for (const points of [this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints]) {
+    for (const points of [this.cornerPoints, this.rotatePoints, this.gatePoints, this.midPoints, this.snapPoints, this.anglePoints, this.plantPoints, this.erasePoints]) {
       points.geometry.dispose();
       const material = points.material as PointsMaterial;
       material.map?.dispose();

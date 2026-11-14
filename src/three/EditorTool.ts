@@ -11,7 +11,8 @@
 //   deleteSelection() — удалить выделенное;
 //   destroy().
 
-import { booleanIntersects, polygon } from '@turf/turf';
+import { booleanIntersects, point, polygon } from '@turf/turf';
+import { Vector3 } from 'three';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore, type EditTool } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
@@ -21,6 +22,8 @@ import type { Yard } from '../world/base/yards';
 import { distanceAlong, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import {
   ROAD_KINDS,
+  TREE_KINDS,
+  TREE_SIZES,
   addFence,
   adoptFence,
   areaOf,
@@ -45,11 +48,12 @@ import {
   upsertRoad,
   withModel,
   type EditedBuilding,
+  type EditedTree,
   type HouseModelRef,
   type LonLat,
 } from '../world/edit/edits';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
-import { removeVertex, segmentLength, snapPoint, type Snap } from '../world/edit/snapLine';
+import { removeVertex, segmentLength, snapPoint, treeRow, type Snap } from '../world/edit/snapLine';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
@@ -72,7 +76,11 @@ const ALIGN_TO_STREET_M = 60;
 const MIN_HOUSE_SIDE = 3;
 /** Дом-модель кликом у дороги: фасад не ближе этого к оси улицы, м (полдороги и палисадник). */
 const FACADE_SETBACK_M = 6.5;
-const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence', KeyG: 'terrain' };
+const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence', KeyN: 'tree', KeyG: 'terrain' };
+/** Ластик деревьев: радиус, м. */
+const TREE_ERASE_M = 3;
+/** Своё дерево выбирается щелчком ближе этого к его кроне на экране, px. */
+const TREE_PICK_PX = 28;
 
 /** Точка экрана (координаты клиента, px). */
 type ScreenPoint = [number, number];
@@ -88,7 +96,11 @@ type Drag =
   | { type: 'fmove'; id: string; original: Vec2[]; start: Vec2; current: Vec2[]; at: ScreenPoint }
   | { type: 'fvertex'; id: string; original: Vec2[]; index: number; current: Vec2[]; at: ScreenPoint; inserted?: boolean }
   | { type: 'frotate'; id: string; original: Vec2[]; center: Vec2; startAngle: number; current: Vec2[] }
-  | { type: 'fgate'; id: string; line: Vec2[]; index: number; gates: FenceGateSpec[] };
+  | { type: 'fgate'; id: string; line: Vec2[]; index: number; gates: FenceGateSpec[] }
+  // Деревья: посадка (щелчок — одно, протяжка — аллея), ластик, перенос своего дерева.
+  | { type: 'plant'; points: Vec2[]; at: ScreenPoint }
+  | { type: 'erase'; points: Vec2[] }
+  | { type: 'tmove'; id: string; start: Vec2; at: ScreenPoint; current?: Vec2 };
 
 export interface EditorContext {
   city: CityScene;
@@ -108,6 +120,10 @@ export interface EditorContext {
   models?: VillageModelsLayer;
   /** Постройки во дворах с карты: гараж, баня, сарай. */
   yardModels?: VillageModelsLayer;
+  /** Показать свои деревья как в списке (перенос дерева, до записи в правки). */
+  previewTrees?: (trees: readonly EditedTree[]) => void;
+  /** Свои деревья: id и середина кроны в координатах three — для выбора щелчком. */
+  ownTrees?: () => { id: string; x: number; y: number; z: number }[];
   /** Заборы с карты (локальные метры): щелчок по такому забору берёт его в правку. */
   mapFences?: readonly { id: string; line: Vec2[] }[];
 }
@@ -196,7 +212,9 @@ export class EditorTool {
         ? removeBuilding(edits, selection.id)
         : selection.type === 'road'
           ? removeRoad(edits, selection.id)
-          : removeFence(edits, selection.id);
+          : selection.type === 'tree'
+            ? { ...edits, trees: (edits.trees ?? []).filter((t) => t.id !== selection.id) }
+            : removeFence(edits, selection.id);
     commit(next);
     select(undefined);
   }
@@ -249,6 +267,11 @@ export class EditorTool {
       if (this.pending && this.pending.kind !== tool) this.dropPending();
       this.drag = { type: 'line', kind: tool, points: [start], at: position };
       this.setCamera(false);
+    } else if (tool === 'tree' && point) {
+      const mode = useEditStore.getState().tree.mode;
+      this.drag = mode === 'erase' ? { type: 'erase', points: [point] } : { type: 'plant', points: [point], at: position };
+      this.setCamera(false);
+      if (mode === 'erase') this.previewErase([point]);
     } else if (tool === 'select') {
       this.drag = this.pressSelect(position, point) ?? { type: 'click', at: position };
       if (this.drag.type !== 'click') this.setCamera(false);
@@ -278,6 +301,23 @@ export class EditorTool {
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
       useEditStore.getState().setDrawing({ kind: drag.kind, points: drag.points.length, segment: 0, total: lengthOf([...drag.points, point]) });
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
+    } else if (drag.type === 'plant') {
+      if (screenDistance(drag.at, position) <= CLICK_PX) return;
+      const last = drag.points[drag.points.length - 1]!;
+      if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= 0.5) drag.points.push(point);
+      // Аллея: где встанут деревья — пунктиром по линии.
+      layer.previewLine(drag.points.map(this.ctx.frame.toLonLat), 'fence');
+      const spots = treeRow(drag.points, this.treeSpacing());
+      layer.setSnapMarkers(spots);
+      useEditStore.getState().setDrawing({ kind: 'fence', points: spots.length, segment: 0, total: lengthOf(drag.points) });
+    } else if (drag.type === 'erase') {
+      drag.points.push(point);
+      this.previewErase(drag.points);
+    } else if (drag.type === 'tmove') {
+      drag.current = point;
+      const { edits } = useEditStore.getState();
+      const trees = (edits.trees ?? []).map((t) => (t.id === drag.id ? { ...t, at: this.ctx.frame.toLonLat(point) } : t));
+      this.ctx.previewTrees?.(trees);
     } else if (drag.type === 'fgate') {
       // Ворота едут вдоль забора: середина проёма — ближайшая к курсору точка линии.
       const at = distanceAlong(drag.line, point);
@@ -409,6 +449,26 @@ export class EditorTool {
       this.commitLine(drag.kind, points);
       return;
     }
+    if (drag.type === 'plant') {
+      store.setDrawing(undefined);
+      layer.setSnapMarkers([]);
+      const click = screenDistance(drag.at, position) <= CLICK_PX;
+      const spots = click ? [drag.points[0]!] : treeRow(drag.points, this.treeSpacing());
+      this.plantTrees(spots);
+      return;
+    }
+    if (drag.type === 'erase') {
+      layer.setSnapMarkers([]);
+      this.eraseTrees(drag.points);
+      return;
+    }
+    if (drag.type === 'tmove') {
+      if (!drag.current || screenDistance(drag.at, position) <= CLICK_PX) this.ctx.previewTrees?.(store.edits.trees ?? []);
+      if (!drag.current || screenDistance(drag.at, position) <= CLICK_PX) return;
+      const at = this.ctx.frame.toLonLat(drag.current);
+      store.commit({ ...store.edits, trees: (store.edits.trees ?? []).map((t) => (t.id === drag.id ? { ...t, at } : t)) });
+      return;
+    }
     if (drag.type === 'fgate') {
       const fence = store.edits.fences.find((f) => f.id === drag.id);
       // Ворота встают туда, где они на самом деле поместились (не через излом и не на соседние ворота).
@@ -453,6 +513,9 @@ export class EditorTool {
   /** Нажатие инструментом «Выбор»: на ручке или на выделенном доме — начать правку. */
   private pressSelect(position: ScreenPoint, point: Vec2 | undefined): Drag | undefined {
     const { selection, edits } = useEditStore.getState();
+    if (selection?.type === 'tree' && point && this.treeAt(position) === selection.id) {
+      return { type: 'tmove', id: selection.id, start: point, at: position };
+    }
     if (selection?.type === 'fence' && point) {
       const fence = edits.fences.find((f) => f.id === selection.id);
       if (!fence) return undefined;
@@ -492,6 +555,8 @@ export class EditorTool {
   /** Клик без перетаскивания: дом, забор, дорога или пусто. */
   private selectAt(position: ScreenPoint): void {
     const store = useEditStore.getState();
+    const tree = this.treeAt(position);
+    if (tree) return store.select({ type: 'tree', id: tree });
     const hit = this.pick(position);
     if (hit.building) return store.select({ type: 'building', id: hit.building });
     if (hit.fence) return store.select({ type: 'fence', id: hit.fence });
@@ -679,7 +744,72 @@ export class EditorTool {
     store.commit(isRoad ? upsertRoad(store.edits, { id, kind: store.roadKind, axis }) : addFence(store.edits, { id, line: axis }));
   }
 
+  // --- деревья ---------------------------------------------------------------------
+
+  /** Шаг аллеи по выбранной породе и возрасту, м. */
+  private treeSpacing(): number {
+    const { kind, size } = useEditStore.getState().tree;
+    const scale = TREE_SIZES.find((s) => s.id === size)!.scale;
+    return TREE_KINDS[kind].spacing * Math.max(0.7, scale / 0.85);
+  }
+
+  private plantTrees(spots: Vec2[]): void {
+    const store = useEditStore.getState();
+    const { kind, size } = store.tree;
+    const scale = TREE_SIZES.find((s) => s.id === size)!.scale;
+    const stamp = Date.now().toString(36);
+    const trees = spots
+      .filter((p) => !this.inHouse(p))
+      .map((p, i) => ({ id: `tree-${stamp}-${i}`, at: this.ctx.frame.toLonLat(p), kind, scale: scale * (0.92 + ((i * 37) % 17) / 100) }));
+    if (!trees.length) return store.notify('Здесь дом — дерево не посадить');
+    store.commit({ ...store.edits, trees: [...(store.edits.trees ?? []), ...trees] });
+    if (trees.length > 1) store.notify(`Посажено деревьев: ${trees.length}`);
+  }
+
+  /** Ластик: свои деревья в радиусе — долой, деревья с карты в этих кругах прячутся. */
+  private eraseTrees(points: Vec2[]): void {
+    const store = useEditStore.getState();
+    const circles = thin(points, TREE_ERASE_M * 0.8);
+    const near = (p: Vec2) => circles.some((c) => Math.hypot(p[0] - c[0], p[1] - c[1]) < TREE_ERASE_M);
+    const trees = (store.edits.trees ?? []).filter((t) => !near(this.ctx.frame.toLocal(t.at)));
+    const cleared = [...(store.edits.clearedTrees ?? []), ...circles.map((c) => ({ at: this.ctx.frame.toLonLat(c), radius: TREE_ERASE_M }))];
+    store.commit({ ...store.edits, trees, clearedTrees: cleared });
+  }
+
+  private previewErase(points: Vec2[]): void {
+    this.ctx.layer.setSnapMarkers(thin(points, TREE_ERASE_M * 0.8), 'erase');
+  }
+
+  /** Стоит ли точка внутри дома (свои и OSM). */
+  private inHouse(p: Vec2): boolean {
+    const lonLat = this.ctx.frame.toLonLat(p);
+    const { edits } = useEditStore.getState();
+    const removed = new Set(edits.removedBuildings);
+    const box = (o: { box: [number, number, number, number] }) => lonLat[0] >= o.box[0] && lonLat[0] <= o.box[2] && lonLat[1] >= o.box[1] && lonLat[1] <= o.box[3];
+    if (this.obstacleShapes.some((o) => !removed.has(o.id) && box(o) && booleanIntersects(point(lonLat), o.shape))) return true;
+    return edits.buildings.some((b) => b.footprint.length >= 3 && booleanIntersects(point(lonLat), polygon([[...b.footprint, b.footprint[0]!]])));
+  }
+
+  /** Своё дерево под курсором: ближайшая крона на экране. */
+  private treeAt([x, y]: ScreenPoint): string | undefined {
+    const crowns = this.ctx.ownTrees?.() ?? [];
+    if (!crowns.length) return undefined;
+    const rect = this.ctx.city.canvas.getBoundingClientRect();
+    let best: { id: string; d: number } | undefined;
+    for (const c of crowns) {
+      const p = this.projected.set(c.x, c.y, c.z).project(this.ctx.city.camera);
+      if (p.z < -1 || p.z > 1) continue;
+      const d = Math.hypot(rect.left + ((p.x + 1) / 2) * rect.width - x, rect.top + ((1 - p.y) / 2) * rect.height - y);
+      if (d < TREE_PICK_PX && (!best || d < best.d)) best = { id: c.id, d };
+    }
+    return best?.id;
+  }
+
+  private readonly projected = new Vector3();
+
   private cancelDrag(): void {
+    if (this.drag?.type === 'tmove') this.ctx.previewTrees?.(useEditStore.getState().edits.trees ?? []);
+    if (this.drag?.type === 'plant' || this.drag?.type === 'erase') this.ctx.layer.setSnapMarkers([]);
     this.drag = undefined;
     this.ctx.layer.setSnapMarker(undefined);
     useEditStore.getState().setDrawing(this.pending ? useEditStore.getState().drawing : undefined);
@@ -830,3 +960,10 @@ export type { Handle };
 
 const lengthOf = (line: readonly Vec2[]) => line.reduce((sum, p, i) => (i ? sum + segmentLength(line[i - 1]!, p) : 0), 0);
 const isClosed = (line: readonly Vec2[]) => line.length > 3 && line[0]![0] === line[line.length - 1]![0] && line[0]![1] === line[line.length - 1]![1];
+
+/** Прорядить точки: соседние не ближе step. */
+function thin(points: readonly Vec2[], step: number): Vec2[] {
+  const out: Vec2[] = [];
+  for (const p of points) if (!out.length || segmentLength(out[out.length - 1]!, p) >= step) out.push(p);
+  return out;
+}

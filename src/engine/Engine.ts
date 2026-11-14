@@ -497,6 +497,7 @@ export class Engine {
           village?.setVisible(visible);
         },
         pickables: () => [buildings.mesh, ...(village?.pickables() ?? [])],
+        trees,
       });
 
       // Звук: музыка, звуки места, шаги и мотор — как в первой версии.

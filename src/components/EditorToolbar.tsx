@@ -3,7 +3,7 @@ import { useAppStore } from '../store/useAppStore';
 import { useEditStore, type EditTool } from '../store/useEditStore';
 import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
-import { EMPTY_EDITS, ROAD_KINDS, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
+import { EMPTY_EDITS, ROAD_KINDS, TREE_KINDS, TREE_ORDER, TREE_SIZES, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
 import { formatMetres, type SnapKind } from '../world/edit/snapLine';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
 import { SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptMode } from '../world/base/sculpt';
@@ -36,6 +36,13 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
     key: 'B',
     hint: 'Щёлкайте по углам участка — забор пойдёт по точкам. Точка прилипает к углам и линиям соседних заборов (жёлтая метка) и встаёт под прямым углом (голубая). Или ведите с зажатой кнопкой.',
     icon: <path d="M3 17V6l2-2 2 2v11M9 17V6l2-2 2 2v11M15 17V6l2-2 2 2v11M2 9h18M2 14h18" />,
+  },
+  {
+    tool: 'tree',
+    label: 'Дерево',
+    key: 'N',
+    hint: 'Щелчок — посадить дерево; протяните — аллея вдоль линии с ровным шагом. В режиме «Ластик» ведите по деревьям, чтобы убрать их.',
+    icon: <path d="M10 18v-5M10 13c-4 0-6-2.5-6-5.2C4 4.8 6.6 2.5 10 2.5s6 2.3 6 5.3c0 2.7-2 5.2-6 5.2zM7 18h6" />,
   },
   {
     tool: 'terrain',
@@ -85,6 +92,8 @@ export function EditorToolbar() {
   const drawing = useEditStore((s) => s.drawing);
   const selectionType = useEditStore((s) => s.selection?.type);
   const mapFenceIds = useEditStore((s) => s.mapFenceIds);
+  const treeSettings = useEditStore((s) => s.tree);
+  const setTree = useEditStore((s) => s.setTree);
   const [menu, setMenu] = useState(false);
   const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
   const [underlayOpen, setUnderlayOpen] = useState(false);
@@ -110,7 +119,9 @@ export function EditorToolbar() {
     edits.removedRoads.length +
     edits.fences.length +
     edits.removedYards.length +
-    edits.terrain.length;
+    edits.terrain.length +
+    (edits.trees?.length ?? 0) +
+    (edits.clearedTrees?.length ?? 0);
 
   const exportEdits = () => {
     const blob = new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' });
@@ -162,6 +173,10 @@ export function EditorToolbar() {
           <div className="editor-hint">
             {active.tool === 'select' && selectionType === 'fence'
               ? FENCE_SELECTED_HINT
+              : active.tool === 'tree'
+                ? treeSettings.mode === 'erase'
+                  ? 'Ластик: ведите по деревьям с зажатой кнопкой — свои деревья и деревья с карты в круге 3 м убираются. Вернуть — «Отменить».'
+                  : `${TREE_KINDS[treeSettings.kind].hint}. Щелчок — одно дерево, протяжка — аллея с шагом около ${Math.round(TREE_KINDS[treeSettings.kind].spacing)} м (зелёные точки — где встанут).`
               : active.tool === 'house' && houseModel
               ? `Клик по земле — поставить «${findHouseModel(houseModel)?.name}» фасадом к ближайшей улице; растяните — дом встанет по размеру.`
               : active.tool === 'terrain'
@@ -260,6 +275,36 @@ export function EditorToolbar() {
           >
             Убрать заборы с карты
           </button>
+        </div>
+      )}
+      {tool === 'tree' && (
+        <div className="editor-models">
+          <div className="segmented editor-kinds" role="group" aria-label="Что делает инструмент">
+            <button type="button" className={treeSettings.mode === 'plant' ? 'active' : ''} onClick={() => setTree({ mode: 'plant' })}>
+              Сажать
+            </button>
+            <button type="button" className={treeSettings.mode === 'erase' ? 'active' : ''} onClick={() => setTree({ mode: 'erase' })}>
+              Ластик
+            </button>
+          </div>
+          {treeSettings.mode === 'plant' && (
+            <>
+              <div className="segmented editor-kinds" role="group" aria-label="Порода">
+                {TREE_ORDER.map((kind) => (
+                  <button key={kind} type="button" title={TREE_KINDS[kind].hint} className={treeSettings.kind === kind ? 'active' : ''} onClick={() => setTree({ kind })}>
+                    {TREE_KINDS[kind].label}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented editor-kinds" role="group" aria-label="Возраст">
+                {TREE_SIZES.map((size) => (
+                  <button key={size.id} type="button" className={treeSettings.size === size.id ? 'active' : ''} onClick={() => setTree({ size: size.id })}>
+                    {size.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
       {tool === 'road' && (

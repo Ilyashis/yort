@@ -33,6 +33,10 @@ import {
   type EditedFence,
   type FenceKind,
   type HouseModelRef,
+  type EditedTree,
+  TREE_KINDS,
+  TREE_ORDER,
+  TREE_SIZES,
 } from '../world/edit/edits';
 
 const KINDS = Object.keys(BUILDING_KINDS) as EditBuildingKind[];
@@ -90,7 +94,9 @@ export function EditPanel() {
         ? removeBuilding(store.edits, selection.id)
         : selection.type === 'road'
           ? removeRoad(store.edits, selection.id)
-          : removeFence(store.edits, selection.id);
+          : selection.type === 'tree'
+            ? { ...store.edits, trees: (store.edits.trees ?? []).filter((t) => t.id !== selection.id) }
+            : removeFence(store.edits, selection.id);
     store.commit(next);
     store.select(undefined);
   };
@@ -335,6 +341,46 @@ export function EditPanel() {
         <div className="button-row card-footer">
           <button type="button" className="button button-danger" onClick={remove}>
             Убрать дом <kbd>Del</kbd>
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
+  if (selection.type === 'tree') {
+    const tree = edits.trees?.find((t) => t.id === selection.id);
+    if (!tree) return null;
+    const setTreePatch = (patch: Partial<EditedTree>) => {
+      const store = useEditStore.getState();
+      store.commit({ ...store.edits, trees: (store.edits.trees ?? []).map((t) => (t.id === tree.id ? { ...t, ...patch } : t)) });
+    };
+    const size = TREE_SIZES.reduce((best, s) => (Math.abs(s.scale - tree.scale) < Math.abs(best.scale - tree.scale) ? s : best), TREE_SIZES[0]);
+    return (
+      <aside className="panel building-card edit-panel">
+        {close}
+        <h2>{TREE_KINDS[tree.kind].label}</h2>
+        <p className="muted card-sub">Ваше дерево. Тяните его мышью, чтобы пересадить.</p>
+        <Row label="Порода">
+          <div className="segmented segmented-small" role="group" aria-label="Порода">
+            {TREE_ORDER.map((kind) => (
+              <button key={kind} type="button" title={TREE_KINDS[kind].hint} className={tree.kind === kind ? 'active' : ''} onClick={() => setTreePatch({ kind })}>
+                {TREE_KINDS[kind].label}
+              </button>
+            ))}
+          </div>
+        </Row>
+        <Row label={`Возраст — высота около ${fmt(treeHeight(tree.kind) * tree.scale)} м`}>
+          <div className="segmented segmented-small" role="group" aria-label="Возраст">
+            {TREE_SIZES.map((s) => (
+              <button key={s.id} type="button" className={size.id === s.id ? 'active' : ''} onClick={() => setTreePatch({ scale: s.scale })}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </Row>
+        <div className="button-row card-footer">
+          <button type="button" className="button button-danger" onClick={remove}>
+            Убрать дерево <kbd>Del</kbd>
           </button>
         </div>
       </aside>
@@ -618,3 +664,6 @@ function Swatches({ colors, value, onPick, auto, label }: { colors: readonly str
     </div>
   );
 }
+
+/** Высота взрослого дерева породы (модель в масштабе 1), м. */
+const treeHeight = (kind: EditedTree['kind']) => ({ birch: 9.6, spruce: 10.2, apple: 4.4, linden: 12 })[kind];

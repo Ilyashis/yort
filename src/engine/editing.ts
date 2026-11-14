@@ -25,6 +25,7 @@ import { createLocalFrame, type LocalFrame } from '../world/walk/localFrame';
 import type { BuildingSet } from './buildings';
 import type { Rect } from './shared';
 import type { HeightMap } from './terrain';
+import type { TreesLayer } from './trees';
 import type { VillageLayers } from './village';
 
 /** Поправки кисти рельефа: поле и мазки, из которых оно собрано. */
@@ -83,6 +84,8 @@ export interface EditingDeps {
   setMapFencesHidden?: (keys: ReadonlySet<string>) => void;
   shiftExtra?: (delta: (x: number, y: number) => number, area: { x0: number; x1: number; y0: number; y1: number }) => void;
   pickables: () => Object3D[];
+  /** Деревья: свои из правок и убранные ластиком. */
+  trees?: Pick<TreesLayer, 'setOwn' | 'setCleared' | 'ownCrowns'>;
 }
 
 export function createEditing(d: EditingDeps): { dispose: () => void } {
@@ -128,6 +131,10 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
   };
 
   const editLayer = new EditLayer(host, frame, heightAt, isVillage);
+  const xzOf = ([lon, lat]: LonLat) => {
+    const [x, z] = world.frame.xz(lon, lat);
+    return { x, z };
+  };
   // Адресные таблички: адрес из правок, иначе из OSM (addr:street + addr:housenumber).
   const plates = new AddressPlates(host, heightAt);
   const osmAddresses: Record<string, HouseAddress> = {};
@@ -158,6 +165,19 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       if (!best || d < best.d) best = { d, wall: [a, b], normal };
     });
     return best && { wall: best.wall, normal: best.normal };
+  };
+  // Свои деревья и ластик: координаты мира (x на восток, z на юг).
+  let lastTrees: unknown;
+  const layTrees = (edits: Edits) => {
+    const key = [edits.trees, edits.clearedTrees];
+    if (lastTrees && same(key, lastTrees as unknown[])) return;
+    lastTrees = key;
+    d.trees?.setOwn(
+      (edits.trees ?? []).map((t) => {
+        return { id: t.id, ...xzOf(t.at), species: t.kind, s: t.scale };
+      }),
+    );
+    d.trees?.setCleared((edits.clearedTrees ?? []).map((c): [number, number, number] => [...world.frame.xz(c.at[0], c.at[1]), c.radius]));
   };
   const layPlates = (edits: Edits) => {
     const address = (key: string) => edits.addresses?.[key] ?? osmAddresses[key];
@@ -210,6 +230,8 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     models: village?.models,
     yardModels: village?.yardModels,
     mapFences: d.mapFences ?? [],
+    ownTrees: () => d.trees?.ownCrowns().map((c) => ({ x: c.x, y: c.y, z: c.z, id: c.id })) ?? [],
+    previewTrees: (trees) => d.trees?.setOwn(trees.map((t) => ({ id: t.id, ...xzOf(t.at), species: t.kind, s: t.scale }))),
   });
   useEditStore.getState().setMapFenceIds((d.mapFences ?? []).map((f) => f.id));
 
@@ -264,6 +286,14 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       const own = edits.roads.find((r) => r.id === selection.id);
       const osm = world.roads.find((_, i) => roadKey(i) === selection.id);
       lines = own ? [own.axis] : osm ? [osm.pts.map(lonLat)] : [];
+    } else if (selection?.type === 'tree') {
+      // Выбранное дерево — круг по земле под кроной.
+      const tree = edits.trees?.find((t) => t.id === selection.id);
+      if (tree) {
+        const [x, y] = frame.toLocal(tree.at);
+        const r = 1.6 * tree.scale + 0.6;
+        lines = [Array.from({ length: 25 }, (_, i) => frame.toLonLat([x + Math.cos((i / 24) * Math.PI * 2) * r, y + Math.sin((i / 24) * Math.PI * 2) * r]) as LonLat)];
+      }
     } else if (selection?.type === 'fence') {
       const fence = edits.fences.find((f) => f.id === selection.id);
       const yard = village?.yards.find((y) => y.houseId === selection.id);
@@ -314,6 +344,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     }
     editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
     layPlates(edits);
+    layTrees(edits);
     showSelection();
   };
   applyEdits();

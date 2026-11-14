@@ -117,6 +117,42 @@ export interface Edits {
   lines?: TerrainLine[];
   /** Адреса домов (табличка на фасаде): ключ — id дома OSM или своего дома (plotKey). */
   addresses?: Record<string, HouseAddress>;
+  /** Свои деревья. */
+  trees?: EditedTree[];
+  /** Места, где деревья с карты убраны ластиком: круги. */
+  clearedTrees?: TreeClearing[];
+}
+
+export type TreeKind = 'birch' | 'spruce' | 'apple' | 'linden';
+
+export const TREE_KINDS: Record<TreeKind, { label: string; hint: string; spacing: number }> = {
+  birch: { label: 'Берёза', hint: 'Белоствольная берёза, взрослая — около 10 м', spacing: 6 },
+  spruce: { label: 'Ель', hint: 'Ель, взрослая — около 10 м, тёмная круглый год', spacing: 5 },
+  apple: { label: 'Яблоня', hint: 'Яблоня в саду, около 4 м, с яблоками', spacing: 4.5 },
+  linden: { label: 'Липа', hint: 'Липа с густой круглой кроной — для аллей и площадей, около 12 м', spacing: 8 },
+};
+export const TREE_ORDER: TreeKind[] = ['birch', 'spruce', 'apple', 'linden'];
+
+/** Возраст дерева — масштаб модели. */
+export const TREE_SIZES = [
+  { id: 'small', label: 'Молодое', scale: 0.55 },
+  { id: 'medium', label: 'Среднее', scale: 0.85 },
+  { id: 'large', label: 'Большое', scale: 1.15 },
+] as const;
+export type TreeSize = (typeof TREE_SIZES)[number]['id'];
+
+export interface EditedTree {
+  id: string;
+  at: LonLat;
+  kind: TreeKind;
+  /** Масштаб модели (0,3…1,6). */
+  scale: number;
+}
+
+export interface TreeClearing {
+  at: LonLat;
+  /** Радиус, м. */
+  radius: number;
 }
 
 /** Адрес дома: улица и номер, как на табличке. */
@@ -361,7 +397,9 @@ export function isEmpty(edits: Edits): boolean {
     !edits.spots?.length &&
     !edits.shapes?.length &&
     !edits.lines?.length &&
-    !Object.keys(edits.addresses ?? {}).length
+    !Object.keys(edits.addresses ?? {}).length &&
+    !edits.trees?.length &&
+    !edits.clearedTrees?.length
   );
 }
 
@@ -422,6 +460,12 @@ export function parseEdits(value: unknown): Edits | undefined {
     spots: arr<TerrainSpot>(v.spots)
       .filter((s) => s && typeof s.id === 'string' && points([s.at]).length === 1 && Number.isFinite(s.height) && Number.isFinite(s.radius))
       .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
+    trees: arr<EditedTree>(v.trees)
+      .filter((t) => t && typeof t.id === 'string' && typeof t.kind === 'string' && t.kind in TREE_KINDS && points([t.at]).length === 1 && Number.isFinite(t.scale))
+      .map((t) => ({ id: t.id, at: t.at, kind: t.kind, scale: Math.min(1.6, Math.max(0.3, t.scale)) })),
+    clearedTrees: arr<TreeClearing>(v.clearedTrees)
+      .filter((c) => c && points([c.at]).length === 1 && Number.isFinite(c.radius))
+      .map((c) => ({ at: c.at, radius: Math.min(30, Math.max(0.5, c.radius)) })),
     addresses: Object.fromEntries(
       Object.entries(v.addresses && typeof v.addresses === 'object' ? v.addresses : {})
         .filter((e): e is [string, HouseAddress] => !!e[1] && typeof e[1].street === 'string' && typeof e[1].number === 'string')

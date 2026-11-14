@@ -87,3 +87,21 @@ export function removeVertex(line: readonly Vec2[], index: number): Vec2[] | und
   const out = line.filter((_, i) => i !== index);
   return out.length >= 2 ? out : undefined;
 }
+
+/** Точки аллеи вдоль линии через каждые spacing м (первая — в начале). */
+export function treeRow(line: readonly Vec2[], spacing: number): Vec2[] {
+  if (line.length < 2) return line.slice(0, 1) as Vec2[];
+  const out: Vec2[] = [line[0]!];
+  let carry = 0;
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1]!, b = line[i]!;
+    const len = segmentLength(a, b);
+    let d = spacing - carry;
+    while (d <= len) {
+      out.push([a[0] + ((b[0] - a[0]) * d) / len, a[1] + ((b[1] - a[1]) * d) / len]);
+      d += spacing;
+    }
+    carry = len - (d - spacing);
+  }
+  return out;
+}

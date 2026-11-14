@@ -1,11 +1,14 @@
 import { create } from 'zustand';
-import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseAddress, type HouseModelRef } from '../world/edit/edits';
+import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseAddress, type HouseModelRef, type TreeKind, type TreeSize } from '../world/edit/edits';
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptMode } from '../world/base/sculpt';
 import type { SnapKind } from '../world/edit/snapLine';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
-export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'terrain';
+export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'tree' | 'terrain';
+
+/** Инструмент «Дерево»: по одному щелчком, аллеей протяжкой (оба — в режиме plant) или ластик. */
+export type TreeMode = 'plant' | 'erase';
 
 /** Настройки кисти рельефа. */
 export interface SculptSettings {
@@ -19,7 +22,8 @@ export interface SculptSettings {
 export type Selection =
   | { type: 'building'; id: string }
   | { type: 'road'; id: string }
-  | { type: 'fence'; id: string };
+  | { type: 'fence'; id: string }
+  | { type: 'tree'; id: string };
 
 const HISTORY_LIMIT = 100;
 const storageKey = (territoryId: string) => `citia:edits:${territoryId}`;
@@ -64,6 +68,8 @@ interface EditState {
   roadKind: EditRoadKind;
   /** Модель для инструмента «Дом» (изба, кирпичный…); нет — простой объём растяжкой. */
   houseModel?: HouseModelId;
+  /** Инструмент «Дерево»: порода, возраст и что делает. */
+  tree: { kind: TreeKind; size: TreeSize; mode: TreeMode };
   /** Кисть для инструмента «Рельеф». */
   sculpt: SculptSettings;
   /** Короткое сообщение внизу экрана (почему нельзя поставить дом и т. п.). */
@@ -86,6 +92,7 @@ interface EditState {
   setRoadKind: (kind: EditRoadKind) => void;
   setHouseModel: (model: HouseModelId | undefined) => void;
   setSculpt: (patch: Partial<SculptSettings>) => void;
+  setTree: (patch: Partial<{ kind: TreeKind; size: TreeSize; mode: TreeMode }>) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -114,6 +121,8 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setRoadKind: (roadKind) => set({ roadKind }),
   setHouseModel: (houseModel) => set({ houseModel }),
   setSculpt: (patch) => set({ sculpt: { ...get().sculpt, ...patch } }),
+  tree: { kind: 'birch', size: 'medium', mode: 'plant' },
+  setTree: (patch) => set({ tree: { ...get().tree, ...patch } }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();

@@ -327,7 +327,7 @@ class Parts {
   }
 }
 
-type Species = 'birch' | 'spruce' | 'birchLow' | 'spruceLow';
+type Species = 'birch' | 'spruce' | 'birchLow' | 'spruceLow' | 'apple' | 'linden';
 
 function models(flat: boolean): Record<Species, BufferGeometry> {
   const r = rng(77);
@@ -349,6 +349,15 @@ function models(flat: boolean): Record<Species, BufferGeometry> {
     spruce: make().spruce(10.2, 2.9, 15, 10, S, BARK, r).build(),
     birchLow: make().trunk(8.4, 0.16, 0.035, 4, WHITE, CELL.birchBark).canopy(3.0, 9.2, 1.9, CELL.birchLeaf, B, r, 18, 2.6, 0.6).build(),
     spruceLow: make().spruce(10.0, 2.8, 5, 5, S, BARK, r).build(),
+    // Яблоня: низкий кривой ствол, раскидистые ветви, широкая круглая крона.
+    apple: make().limb([0, 0, 0], [0.1, 1.3, 0.05], 0.13, 0.1, 6, '#5a4a3c')
+      .limb([0.1, 1.2, 0.05], [1.0, 2.4, 0.4], 0.07, 0.035, 5, '#5a4a3c').limb([0.1, 1.2, 0.05], [-0.8, 2.6, -0.3], 0.07, 0.035, 5, '#5a4a3c')
+      .limb([0.1, 1.2, 0.05], [0.2, 2.9, -0.7], 0.06, 0.03, 5, '#5a4a3c')
+      .canopy(1.4, 4.4, 2.0, CELL.birchLeaf, { top: '#7da543', bottom: '#40692b' }, r, 70, 1.3, 0.25).build(),
+    // Липа: прямой тёмный ствол, густая высокая яйцевидная крона.
+    linden: make().trunk(4.2, 0.26, 0.16, 7, '#3f3832').limb([0, 3.4, 0], [1.3, 6.0, 0.4], 0.09, 0.04, 5, '#3f3832')
+      .limb([0, 3.6, 0], [-1.2, 6.4, -0.6], 0.09, 0.04, 5, '#3f3832')
+      .canopy(2.6, 12.0, 3.4, CELL.birchLeaf, { top: '#86ad48', bottom: '#3e6a2c' }, r, 190, 1.7, 0.45).build(),
   };
 }
 
@@ -456,7 +465,30 @@ function scatter(ctx: TreeContext): Tree[] {
   return trees;
 }
 
-export function createTrees(ctx: TreeContext): { group: Group; count: number; update: (camera: { position: Vector3 }) => void; reseat: (area: { x0: number; z0: number; x1: number; z1: number }) => void; dispose: () => void } {
+/** Своё дерево из правок: место (мир, м), порода, масштаб. */
+export interface OwnTree {
+  id: string;
+  x: number;
+  z: number;
+  species: 'birch' | 'spruce' | 'apple' | 'linden';
+  s: number;
+}
+
+export interface TreesLayer {
+  group: Group;
+  count: number;
+  update: (camera: { position: Vector3 }) => void;
+  reseat: (area: { x0: number; z0: number; x1: number; z1: number }) => void;
+  /** Свои деревья — пересобрать целиком (их немного). */
+  setOwn: (trees: readonly OwnTree[]) => void;
+  /** Деревья с карты, убранные ластиком: в этих кругах [x, z, r] не рисовать. */
+  setCleared: (circles: readonly [number, number, number][]) => void;
+  /** Свои деревья для выбора: id и точка в середине кроны (мир). */
+  ownCrowns: () => { id: string; x: number; y: number; z: number }[];
+  dispose: () => void;
+}
+
+export function createTrees(ctx: TreeContext): TreesLayer {
   const trees = scatter(ctx);
   const geometries = models(false);
   const distant = models(true);
@@ -506,7 +538,10 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
 
   const group = new Group();
   group.name = 'trees';
-  const placed: { mesh: InstancedMesh; list: Tree[]; species: Species }[] = [];
+  const placed: { mesh: InstancedMesh; list: Tree[]; species: Species; hidden: boolean[]; saved: (Matrix4 | undefined)[] }[] = [];
+  const ownMeshes: InstancedMesh[] = [];
+  let own: readonly OwnTree[] = [];
+  const mesh0 = new Matrix4();
   const m = new Matrix4(), q = new Quaternion(), up = new Vector3(0, 1, 0), pos = new Vector3(), scale = new Vector3(), tint = new Color();
   const rnd = rng(4242);
   for (const [key, list] of buckets) {
@@ -520,14 +555,14 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
       const v = 0.82 + rnd() * 0.36;
       mesh.setColorAt(i, tint.setRGB(v * (0.95 + rnd() * 0.15), v, v * (0.9 + rnd() * 0.15)));
     });
-    placed.push({ mesh, list, species });
+    placed.push({ mesh, list, species, hidden: [], saved: [] });
     const hero = !species.endsWith('Low');
     mesh.castShadow = hero;
     mesh.receiveShadow = true;
     mesh.computeBoundingSphere();
     group.add(mesh);
   }
-  return {
+  const layer: TreesLayer = {
     group,
     count: trees.length,
     update: (camera) => {
@@ -543,6 +578,11 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
         let changed = false;
         list.forEach((t, i) => {
           if (t.x < area.x0 || t.x > area.x1 || t.z < area.z0 || t.z > area.z1) return;
+          const saved = placed.find((p) => p.mesh === mesh)!;
+          if (saved.hidden[i]) {
+            saved.saved[i]!.elements[13] = ctx.hm.at(t.x, t.z) - 0.15;
+            return;
+          }
           mesh.getMatrixAt(i, m);
           m.elements[13] = ctx.hm.at(t.x, t.z) - 0.15;
           mesh.setMatrixAt(i, m);
@@ -550,12 +590,72 @@ export function createTrees(ctx: TreeContext): { group: Group; count: number; up
         });
         if (changed) mesh.instanceMatrix.needsUpdate = true;
       }
+      // Свои деревья тоже садятся на новую землю.
+      if (own.some((t) => t.x >= area.x0 && t.x <= area.x1 && t.z >= area.z0 && t.z <= area.z1)) layer.setOwn(own);
     },
+    setOwn: (list) => {
+      for (const mesh of ownMeshes) {
+        group.remove(mesh);
+        mesh.dispose();
+      }
+      ownMeshes.length = 0;
+      own = list;
+      const bySpecies = new Map<Species, OwnTree[]>();
+      for (const t of list) bySpecies.set(t.species, [...(bySpecies.get(t.species) ?? []), t]);
+      for (const [species, trees] of bySpecies) {
+        const mesh = new InstancedMesh(geometries[species], material, trees.length);
+        trees.forEach((t, i) => {
+          // Поворот и оттенок — от id: дерево не «мигает», когда соседнее двигают.
+          const h = hashUnit(t.id);
+          q.setFromAxisAngle(up, h * Math.PI * 2);
+          const wide = t.s * (0.9 + h * 0.2);
+          m.compose(pos.set(t.x, ctx.hm.at(t.x, t.z) - 0.15, t.z), q, scale.set(wide, t.s, wide));
+          mesh.setMatrixAt(i, m);
+          const v = 0.88 + h * 0.24;
+          mesh.setColorAt(i, tint.setRGB(v, v, v * 0.97));
+        });
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.computeBoundingSphere();
+        mesh.name = 'own-trees';
+        group.add(mesh);
+        ownMeshes.push(mesh);
+      }
+    },
+    setCleared: (circles) => {
+      const inside = (x: number, z: number) => circles.some(([cx, cz, r]) => (x - cx) ** 2 + (z - cz) ** 2 < r * r);
+      for (const p of placed) {
+        let changed = false;
+        p.list.forEach((t, i) => {
+          const hide = inside(t.x, t.z);
+          if (hide === !!p.hidden[i]) return;
+          p.hidden[i] = hide;
+          if (hide) {
+            mesh0.copy(m.identity().makeScale(0, 0, 0));
+            p.mesh.getMatrixAt(i, p.saved[i] ??= new Matrix4());
+            p.mesh.setMatrixAt(i, mesh0);
+          } else if (p.saved[i]) p.mesh.setMatrixAt(i, p.saved[i]!);
+          changed = true;
+        });
+        if (changed) p.mesh.instanceMatrix.needsUpdate = true;
+      }
+    },
+    ownCrowns: () =>
+      own.map((t) => ({ id: t.id, x: t.x, y: ctx.hm.at(t.x, t.z) + (t.species === 'apple' ? 2.6 : t.species === 'linden' ? 7 : 5.5) * t.s, z: t.z })),
     dispose: () => {
+      for (const mesh of ownMeshes) mesh.dispose();
       [...Object.values(geometries), ...Object.values(distant)].forEach((g) => g.dispose());
       material.dispose();
       atlas.dispose();
       group.children.forEach((c) => (c as InstancedMesh).dispose());
     },
   };
+  return layer;
+}
+
+/** Число 0…1 по строке — устойчивое «случайное» для своего дерева. */
+function hashUnit(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 10007) / 10007;
 }
