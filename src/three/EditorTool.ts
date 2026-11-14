@@ -72,7 +72,7 @@ type ScreenPoint = [number, number];
 type Drag =
   | { type: 'click'; at: ScreenPoint }
   | { type: 'house'; start: Vec2; dir: Vec2; current?: Vec2 }
-  | { type: 'line'; kind: 'road' | 'fence'; points: Vec2[] }
+  | { type: 'line'; kind: 'road' | 'fence'; points: Vec2[]; at: ScreenPoint }
   | { type: 'move'; original: EditedBuilding; start: Vec2; current: EditedBuilding; at: ScreenPoint }
   | { type: 'rotate'; original: EditedBuilding; center: Vec2; startAngle: number; current: EditedBuilding }
   | { type: 'resize'; original: EditedBuilding; index: number; current: EditedBuilding };
@@ -222,7 +222,8 @@ export class EditorTool {
       this.setCamera(false);
     } else if ((tool === 'road' || tool === 'fence') && point) {
       const start = tool === 'road' ? this.snapToRoad(point) : point;
-      this.drag = { type: 'line', kind: tool, points: [start] };
+      if (this.pending && this.pending.kind !== tool) this.dropPending();
+      this.drag = { type: 'line', kind: tool, points: [start], at: position };
       this.setCamera(false);
     } else if (tool === 'select') {
       this.drag = this.pressSelect(position, point) ?? { type: 'click', at: position };
@@ -243,6 +244,12 @@ export class EditorTool {
       const building = this.houseFrom(drag.start, point, drag.dir) ?? this.modelAt(drag.start);
       layer.preview(building, !building || this.blocked(building));
     } else if (drag.type === 'line') {
+      // Пока линию ставят по точкам, протяжка ничего не рисует — следующая точка встанет там, где отпустят.
+      if (this.pending) {
+        layer.previewLine([...this.pending.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(drag.kind));
+        return;
+      }
+      if (screenDistance(drag.at, position) <= CLICK_PX) return;
       const last = drag.points[drag.points.length - 1]!;
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
@@ -263,6 +270,14 @@ export class EditorTool {
   /** Курсор над выделенным домом: на углу — растянуть, чуть снаружи угла — повернуть. */
   private hover(position: ScreenPoint): void {
     const { tool, selection } = useEditStore.getState();
+    if (this.pending) {
+      // Инструмент сменили мышью — недорисованную линию бросаем; иначе тянем «резинку» к курсору.
+      if (tool !== this.pending.kind) this.dropPending();
+      else {
+        const point = this.ground(position);
+        if (point) this.ctx.layer.previewLine([...this.pending.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
+      }
+    }
     const canvas = this.ctx.city.canvas;
     const active = tool === 'select' && selection?.type === 'building' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
     // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
@@ -303,13 +318,13 @@ export class EditorTool {
       return;
     }
     if (drag.type === 'line') {
-      const isRoad = drag.kind === 'road';
-      let line = simplifyLine(drag.points, isRoad ? 1.2 : 0.3);
-      if (isRoad) line = snapEnds(line, this.roadLines(), ROAD_SNAP_M);
-      if (lineLength(line) < (isRoad ? 6 : 2)) return store.notify(isRoad ? 'Дорога слишком короткая' : 'Забор слишком короткий');
-      const axis = line.map(this.ctx.frame.toLonLat);
-      const id = `${isRoad ? 'road' : 'fence'}-${Date.now().toString(36)}`;
-      store.commit(isRoad ? upsertRoad(store.edits, { id, kind: store.roadKind, axis }) : addFence(store.edits, { id, line: axis }));
+      // Щелчок (без протяжки) или линия уже ставится по точкам — это очередная точка.
+      if (this.pending || screenDistance(drag.at, position) <= CLICK_PX || drag.points.length < 2) {
+        this.addPoint(drag.kind, this.ground(position) ?? drag.points[0]!);
+        return;
+      }
+      // Протяжка — линия «кистью», как карандашом.
+      this.commitLine(drag.kind, simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3));
       return;
     }
     // Перетаскивание дома, поворот, растяжка.
@@ -400,6 +415,21 @@ export class EditorTool {
       return;
     }
     if (mod || event.altKey) return;
+    if (this.pending) {
+      // Линия по точкам: Enter — готово, Backspace — убрать последнюю точку, Esc — бросить.
+      if (event.code === 'Enter' || event.code === 'NumpadEnter') {
+        event.preventDefault();
+        return this.finishPending();
+      }
+      if (event.code === 'Backspace') {
+        event.preventDefault();
+        this.pending.points.pop();
+        if (!this.pending.points.length) return this.dropPending();
+        return this.ctx.layer.previewLine(this.pending.points.map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
+      }
+      if (event.code === 'Escape') return this.dropPending();
+      this.dropPending();
+    }
     const tool = HOTKEYS[event.code];
     if (tool) {
       store.setTool(store.tool === tool ? undefined : tool);
@@ -423,6 +453,56 @@ export class EditorTool {
       this.deleteSelection();
     }
   };
+
+  // --- дорога и забор по точкам ---------------------------------------------------
+
+  /** Линия, которую ставят щелчками: точки уже поставлены, следующая — под курсором. */
+  private pending?: { kind: 'road' | 'fence'; points: Vec2[] };
+
+  private lineStyle(kind: 'road' | 'fence') {
+    return kind === 'road' ? useEditStore.getState().roadKind : 'fence';
+  }
+
+  /** Очередная точка: щелчок по последней точке (или двойной щелчок) — закончить, по первой — замкнуть забор. */
+  private addPoint(kind: 'road' | 'fence', raw: Vec2): void {
+    const point = kind === 'road' && !this.pending ? this.snapToRoad(raw) : raw;
+    if (!this.pending) {
+      this.pending = { kind, points: [point] };
+      useEditStore.getState().notify(kind === 'road' ? 'Ставьте точки дороги. Двойной щелчок или Enter — готово, Backspace — убрать точку' : 'Ставьте точки забора. Щелчок по первой точке замкнёт участок; двойной щелчок или Enter — готово');
+    } else {
+      const points = this.pending.points;
+      const near = (q: Vec2, metres: number) => Math.hypot(point[0] - q[0], point[1] - q[1]) < metres;
+      if (points.length >= 2 && near(points[points.length - 1]!, 1.2)) return this.finishPending();
+      if (kind === 'fence' && points.length >= 3 && near(points[0]!, 2.5)) {
+        points.push(points[0]!);
+        return this.finishPending();
+      }
+      if (!near(points[points.length - 1]!, 0.4)) points.push(point);
+    }
+    this.ctx.layer.previewLine(this.pending.points.map(this.ctx.frame.toLonLat), this.lineStyle(kind));
+  }
+
+  private finishPending(): void {
+    const pending = this.pending;
+    this.dropPending();
+    if (pending && pending.points.length >= 2) this.commitLine(pending.kind, pending.points);
+  }
+
+  private dropPending(): void {
+    this.pending = undefined;
+    this.ctx.layer.previewLine(undefined);
+  }
+
+  /** Готовая линия — в правки: дорога прилипает концами к соседним, слишком короткое не берём. */
+  private commitLine(kind: 'road' | 'fence', points: Vec2[]): void {
+    const store = useEditStore.getState();
+    const isRoad = kind === 'road';
+    const line = isRoad ? snapEnds(points, this.roadLines(), ROAD_SNAP_M) : points;
+    if (lineLength(line) < (isRoad ? 6 : 2)) return store.notify(isRoad ? 'Дорога слишком короткая' : 'Забор слишком короткий');
+    const axis = line.map(this.ctx.frame.toLonLat);
+    const id = `${isRoad ? 'road' : 'fence'}-${Date.now().toString(36)}`;
+    store.commit(isRoad ? upsertRoad(store.edits, { id, kind: store.roadKind, axis }) : addFence(store.edits, { id, line: axis }));
+  }
 
   private cancelDrag(): void {
     this.drag = undefined;
