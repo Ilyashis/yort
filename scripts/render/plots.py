@@ -6,7 +6,8 @@
 стороны: спереди (к улице), сзади, слева и справа. Сторона — ближайшая найденная линия забора, идущая в нужном
 направлении напротив дома; её прямая продлевается. Если линии нет, сторона ставится по обычаю: спереди — у
 дороги, по бокам — посередине до соседа, сзади — в 32 м. Четыре прямые пересекаются в четырёх углах —
-контур замкнут по построению. Общие стороны соседей сливаются в один забор.
+контур замкнут. Затем участки разводятся: спорное место достаётся ближнему дому, дороги и речка — ничьи;
+заборы — границы получившихся областей, так что они не пересекаются и на дорогу не выходят.
 
   python3 scripts/render/plots.py --territory itkulovo-1 [--image render.jpg --preview лист.jpg]
 """
@@ -21,6 +22,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'drone'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import Territory, save_json  # noqa: E402
 
 HOUSE_TAGS = {'yes', 'house', 'detached', 'residential', 'semidetached_house', 'bungalow', 'farm'}
@@ -138,44 +140,80 @@ def main():
         stats['по заборам' if found >= 2 else 'по обычаю'] += 1
         plots.append(q)
 
-    # Стороны всех участков; совпадающие (общий забор соседей) сливаются в одну.
-    sides = [(q[i].copy(), q[(i + 1) % 4].copy()) for q in plots for i in range(4)]
-    used = [False] * len(sides)
-    mids = np.array([(u + v) / 2 for u, v in sides])
-    tree = cKDTree(mids)
-    out_sides = []
-    for i, (u, v) in enumerate(sides):
-        if used[i]:
+    # Участки не залезают ни на дорогу, ни друг на друга. Раскладываем их на сетку 0,5 м: спорная клетка
+    # достаётся тому участку, чей дом ближе; клетки дорог и речки — ничьи. От участка остаётся связный кусок
+    # с домом. Заборы — границы получившихся областей: общая граница соседей — один забор.
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+    from extract import simplify, thin, trace
+    cell = 0.5
+    allq = np.vstack(plots)
+    gx0, gy0 = allq.min(0) - 6
+    gw, gh = (np.ceil((allq.max(0) - [gx0, gy0] + 6) / cell)).astype(int)
+    to_grid = lambda xy: (np.asarray(xy) - [gx0, gy0]) / cell
+    owner = np.zeros((gh, gw), np.int32)
+    best = np.full((gh, gw), np.inf, np.float32)
+    for n, (q, (_, _, c)) in enumerate(zip(plots, houses), start=1):
+        g = to_grid(q)
+        x0, y0 = np.maximum(np.floor(g.min(0)).astype(int), 0)
+        x1, y1 = np.minimum(np.ceil(g.max(0)).astype(int) + 1, [gw, gh])
+        if x1 <= x0 or y1 <= y0:
             continue
-        used[i] = True
-        d = (v - u) / (np.hypot(*(v - u)) or 1)
-        lo, hi = 0.0, float((v - u) @ d)
-        grew = True
-        while grew:
-            grew = False
-            for j in tree.query_ball_point(u + d * (lo + hi) / 2, (hi - lo) / 2 + 60):
-                if used[j]:
-                    continue
-                u2, v2 = sides[j]
-                d2 = (v2 - u2) / (np.hypot(*(v2 - u2)) or 1)
-                if abs(d @ d2) < 0.996 or abs(cross(d, u2 - u)) > 1.0 or abs(cross(d, v2 - u)) > 1.0:
-                    continue
-                a0, a1 = sorted([(u2 - u) @ d, (v2 - u) @ d])
-                if a0 > hi + 0.5 or a1 < lo - 0.5:
-                    continue
-                lo, hi = min(lo, a0), max(hi, a1)
-                used[j] = True
-                grew = True
-        out_sides.append(np.array([u + d * lo, u + d * hi]))
-    # Концы, сошедшиеся ближе 1,5 м, — в одну точку: углы без щелей.
-    ends = np.vstack(out_sides)
-    etree = cKDTree(ends)
-    snapped = ends.copy()
-    for i, group in enumerate(etree.query_ball_point(ends, 1.5)):
-        snapped[i] = ends[group].mean(0)
-    out_sides = [snapped[2 * i: 2 * i + 2] for i in range(len(out_sides))]
+        mask = Image.new('1', (x1 - x0, y1 - y0), 0)
+        ImageDraw.Draw(mask).polygon([tuple(v) for v in g - [x0, y0]], fill=1)
+        mask = np.array(mask, bool)
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        cg = to_grid(c)
+        d = np.hypot(xx - cg[0], yy - cg[1]).astype(np.float32)
+        take = mask & (d < best[y0:y1, x0:x1])
+        owner[y0:y1, x0:x1][take] = n
+        best[y0:y1, x0:x1][take] = d[take]
+    ban = Image.new('1', (gw, gh), 0)
+    bd = ImageDraw.Draw(ban)
+    streets = json.load(open(t.data / 'streets.json'))
+    extra = json.load(open(t.data / 'streets-render.json')) if (t.data / 'streets-render.json').exists() else {}
+    for i, way in enumerate(streets['roads']):
+        width = extra.get('widths', {}).get(str(i), way['width'])
+        bd.line([tuple(v) for v in to_grid(local(way['coords']))], fill=1, width=int((width + 3.0) / cell))
+    for way in streets.get('paths', []) + extra.get('paths', []):
+        bd.line([tuple(v) for v in to_grid(local(way['coords']))], fill=1, width=int((way['width'] + 1.5) / cell))
+    if (t.data / 'water-render.json').exists():
+        for river in json.load(open(t.data / 'water-render.json'))['rivers']:
+            bd.line([tuple(v) for v in to_grid(local(river))], fill=1, width=int(6 / cell))
+    owner[np.array(ban, bool)] = 0
+    # Только связный кусок с домом; оторванные дорогой или соседом лоскуты — ничьи.
+    kept = np.zeros_like(owner)
+    slices = ndimage.find_objects(owner)
+    for n, sl in enumerate(slices, start=1):
+        if sl is None:
+            continue
+        part, count = ndimage.label(owner[sl] == n)
+        if not count:
+            continue
+        cg = np.round(to_grid(houses[n - 1][2])).astype(int) - [sl[1].start, sl[0].start]
+        inside = 0 <= cg[1] < part.shape[0] and 0 <= cg[0] < part.shape[1]
+        want = part[cg[1], cg[0]] if inside and part[cg[1], cg[0]] else np.bincount(part.ravel())[1:].argmax() + 1
+        region = part == want
+        if region.sum() * cell * cell >= 80:
+            kept[sl][region] = n
+    owner = kept
+    # Сгладить ступеньки сетки по краям.
+    filled = ndimage.binary_opening(owner > 0, iterations=2)
+    owner[~filled] = 0
+    border = np.zeros(owner.shape, bool)
+    border[:, :-1] |= owner[:, :-1] != owner[:, 1:]
+    border[:-1, :] |= owner[:-1, :] != owner[1:, :]
+    out_sides = []
+    for line in trace(thin(border)):
+        if len(line) < 5:
+            continue
+        path = simplify(line, 1.4 / cell)
+        world = np.c_[path[:, 1], path[:, 0]] * cell + [gx0, gy0]
+        if np.hypot(*np.diff(world, axis=0).T).sum() >= 2.5:
+            out_sides.append(world)
+    left = len(np.unique(owner)) - 1
 
-    total = sum(np.hypot(*(sd[1] - sd[0])) for sd in out_sides)
+    total = sum(np.hypot(*np.diff(sd, axis=0).T).sum() for sd in out_sides)
     fences = []
     for sd in out_sides:
         lon, lat = t.lonlat(sd[:, 0], sd[:, 1])
@@ -185,7 +223,7 @@ def main():
                      'generatedAt': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},
         'fences': fences,
     })
-    print(f'участков {len(plots)}: {stats["по заборам"]} по найденным заборам (2+ стороны), {stats["по обычаю"]} по обычаю; сторон-заборов {len(out_sides)}, {total:.0f} м')
+    print(f'участков {left} из {len(plots)}: {stats["по заборам"]} по найденным заборам (2+ стороны), {stats["по обычаю"]} по обычаю; сторон-заборов {len(out_sides)}, {total:.0f} м')
 
     if a.preview and a.image:
         from PIL import Image, ImageDraw

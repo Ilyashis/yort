@@ -77,6 +77,9 @@ export interface EditingDeps {
   obstaclesChanged: (edits: Edits, hiddenPlots: ReadonlySet<string>) => void;
   setCityVisible: (visible: boolean) => void;
   /** Остальное, что стоит на земле и должно ехать за ней (настоящие заборы). */
+  /** Заборы с карты: их можно выбрать (тогда забор переходит в правки) и спрятать. */
+  mapFences?: readonly { id: string; line: [number, number][] }[];
+  setMapFencesHidden?: (keys: ReadonlySet<string>) => void;
   shiftExtra?: (delta: (x: number, y: number) => number, area: { x0: number; x1: number; y0: number; y1: number }) => void;
   pickables: () => Object3D[];
 }
@@ -142,6 +145,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     osmBuildings,
     yards: village?.yards ?? [],
     models: village?.models,
+    mapFences: d.mapFences ?? [],
   });
 
   // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
@@ -201,6 +205,9 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       lines = fence ? [fence.line] : (yard?.fence ?? []).map((segment) => segment.map(frame.toLonLat) as LonLat[]);
     }
     editLayer.highlight(lines);
+    // У своего забора — ручки на изломах: точку можно тянуть, чуть снаружи — повернуть.
+    const ownFence = selection?.type === 'fence' ? edits.fences.find((f) => f.id === selection.id) : undefined;
+    if (ownFence) editLayer.setLineHandles(ownFence.line);
   };
 
   /** Правки → сцена: что скрыть из OSM, что дорисовать, кто мешает пешеходу. */
@@ -223,6 +230,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     const replaced = new Set(edits.buildings.map((b) => b.source).filter((s): s is string => !!s));
     const deleted = new Set([...removed].filter((id) => !replaced.has(id)));
     buildings.setHidden(removed);
+    d.setMapFencesHidden?.(new Set(edits.removedFences ?? []));
     const edited = edits.buildings
       .filter((b) => b.model && b.footprint.length === 4)
       .map((b) => ({ id: b.id, source: b.source, model: b.model!.id, rect: b.footprint.map(frame.toLocal), garden: b.garden ?? 0 }));

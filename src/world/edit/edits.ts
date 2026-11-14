@@ -69,6 +69,8 @@ export interface Edits {
   fences: EditedFence[];
   /** Дворы (по id дома), чьи заборы убраны. */
   removedYards: string[];
+  /** Заборы с карты (по ключу), убранные или взятые в правку. */
+  removedFences?: string[];
   /** Мазки кисти рельефа — по порядку. */
   terrain: SculptStroke[];
   /** Подъём участка дома над его естественной высотой, м: ключ — id дома OSM или своего дома. */
@@ -236,6 +238,16 @@ export function addStroke(edits: Edits, stroke: SculptStroke): Edits {
   return { ...edits, terrain: [...edits.terrain, stroke] };
 }
 
+/** Заменить свой забор (сдвинули, повернули, подвинули точку). */
+export function upsertFence(edits: Edits, fence: EditedFence): Edits {
+  return { ...edits, fences: edits.fences.some((f) => f.id === fence.id) ? edits.fences.map((f) => (f.id === fence.id ? fence : f)) : [...edits.fences, fence] };
+}
+
+/** Забор с карты — в правку: исходный прячется, вместо него появляется свой, который можно менять. */
+export function adoptFence(edits: Edits, key: string, fence: EditedFence): Edits {
+  return { ...edits, removedFences: [...(edits.removedFences ?? []).filter((k) => k !== key), key], fences: [...edits.fences, fence] };
+}
+
 export function removeFence(edits: Edits, id: string): Edits {
   if (edits.fences.some((f) => f.id === id)) return { ...edits, fences: edits.fences.filter((f) => f.id !== id) };
   return edits.removedYards.includes(id) ? edits : { ...edits, removedYards: [...edits.removedYards, id] };
@@ -268,6 +280,7 @@ export function isEmpty(edits: Edits): boolean {
     !edits.removedRoads.length &&
     !edits.fences.length &&
     !edits.removedYards.length &&
+    !edits.removedFences?.length &&
     !edits.terrain.length &&
     !Object.keys(edits.plotLifts ?? {}).length &&
     !edits.spots?.length &&
@@ -309,6 +322,7 @@ export function parseEdits(value: unknown): Edits | undefined {
       .map((f) => ({ ...f, line: points(f.line) }))
       .filter((f) => f.line.length >= 2),
     removedYards: strings(v.removedYards),
+    removedFences: strings(v.removedFences),
     terrain: arr<unknown>(v.terrain)
       .map(parseStroke)
       .filter((s): s is SculptStroke => !!s),

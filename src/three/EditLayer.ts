@@ -229,6 +229,17 @@ export class EditLayer {
     this.city.requestRender();
   }
 
+  /** Ручки своего забора: по одной на каждом изломе. */
+  setLineHandles(line: readonly LonLat[]): void {
+    this.handleSpots = line.map((p, index) => {
+      const [x, y] = this.frame.toLocal(p);
+      return { handle: { handle: 'corner', index }, position: toThree(x, y, this.heightAt(x, y) + FENCE.street + 0.4), size: CORNER_STYLE.size };
+    });
+    setPoints(this.cornerPoints, this.handleSpots.map((s) => s.position));
+    setPoints(this.rotatePoints, []);
+    this.city.requestRender();
+  }
+
   /** Объекты для луча выбора: свои дома (и предпросмотр) и свои заборы. */
   get pickables(): Object3D[] {
     return [

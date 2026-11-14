@@ -21,6 +21,7 @@ import type { Yard } from '../world/base/yards';
 import {
   ROAD_KINDS,
   addFence,
+  adoptFence,
   areaOf,
   centroidOf,
   fromOsm,
@@ -39,6 +40,7 @@ import {
   stretchRectangle,
   translate,
   upsertBuilding,
+  upsertFence,
   upsertRoad,
   withModel,
   type EditedBuilding,
@@ -75,7 +77,11 @@ type Drag =
   | { type: 'line'; kind: 'road' | 'fence'; points: Vec2[]; at: ScreenPoint }
   | { type: 'move'; original: EditedBuilding; start: Vec2; current: EditedBuilding; at: ScreenPoint }
   | { type: 'rotate'; original: EditedBuilding; center: Vec2; startAngle: number; current: EditedBuilding }
-  | { type: 'resize'; original: EditedBuilding; index: number; current: EditedBuilding };
+  | { type: 'resize'; original: EditedBuilding; index: number; current: EditedBuilding }
+  // Свой забор: перенос целиком, перенос одной точки, поворот вокруг середины.
+  | { type: 'fmove'; id: string; original: Vec2[]; start: Vec2; current: Vec2[]; at: ScreenPoint }
+  | { type: 'fvertex'; id: string; original: Vec2[]; index: number; current: Vec2[] }
+  | { type: 'frotate'; id: string; original: Vec2[]; center: Vec2; startAngle: number; current: Vec2[] };
 
 export interface EditorContext {
   city: CityScene;
@@ -93,6 +99,8 @@ export interface EditorContext {
   yards: readonly Yard[];
   /** Деревня из моделей: дома OSM, нарисованные башкирскими домами (выбор, правка, скрытие). */
   models?: VillageModelsLayer;
+  /** Заборы с карты (локальные метры): щелчок по такому забору берёт его в правку. */
+  mapFences?: readonly { id: string; line: Vec2[] }[];
 }
 
 const screenDistance = (a: ScreenPoint, b: ScreenPoint) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -253,6 +261,11 @@ export class EditorTool {
       const last = drag.points[drag.points.length - 1]!;
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
+    } else if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
+      if (drag.type === 'fmove') drag.current = translate(drag.original, [point[0] - drag.start[0], point[1] - drag.start[1]]);
+      else if (drag.type === 'fvertex') drag.current = drag.original.map((p, i) => (i === drag.index ? point : p));
+      else drag.current = rotate(drag.original, drag.center, Math.atan2(point[1] - drag.center[1], point[0] - drag.center[0]) - drag.startAngle);
+      layer.previewLine(drag.current.map(this.ctx.frame.toLonLat), 'fence');
     } else if (drag.type === 'move') {
       const delta: Vec2 = [point[0] - drag.start[0], point[1] - drag.start[1]];
       drag.current = this.withFootprint(drag.original, translate(this.local(drag.original), delta));
@@ -279,9 +292,21 @@ export class EditorTool {
       }
     }
     const canvas = this.ctx.city.canvas;
-    const active = tool === 'select' && selection?.type === 'building' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
-    // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
-    const cursor = active ? (this.ctx.layer.cursorAt(position[0], position[1]) ?? (this.pick(position).building === selection.id ? 'move' : '')) : undefined;
+    const editable = tool === 'select' && useAppStore.getState().mode === 'explore' && !useUnderlayStore.getState().mode;
+    const active = editable && selection?.type === 'building';
+    const ownFence = editable && selection?.type === 'fence' ? useEditStore.getState().edits.fences.find((f) => f.id === selection.id) : undefined;
+    let cursor: string | undefined;
+    if (ownFence) {
+      // У забора: на точке — тянуть её, чуть снаружи — повернуть, на самой линии — двигать.
+      const at = this.ctx.layer.cursorAt(position[0], position[1]);
+      const point = this.ground(position);
+      const line = ownFence.line.map(this.ctx.frame.toLocal);
+      const near = !!point && line.some((p, i) => i > 0 && distanceToSegment(point, line[i - 1]!, p) < 1.5);
+      cursor = at ? (at.includes('resize') ? 'pointer' : at) : near ? 'move' : '';
+    } else if (active) {
+      // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
+      cursor = this.ctx.layer.cursorAt(position[0], position[1]) ?? (this.pick(position).building === selection.id ? 'move' : '');
+    }
     if (cursor === undefined) {
       if (this.hoverCursor) canvas.style.cursor = '';
       this.hoverCursor = false;
@@ -327,6 +352,11 @@ export class EditorTool {
       this.commitLine(drag.kind, simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3));
       return;
     }
+    if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
+      if (drag.type === 'fmove' && screenDistance(drag.at, position) <= CLICK_PX) return;
+      if (drag.current !== drag.original) store.commit(upsertFence(store.edits, { id: drag.id, line: drag.current.map(this.ctx.frame.toLonLat) }));
+      return;
+    }
     // Перетаскивание дома, поворот, растяжка.
     if (this.blocked(drag.current)) {
       store.notify('Так дом налезает на соседний — правка отменена');
@@ -342,7 +372,20 @@ export class EditorTool {
 
   /** Нажатие инструментом «Выбор»: на ручке или на выделенном доме — начать правку. */
   private pressSelect(position: ScreenPoint, point: Vec2 | undefined): Drag | undefined {
-    const { selection } = useEditStore.getState();
+    const { selection, edits } = useEditStore.getState();
+    if (selection?.type === 'fence' && point) {
+      const fence = edits.fences.find((f) => f.id === selection.id);
+      if (!fence) return undefined;
+      const original = fence.line.map(this.ctx.frame.toLocal);
+      const handle = this.ctx.layer.hit(position[0], position[1]).handle;
+      if (handle?.handle === 'corner') return { type: 'fvertex', id: fence.id, original, index: handle.index, current: original };
+      if (handle?.handle === 'rotate') {
+        const center = centroidOf(original);
+        return { type: 'frotate', id: fence.id, original, center, startAngle: Math.atan2(point[1] - center[1], point[0] - center[0]), current: original };
+      }
+      const near = original.some((p, i) => i > 0 && distanceToSegment(point, original[i - 1]!, p) < 1.5);
+      return near ? { type: 'fmove', id: fence.id, original, start: point, current: original, at: position } : undefined;
+    }
     if (selection?.type !== 'building' || !point) return undefined;
     const hit = this.pick(position);
     if (!hit.handle && hit.building !== selection.id) return undefined;
@@ -368,6 +411,14 @@ export class EditorTool {
 
     const point = this.ground(position);
     if (!point) return store.select(undefined);
+    // Забор с карты: берём его в правку — исходный прячется, появляется свой, который можно менять.
+    const gone = new Set(store.edits.removedFences ?? []);
+    const fromMap = (this.ctx.mapFences ?? []).find((f) => !gone.has(f.id) && f.line.some((p, i) => i > 0 && distanceToSegment(point, f.line[i - 1]!, p) < 1.5));
+    if (fromMap) {
+      const id = `fence-${Date.now().toString(36)}`;
+      store.commit(adoptFence(store.edits, fromMap.id, { id, line: fromMap.line.map(this.ctx.frame.toLonLat) }));
+      return store.select({ type: 'fence', id });
+    }
     // Заборы дворов — по близости к линии.
     const yard = this.ctx.yards.find(
       (y) => !store.edits.removedYards.includes(y.houseId) && y.fence.some(([a, b]) => distanceToSegment(point, a, b) < 2),

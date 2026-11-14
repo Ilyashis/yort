@@ -17,6 +17,7 @@ import {
   removeRoad,
   turnFacade,
   upsertBuilding,
+  upsertFence,
   upsertRoad,
   withModel,
   type LonLat,
@@ -369,12 +370,34 @@ export function EditPanel() {
     );
   }
 
-  const own = edits.fences.some((f) => f.id === selection.id);
+  const ownFence = edits.fences.find((f) => f.id === selection.id);
+  const own = !!ownFence;
   return (
     <aside className="panel building-card edit-panel">
       {close}
       <h2>Забор</h2>
-      <p className="muted">{own ? 'Нарисован вами' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
+      <p className="muted">{own ? 'Тяните забор мышью, чтобы подвинуть; белые точки — изломы, их можно тянуть по одной; чуть снаружи точки — повернуть' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
+      {ownFence && (
+        <div className="field">
+          <span>Повернуть забор</span>
+          <div className="segmented segmented-small" role="group" aria-label="Повернуть забор">
+            {(
+              [
+                [-90, '↺ 90°'],
+                [-15, '↺ 15°'],
+                [-1, '↺ 1°'],
+                [1, '1° ↻'],
+                [15, '15° ↻'],
+                [90, '90° ↻'],
+              ] as [number, string][]
+            ).map(([degrees, label]) => (
+              <button key={degrees} type="button" onClick={() => commit(upsertFence(useEditStore.getState().edits, { ...ownFence, line: turned(ownFence.line, degrees) }))}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="button-row">
         <button type="button" className="button" onClick={remove}>
           {own ? 'Убрать забор' : 'Убрать забор двора'} <kbd>Del</kbd>

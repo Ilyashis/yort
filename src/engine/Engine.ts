@@ -476,6 +476,8 @@ export class Engine {
         host: this.host, world, hm, buildings, village, overview: this.overview, underlay: this.underlay, sculpt,
         level,
         shiftExtra: fences?.shiftGround,
+        mapFences: fences?.lines ?? [],
+        setMapFencesHidden: (keys) => fences?.setHidden(keys),
         groundChanged: (area) => {
           useStore.getState().set({ terrainRev: useStore.getState().terrainRev + 1 });
           terrain.refresh(area);
