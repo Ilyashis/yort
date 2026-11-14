@@ -234,6 +234,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     previewTrees: (trees) => d.trees?.setOwn(trees.map((t) => ({ id: t.id, ...xzOf(t.at), species: t.kind, s: t.scale }))),
   });
   useEditStore.getState().setMapFenceIds((d.mapFences ?? []).map((f) => f.id));
+  useEditStore.getState().setFrame(frame);
 
   // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
   const followGround = (change: SculptChange) => {
@@ -298,6 +299,12 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       const fence = edits.fences.find((f) => f.id === selection.id);
       const yard = village?.yards.find((y) => y.houseId === selection.id);
       lines = fence ? [fence.line] : (yard?.fence ?? []).map((segment) => segment.map(frame.toLonLat) as LonLat[]);
+    }
+    const plot = selection?.type === 'plot' ? edits.plots?.find((p) => p.id === selection.id) : undefined;
+    if (plot) {
+      // Участок: контур и ручки — углы растянуть, чуть снаружи угла — повернуть.
+      lines = [[...plot.outline, plot.outline[0]!]];
+      editLayer.setHandles(undefined, plot.outline);
     }
     editLayer.highlight(lines);
     // У своего забора — ручки на изломах: точку можно тянуть, чуть снаружи — повернуть.
@@ -385,6 +392,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       host.canvas.style.cursor = '';
       const s = useEditStore.getState();
       s.setResolver(undefined);
+      s.setFrame(undefined);
       s.setModelApplier(undefined);
       s.setTool(undefined);
       s.select(undefined);

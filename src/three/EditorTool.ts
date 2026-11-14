@@ -23,6 +23,8 @@ import { distanceAlong, placeGates, type FenceGateSpec } from '../world/base/fen
 import {
   ROAD_KINDS,
   TREE_KINDS,
+  footprintCorners,
+  type Edits,
   TREE_SIZES,
   addFence,
   adoptFence,
@@ -54,6 +56,7 @@ import {
 } from '../world/edit/edits';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { removeVertex, segmentLength, snapPoint, treeRow, type Snap } from '../world/edit/snapLine';
+import { createPlot, insidePlot, PLOT_TEMPLATES, removePlot, resizePlot, transformPlot } from '../world/edit/plots';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
@@ -76,7 +79,11 @@ const ALIGN_TO_STREET_M = 60;
 const MIN_HOUSE_SIDE = 3;
 /** Дом-модель кликом у дороги: фасад не ближе этого к оси улицы, м (полдороги и палисадник). */
 const FACADE_SETBACK_M = 6.5;
-const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence', KeyN: 'tree', KeyG: 'terrain' };
+const HOTKEYS: Record<string, EditTool> = { KeyV: 'select', KeyY: 'house', KeyT: 'road', KeyB: 'fence', KeyN: 'tree', KeyU: 'plot', KeyG: 'terrain' };
+/** Улица участка — на таком расстоянии от оси дороги (полдороги и палисадник), м. */
+const PLOT_SETBACK_M = 7.5;
+/** Меньше этого участок не сжимается, м. */
+const MIN_PLOT_SIDE = 6;
 /** Ластик деревьев: радиус, м. */
 const TREE_ERASE_M = 3;
 /** Своё дерево выбирается щелчком ближе этого к его кроне на экране, px. */
@@ -100,7 +107,12 @@ type Drag =
   // Деревья: посадка (щелчок — одно, протяжка — аллея), ластик, перенос своего дерева.
   | { type: 'plant'; points: Vec2[]; at: ScreenPoint }
   | { type: 'erase'; points: Vec2[] }
-  | { type: 'tmove'; id: string; start: Vec2; at: ScreenPoint; current?: Vec2 };
+  | { type: 'tmove'; id: string; start: Vec2; at: ScreenPoint; current?: Vec2 }
+  // Участки: новый (щелчок или протяжка), перенос, растяжка за угол, поворот.
+  | { type: 'plotnew'; start: Vec2; at: ScreenPoint; current?: Vec2 }
+  | { type: 'pmove'; id: string; start: Vec2; at: ScreenPoint; next?: Edits }
+  | { type: 'presize'; id: string; index: number; original: Vec2[]; next?: Edits }
+  | { type: 'protate'; id: string; center: Vec2; startAngle: number; next?: Edits };
 
 export interface EditorContext {
   city: CityScene;
@@ -214,7 +226,9 @@ export class EditorTool {
           ? removeRoad(edits, selection.id)
           : selection.type === 'tree'
             ? { ...edits, trees: (edits.trees ?? []).filter((t) => t.id !== selection.id) }
-            : removeFence(edits, selection.id);
+            : selection.type === 'plot'
+              ? removePlot(edits, selection.id, true)
+              : removeFence(edits, selection.id);
     commit(next);
     select(undefined);
   }
@@ -267,6 +281,9 @@ export class EditorTool {
       if (this.pending && this.pending.kind !== tool) this.dropPending();
       this.drag = { type: 'line', kind: tool, points: [start], at: position };
       this.setCamera(false);
+    } else if (tool === 'plot' && point) {
+      this.drag = { type: 'plotnew', start: point, at: position };
+      this.setCamera(false);
     } else if (tool === 'tree' && point) {
       const mode = useEditStore.getState().tree.mode;
       this.drag = mode === 'erase' ? { type: 'erase', points: [point] } : { type: 'plant', points: [point], at: position };
@@ -301,6 +318,28 @@ export class EditorTool {
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
       useEditStore.getState().setDrawing({ kind: drag.kind, points: drag.points.length, segment: 0, total: lengthOf([...drag.points, point]) });
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
+    } else if (drag.type === 'plotnew') {
+      if (screenDistance(drag.at, position) <= CLICK_PX) return;
+      drag.current = point;
+      const rect = this.plotRectFrom(drag.start, point);
+      layer.previewLine([...rect, rect[0]!].map(this.ctx.frame.toLonLat), 'fence');
+    } else if (drag.type === 'pmove' || drag.type === 'presize' || drag.type === 'protate') {
+      const { edits } = useEditStore.getState();
+      const plot = edits.plots?.find((p) => p.id === drag.id);
+      if (!plot) return;
+      if (drag.type === 'pmove') {
+        const dx = point[0] - drag.start[0], dy = point[1] - drag.start[1];
+        drag.next = transformPlot(edits, drag.id, ([x, y]) => [x + dx, y + dy], this.ctx.frame);
+      } else if (drag.type === 'protate') {
+        const angle = Math.atan2(point[1] - drag.center[1], point[0] - drag.center[0]) - drag.startAngle;
+        drag.next = transformPlot(edits, drag.id, (p) => rotate([p], drag.center, angle)[0]!, this.ctx.frame);
+      } else {
+        drag.next = resizePlot(edits, drag.id, resizedPlot(drag.original, drag.index, point), this.ctx.frame);
+      }
+      layer.render(drag.next, undefined);
+      layer.setHandles(undefined, drag.next.plots!.find((p) => p.id === drag.id)!.outline);
+      layer.highlight([closedLine(drag.next.plots!.find((p) => p.id === drag.id)!.outline)]);
+      this.ctx.previewTrees?.(drag.next.trees ?? []);
     } else if (drag.type === 'plant') {
       if (screenDistance(drag.at, position) <= CLICK_PX) return;
       const last = drag.points[drag.points.length - 1]!;
@@ -394,6 +433,12 @@ export class EditorTool {
       const near = !!point && line.some((p, i) => i > 0 && distanceToSegment(point, line[i - 1]!, p) < 1.5);
       // Синяя точка ворот — тянуть вдоль забора.
       cursor = at ? (at === 'ew-resize' ? at : at.includes('resize') ? 'pointer' : at) : near ? 'move' : '';
+    } else if (editable && selection?.type === 'plot') {
+      // У участка: угол — растянуть, снаружи — повернуть, внутри на пустом месте — двигать весь участок.
+      const plot = useEditStore.getState().edits.plots?.find((p) => p.id === selection.id);
+      const point = this.ground(position);
+      const inside = !!plot && !!point && insidePlot(plot.outline.map(this.ctx.frame.toLocal), point);
+      cursor = this.ctx.layer.cursorAt(position[0], position[1]) ?? (inside ? 'move' : '');
     } else if (active) {
       // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
       cursor = this.ctx.layer.cursorAt(position[0], position[1]) ?? (this.pick(position).building === selection.id ? 'move' : '');
@@ -447,6 +492,22 @@ export class EditorTool {
         if (end) points[points.length - 1] = end.point;
       }
       this.commitLine(drag.kind, points);
+      return;
+    }
+    if (drag.type === 'plotnew') {
+      const click = screenDistance(drag.at, position) <= CLICK_PX || !drag.current;
+      const rect = click ? this.plotRectAt(drag.start) : this.plotRectFrom(drag.start, drag.current!);
+      const [w, d] = [Math.hypot(rect[1]![0] - rect[0]![0], rect[1]![1] - rect[0]![1]), Math.hypot(rect[3]![0] - rect[0]![0], rect[3]![1] - rect[0]![1])];
+      if (w < MIN_PLOT_SIDE || d < MIN_PLOT_SIDE) return store.notify('Растяните участок побольше — хотя бы 6 × 6 м');
+      const id = `plot-${Date.now().toString(36)}`;
+      store.commit(createPlot(store.edits, id, rect, store.plotTemplate, this.ctx.frame));
+      store.setTool('select');
+      store.select({ type: 'plot', id });
+      return;
+    }
+    if (drag.type === 'pmove' || drag.type === 'presize' || drag.type === 'protate') {
+      if (drag.next) store.commit(drag.next);
+      else this.refreshHidden();
       return;
     }
     if (drag.type === 'plant') {
@@ -513,6 +574,28 @@ export class EditorTool {
   /** Нажатие инструментом «Выбор»: на ручке или на выделенном доме — начать правку. */
   private pressSelect(position: ScreenPoint, point: Vec2 | undefined): Drag | undefined {
     const { selection, edits } = useEditStore.getState();
+    if (selection?.type === 'plot' && point) {
+      const plot = edits.plots?.find((p) => p.id === selection.id);
+      if (plot) {
+        const local = plot.outline.map(this.ctx.frame.toLocal);
+        const handle = this.ctx.layer.hit(position[0], position[1]).handle;
+        if (handle?.handle === 'corner') {
+          // Ручки строятся по углам ориентированного прямоугольника — порядок может не совпасть с контуром.
+          const c = footprintCorners(local)[handle.index]!;
+          let index = 0;
+          local.forEach((p, i) => {
+            if (Math.hypot(p[0] - c[0], p[1] - c[1]) < Math.hypot(local[index]![0] - c[0], local[index]![1] - c[1])) index = i;
+          });
+          return { type: 'presize', id: plot.id, index, original: local };
+        }
+        if (handle?.handle === 'rotate') {
+          const center = centroidOf(local);
+          return { type: 'protate', id: plot.id, center, startAngle: Math.atan2(point[1] - center[1], point[0] - center[0]) };
+        }
+        // Внутри участка, но не на постройке и не на дереве — тянем весь участок.
+        if (insidePlot(local, point) && !this.pick(position).building && !this.treeAt(position)) return { type: 'pmove', id: plot.id, start: point, at: position };
+      }
+    }
     if (selection?.type === 'tree' && point && this.treeAt(position) === selection.id) {
       return { type: 'tmove', id: selection.id, start: point, at: position };
     }
@@ -559,6 +642,7 @@ export class EditorTool {
     if (tree) return store.select({ type: 'tree', id: tree });
     const hit = this.pick(position);
     if (hit.building) return store.select({ type: 'building', id: hit.building });
+    if (hit.fence?.startsWith('plot:')) return store.select({ type: 'plot', id: hit.fence.slice(5, hit.fence.lastIndexOf(':')) });
     if (hit.fence) return store.select({ type: 'fence', id: hit.fence });
 
     const point = this.ground(position);
@@ -569,6 +653,9 @@ export class EditorTool {
       return line.some((p, i) => i > 0 && distanceToSegment(point, line[i - 1]!, p) < 1.5);
     });
     if (mine) return store.select({ type: 'fence', id: mine.id });
+    // Внутри своего участка — участок.
+    const plot = store.edits.plots?.find((p) => insidePlot(p.outline.map(this.ctx.frame.toLocal), point));
+    if (plot) return store.select({ type: 'plot', id: plot.id });
     // Забор с карты: берём его в правку — исходный прячется, появляется свой, который можно менять.
     const gone = new Set(store.edits.removedFences ?? []);
     const fromMap = (this.ctx.mapFences ?? []).find((f) => !gone.has(f.id) && f.line.some((p, i) => i > 0 && distanceToSegment(point, f.line[i - 1]!, p) < 1.5));
@@ -742,6 +829,44 @@ export class EditorTool {
     const axis = line.map(this.ctx.frame.toLonLat);
     const id = `${isRoad ? 'road' : 'fence'}-${Date.now().toString(36)}`;
     store.commit(isRoad ? upsertRoad(store.edits, { id, kind: store.roadKind, axis }) : addFence(store.edits, { id, line: axis }));
+  }
+
+  // --- участки ---------------------------------------------------------------------
+
+  /** Участок шаблонного размера у точки: улицей к ближайшей дороге, с отступом под палисадник. */
+  private plotRectAt(point: Vec2): Vec2[] {
+    const [W, D] = PLOT_TEMPLATES[useEditStore.getState().plotTemplate].size;
+    const snap = nearestOnLines(point, this.roadLines());
+    let away: Vec2 = [0, 1];
+    let street = point;
+    // Участок всегда улицей к ближайшей дороге (даже на окраине — до 200 м).
+    if (snap && snap.distance <= 200) {
+      away = snap.distance > 0.01 ? [(point[0] - snap.point[0]) / snap.distance, (point[1] - snap.point[1]) / snap.distance] : [-snap.dir[1], snap.dir[0]];
+      // Улица участка — вдоль дороги, на отступе от её оси (или там, где щёлкнули, если дальше).
+      const off = Math.max(PLOT_SETBACK_M, snap.distance);
+      street = [snap.point[0] + away[0] * off, snap.point[1] + away[1] * off];
+    }
+    // Вдоль улицы — так, чтобы «внутрь» (влево от направления) смотрело от дороги.
+    const d: Vec2 = [away[1], -away[0]];
+    const a: Vec2 = [street[0] - d[0] * (W / 2), street[1] - d[1] * (W / 2)];
+    const b: Vec2 = [street[0] + d[0] * (W / 2), street[1] + d[1] * (W / 2)];
+    return [a, b, [b[0] + away[0] * D, b[1] + away[1] * D], [a[0] + away[0] * D, a[1] + away[1] * D]];
+  }
+
+  /** Участок протяжкой: прямоугольник вдоль улицы, первая сторона — ближайшая к дороге. */
+  private plotRectFrom(start: Vec2, end: Vec2): Vec2[] {
+    const rect = stretchRectangle(start, end, this.streetDirection(start));
+    const roads = this.roadLines();
+    let best = 0, bestD = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 4; i++) {
+      const a = rect[i]!, b = rect[(i + 1) % 4]!;
+      const snap = nearestOnLines([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], roads);
+      if (snap && snap.distance < bestD) {
+        bestD = snap.distance;
+        best = i;
+      }
+    }
+    return [0, 1, 2, 3].map((k) => rect[(best + k) % 4]!);
   }
 
   // --- деревья ---------------------------------------------------------------------
@@ -966,4 +1091,30 @@ function thin(points: readonly Vec2[], step: number): Vec2[] {
   const out: Vec2[] = [];
   for (const p of points) if (!out.length || segmentLength(out[out.length - 1]!, p) >= step) out.push(p);
   return out;
+}
+
+/** Замкнутая линия по углам. */
+function closedLine<T>(points: readonly T[]): T[] {
+  return [...points, points[0]!];
+}
+
+/**
+ * Участок, растянутый за угол index до точки p: противоположный угол на месте, стороны — вдоль прежних осей,
+ * первая сторона по-прежнему улица. Меньше MIN_PLOT_SIDE не сжимается.
+ */
+export function resizedPlot(original: readonly Vec2[], index: number, p: Vec2): Vec2[] {
+  const [a, b, , d] = original as [Vec2, Vec2, Vec2, Vec2];
+  const W = Math.hypot(b[0] - a[0], b[1] - a[1]), D = Math.hypot(d[0] - a[0], d[1] - a[1]);
+  const along: Vec2 = [(b[0] - a[0]) / W, (b[1] - a[1]) / W], inward: Vec2 = [(d[0] - a[0]) / D, (d[1] - a[1]) / D];
+  const uv: [number, number][] = [[0, 0], [W, 0], [W, D], [0, D]];
+  const [fu, fv] = uv[(index + 2) % 4]!;
+  const [ou, ov] = uv[index]!;
+  const cu = (p[0] - a[0]) * along[0] + (p[1] - a[1]) * along[1];
+  const cv = (p[0] - a[0]) * inward[0] + (p[1] - a[1]) * inward[1];
+  // Угол не переходит за противоположный: сторона не короче MIN_PLOT_SIDE.
+  const nu = ou > fu ? Math.max(cu, fu + MIN_PLOT_SIDE) : Math.min(cu, fu - MIN_PLOT_SIDE);
+  const nv = ov > fv ? Math.max(cv, fv + MIN_PLOT_SIDE) : Math.min(cv, fv - MIN_PLOT_SIDE);
+  const u0 = Math.min(fu, nu), u1 = Math.max(fu, nu), v0 = Math.min(fv, nv), v1 = Math.max(fv, nv);
+  const P = (u: number, v: number): Vec2 => [a[0] + along[0] * u + inward[0] * v, a[1] + along[1] * u + inward[1] * v];
+  return [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)];
 }

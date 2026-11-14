@@ -67,6 +67,7 @@ import { hookMaterial } from './shaderHooks';
 import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 import { midpoints, type Snap } from '../world/edit/snapLine';
 import { fitScale } from '../world/village/villagePlan';
+import { plotFences } from '../world/edit/plots';
 
 const SELECTED = new Color('#f5a524');
 const INVALID = new Color('#e5484d');
@@ -200,7 +201,8 @@ export class EditLayer {
     const items = edits.buildings
       .filter((b) => b.id !== hiddenId)
       .map((building) => ({ building, tint: building.id === selectedId ? SELECTED : undefined }));
-    this.main = this.assemble('edit', items, edits.fences);
+    // Заборы участков не хранятся — считаются по контуру и постройкам на границе.
+    this.main = this.assemble('edit', items, [...edits.fences, ...plotFences(edits, this.frame)]);
     this.sweepModels();
     this.city.requestRender();
   }

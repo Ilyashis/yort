@@ -6,6 +6,7 @@ import { useEditStore } from '../store/useEditStore';
 import { hashString } from '../utils/hash';
 import { HOUSE_MODELS, MODEL_ENTRANCE, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { cumulative, defaultGateAt, GATE_KINDS, GATE_ORDER, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
+import { applyTemplate, PLOT_ROLE_ORDER, PLOT_ROLES, PLOT_TEMPLATE_ORDER, PLOT_TEMPLATES, plotSize, removePlot, setPlotRole, type EditedPlot, type PlotTemplate } from '../world/edit/plots';
 import {
   BUILDING_KINDS,
   FENCE_KINDS,
@@ -96,7 +97,9 @@ export function EditPanel() {
           ? removeRoad(store.edits, selection.id)
           : selection.type === 'tree'
             ? { ...store.edits, trees: (store.edits.trees ?? []).filter((t) => t.id !== selection.id) }
-            : removeFence(store.edits, selection.id);
+            : selection.type === 'plot'
+              ? removePlot(store.edits, selection.id, true)
+              : removeFence(store.edits, selection.id);
     store.commit(next);
     store.select(undefined);
   };
@@ -151,6 +154,11 @@ export function EditPanel() {
     return (
       <aside className="panel building-card edit-panel">
         {close}
+        {building.plot && (
+          <button type="button" className="link-button back-link" onClick={() => select({ type: 'plot', id: building.plot! })}>
+            ← К участку{building.plotRole ? ` · ${PLOT_ROLES[building.plotRole].label.toLowerCase()}` : ''}
+          </button>
+        )}
         <h2>{model ? model.name : BUILDING_KINDS[building.kind].label}</h2>
         <p className="muted card-sub">{origin}. Тяните дом мышью; белые точки — растянуть, чуть снаружи угла — повернуть.</p>
 
@@ -341,6 +349,132 @@ export function EditPanel() {
         <div className="button-row card-footer">
           <button type="button" className="button button-danger" onClick={remove}>
             Убрать дом <kbd>Del</kbd>
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
+  if (selection.type === 'plot') {
+    const plot = edits.plots?.find((p) => p.id === selection.id);
+    const frame = useEditStore.getState().frame;
+    if (!plot || !frame) return null;
+    const [W, D] = plotSize(plot, frame);
+    const members = edits.buildings.filter((b) => b.plot === plot.id);
+    const patchPlot = (patch: Partial<EditedPlot>) => {
+      const store = useEditStore.getState();
+      store.commit({ ...store.edits, plots: (store.edits.plots ?? []).map((p) => (p.id === plot.id ? { ...p, ...patch } : p)) });
+    };
+    const setFence = (patch: Partial<EditedPlot['fence']>) => patchPlot({ fence: { ...plot.fence, ...patch } });
+    const removeAll = (withContents: boolean) => {
+      const store = useEditStore.getState();
+      store.commit(removePlot(store.edits, plot.id, withContents));
+      store.select(undefined);
+    };
+    return (
+      <aside className="panel building-card edit-panel">
+        {close}
+        <h2>Участок</h2>
+        <p className="muted card-sub">
+          {fmt(W)} × {fmt(D)} м. Тяните углы — растянуть (постройки остаются на местах), чуть снаружи угла — повернуть, пустое место внутри — передвинуть весь участок.
+        </p>
+
+        <Section id="plot-template" title="Шаблон">
+          <select
+            className="model-select"
+            value={plot.template}
+            aria-label="Шаблон участка"
+            onChange={(e) => {
+              if (!window.confirm('Сменить шаблон? Постройки и деревья участка встанут заново.')) return;
+              const store = useEditStore.getState();
+              store.commit(applyTemplate(store.edits, plot.id, e.target.value as PlotTemplate, frame));
+            }}
+          >
+            {PLOT_TEMPLATE_ORDER.map((t) => (
+              <option key={t} value={t}>
+                {PLOT_TEMPLATES[t].label}
+              </option>
+            ))}
+          </select>
+          <p className="muted model-note">{PLOT_TEMPLATES[plot.template].hint}.</p>
+        </Section>
+
+        <Section id="plot-contents" title="Что на участке">
+          {PLOT_ROLE_ORDER.map((role) => {
+            const member = members.find((b) => b.plotRole === role);
+            return (
+              <div className="plot-role" key={role}>
+                <span>{PLOT_ROLES[role].label}</span>
+                {member && (
+                  <button type="button" className="link-button" onClick={() => select({ type: 'building', id: member.id })} title="Открыть постройку: двигать, крутить, цвета, крыльцо">
+                    настроить →
+                  </button>
+                )}
+                <Toggle
+                  value={!!member}
+                  label={PLOT_ROLES[role].label}
+                  onChange={(on) => {
+                    const store = useEditStore.getState();
+                    store.commit(setPlotRole(store.edits, plot.id, role, on, frame));
+                  }}
+                />
+              </div>
+            );
+          })}
+          <p className="muted">Постройку можно передвинуть и повернуть мышью, как обычный дом. Забор сам упирается в постройки на границе участка и закрывает щель, если их отодвинуть.</p>
+        </Section>
+
+        <Section id="plot-fence" title="Забор">
+          <Row label="Вид">
+            <div className="segmented segmented-small segmented-grid" role="group" aria-label="Вид забора">
+              {(Object.keys(FENCE_KINDS) as FenceKind[]).map((kind) => (
+                <button key={kind} type="button" title={FENCE_KINDS[kind].hint} className={(plot.fence.kind ?? 'boards') === kind ? 'active' : ''} onClick={() => setFence({ kind })}>
+                  {FENCE_KINDS[kind].label}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row label="Цвет">
+            <Swatches colors={FENCE_PAINTS} value={plot.fence.color} onPick={(color) => setFence({ color })} auto label="Цвет забора" />
+          </Row>
+          <Row label="Ворота и калитка на улице">
+            <div className="segmented segmented-small segmented-grid" role="group" aria-label="Ворота">
+              {GATE_ORDER.map((kind) => {
+                const on = plot.fence.gates.some((g) => g.kind === kind);
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    title={GATE_KINDS[kind].hint}
+                    className={on ? 'active' : ''}
+                    onClick={() => setFence({ gates: on ? plot.fence.gates.filter((g) => g.kind !== kind) : [...plot.fence.gates, { kind, at: W / 2 }] })}
+                  >
+                    {GATE_KINDS[kind].label}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+          {plot.fence.gates.map((g, i) => (
+            <Row key={`${g.kind}-${i}`} label={`${GATE_KINDS[g.kind].label} — ${fmt(g.at)} м от левого угла`}>
+              <input
+                type="range"
+                min={GATE_KINDS[g.kind].width / 2}
+                max={Math.max(GATE_KINDS[g.kind].width / 2, W - GATE_KINDS[g.kind].width / 2)}
+                step={0.1}
+                value={g.at}
+                onChange={(e) => setFence({ gates: plot.fence.gates.map((x, k) => (k === i ? { ...x, at: Number(e.target.value) } : x)) })}
+              />
+            </Row>
+          ))}
+        </Section>
+
+        <div className="button-row card-footer">
+          <button type="button" className="button button-danger" onClick={() => removeAll(true)}>
+            Убрать участок <kbd>Del</kbd>
+          </button>
+          <button type="button" className="button button-small" onClick={() => removeAll(false)} title="Контур и забор убираются, постройки и деревья остаются">
+            Только контур
           </button>
         </div>
       </aside>

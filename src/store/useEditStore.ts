@@ -3,9 +3,11 @@ import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuildin
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptMode } from '../world/base/sculpt';
 import type { SnapKind } from '../world/edit/snapLine';
+import type { PlotTemplate } from '../world/edit/plots';
+import type { LocalFrame } from '../world/walk/localFrame';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
-export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'tree' | 'terrain';
+export type EditTool = 'select' | 'house' | 'plot' | 'road' | 'fence' | 'tree' | 'terrain';
 
 /** Инструмент «Дерево»: по одному щелчком, аллеей протяжкой (оба — в режиме plant) или ластик. */
 export type TreeMode = 'plant' | 'erase';
@@ -23,7 +25,8 @@ export type Selection =
   | { type: 'building'; id: string }
   | { type: 'road'; id: string }
   | { type: 'fence'; id: string }
-  | { type: 'tree'; id: string };
+  | { type: 'tree'; id: string }
+  | { type: 'plot'; id: string };
 
 const HISTORY_LIMIT = 100;
 const storageKey = (territoryId: string) => `citia:edits:${territoryId}`;
@@ -68,6 +71,12 @@ interface EditState {
   roadKind: EditRoadKind;
   /** Модель для инструмента «Дом» (изба, кирпичный…); нет — простой объём растяжкой. */
   houseModel?: HouseModelId;
+  /** Локальные метры сцены (для участков в карточке; регистрирует сцена). */
+  frame?: LocalFrame;
+  setFrame: (frame: LocalFrame | undefined) => void;
+  /** Шаблон для инструмента «Участок». */
+  plotTemplate: PlotTemplate;
+  setPlotTemplate: (template: PlotTemplate) => void;
   /** Инструмент «Дерево»: порода, возраст и что делает. */
   tree: { kind: TreeKind; size: TreeSize; mode: TreeMode };
   /** Кисть для инструмента «Рельеф». */
@@ -122,6 +131,9 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setHouseModel: (houseModel) => set({ houseModel }),
   setSculpt: (patch) => set({ sculpt: { ...get().sculpt, ...patch } }),
   tree: { kind: 'birch', size: 'medium', mode: 'plant' },
+  setFrame: (frame) => set({ frame }),
+  plotTemplate: 'yard',
+  setPlotTemplate: (plotTemplate) => set({ plotTemplate }),
   setTree: (patch) => set({ tree: { ...get().tree, ...patch } }),
 
   commit: (next) => {

@@ -9,6 +9,7 @@ import { openRing, orientedBox, signedArea } from '../base/roofGeometry';
 import { findHouseModel, type HouseModelId } from '../village/houseModels';
 import { parseStroke, type SculptStroke } from '../base/sculpt';
 import { GATE_KINDS, type FenceGateSpec } from '../base/fenceGates';
+import { PLOT_TEMPLATES, type EditedPlot, type PlotRole } from './plots';
 
 export type LonLat = [number, number];
 
@@ -59,6 +60,9 @@ export interface EditedBuilding {
    * 3 — слева (если смотреть с улицы), −1 — палисадника нет.
    */
   garden?: number;
+  /** Участок, которому принадлежит постройка, и её роль на нём (дом, гараж, баня…). */
+  plot?: string;
+  plotRole?: PlotRole;
 }
 
 export interface EditedRoad {
@@ -117,6 +121,8 @@ export interface Edits {
   lines?: TerrainLine[];
   /** Адреса домов (табличка на фасаде): ключ — id дома OSM или своего дома (plotKey). */
   addresses?: Record<string, HouseAddress>;
+  /** Участки-шаблоны: контур, шаблон, забор (постройки и деревья — в buildings и trees с plot). */
+  plots?: EditedPlot[];
   /** Свои деревья. */
   trees?: EditedTree[];
   /** Места, где деревья с карты убраны ластиком: круги. */
@@ -147,6 +153,8 @@ export interface EditedTree {
   kind: TreeKind;
   /** Масштаб модели (0,3…1,6). */
   scale: number;
+  /** Участок, которому принадлежит дерево. */
+  plot?: string;
 }
 
 export interface TreeClearing {
@@ -399,6 +407,7 @@ export function isEmpty(edits: Edits): boolean {
     !edits.lines?.length &&
     !Object.keys(edits.addresses ?? {}).length &&
     !edits.trees?.length &&
+    !edits.plots?.length &&
     !edits.clearedTrees?.length
   );
 }
@@ -462,7 +471,21 @@ export function parseEdits(value: unknown): Edits | undefined {
       .map((s) => ({ id: s.id, at: s.at, height: s.height, radius: Math.min(SPOT_RADIUS.max, Math.max(SPOT_RADIUS.min, s.radius)) })),
     trees: arr<EditedTree>(v.trees)
       .filter((t) => t && typeof t.id === 'string' && typeof t.kind === 'string' && t.kind in TREE_KINDS && points([t.at]).length === 1 && Number.isFinite(t.scale))
-      .map((t) => ({ id: t.id, at: t.at, kind: t.kind, scale: Math.min(1.6, Math.max(0.3, t.scale)) })),
+      .map((t) => ({ id: t.id, at: t.at, kind: t.kind, scale: Math.min(1.6, Math.max(0.3, t.scale)), ...(typeof t.plot === 'string' ? { plot: t.plot } : {}) })),
+    plots: arr<EditedPlot>(v.plots)
+      .filter((p) => p && typeof p.id === 'string' && typeof p.template === 'string' && p.template in PLOT_TEMPLATES && points(p.outline).length === 4)
+      .map((p) => ({
+        id: p.id,
+        outline: points(p.outline),
+        template: p.template,
+        fence: {
+          ...(typeof p.fence?.kind === 'string' && p.fence.kind in FENCE_KINDS ? { kind: p.fence.kind } : {}),
+          ...(typeof p.fence?.color === 'string' && /^#[0-9a-f]{6}$/i.test(p.fence.color) ? { color: p.fence.color } : {}),
+          gates: arr<FenceGateSpec>(p.fence?.gates)
+            .filter((g) => g && typeof g.kind === 'string' && g.kind in GATE_KINDS && Number.isFinite(g.at))
+            .map((g) => ({ kind: g.kind, at: g.at })),
+        },
+      })),
     clearedTrees: arr<TreeClearing>(v.clearedTrees)
       .filter((c) => c && points([c.at]).length === 1 && Number.isFinite(c.radius))
       .map((c) => ({ at: c.at, radius: Math.min(30, Math.max(0.5, c.radius)) })),

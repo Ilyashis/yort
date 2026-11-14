@@ -4,6 +4,7 @@ import { useEditStore, type EditTool } from '../store/useEditStore';
 import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { EMPTY_EDITS, ROAD_KINDS, TREE_KINDS, TREE_ORDER, TREE_SIZES, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
+import { PLOT_TEMPLATES, PLOT_TEMPLATE_ORDER } from '../world/edit/plots';
 import { formatMetres, type SnapKind } from '../world/edit/snapLine';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
 import { SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptMode } from '../world/base/sculpt';
@@ -22,6 +23,13 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
     key: 'Y',
     hint: 'Тяните по земле — дом вырастет ровно под участок и встанет вдоль ближайшей улицы.',
     icon: <path d="M3 10l7-6 7 6v7H3zM8 17v-4h4v4" />,
+  },
+  {
+    tool: 'plot',
+    label: 'Участок',
+    key: 'U',
+    hint: 'Щелчок у дороги — участок по шаблону встанет улицей к дороге; протяните — участок своего размера.',
+    icon: <path d="M2.5 4.5h15v11h-15zM5 15.5v-4h3v4M11 4.5v4h4.5M2.5 11.5h2.5" />,
   },
   {
     tool: 'road',
@@ -93,6 +101,8 @@ export function EditorToolbar() {
   const selectionType = useEditStore((s) => s.selection?.type);
   const mapFenceIds = useEditStore((s) => s.mapFenceIds);
   const treeSettings = useEditStore((s) => s.tree);
+  const plotTemplate = useEditStore((s) => s.plotTemplate);
+  const setPlotTemplate = useEditStore((s) => s.setPlotTemplate);
   const setTree = useEditStore((s) => s.setTree);
   const [menu, setMenu] = useState(false);
   const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
@@ -121,6 +131,7 @@ export function EditorToolbar() {
     edits.removedYards.length +
     edits.terrain.length +
     (edits.trees?.length ?? 0) +
+    (edits.plots?.length ?? 0) +
     (edits.clearedTrees?.length ?? 0);
 
   const exportEdits = () => {
@@ -173,6 +184,8 @@ export function EditorToolbar() {
           <div className="editor-hint">
             {active.tool === 'select' && selectionType === 'fence'
               ? FENCE_SELECTED_HINT
+              : active.tool === 'plot'
+                ? `${PLOT_TEMPLATES[plotTemplate].label}: ${PLOT_TEMPLATES[plotTemplate].hint.toLowerCase()}. Щелчок у дороги — участок ${PLOT_TEMPLATES[plotTemplate].size.join(' × ')} м, протяжка — своего размера.`
               : active.tool === 'tree'
                 ? treeSettings.mode === 'erase'
                   ? 'Ластик: ведите по деревьям с зажатой кнопкой — свои деревья и деревья с карты в круге 3 м убираются. Вернуть — «Отменить».'
@@ -275,6 +288,15 @@ export function EditorToolbar() {
           >
             Убрать заборы с карты
           </button>
+        </div>
+      )}
+      {tool === 'plot' && (
+        <div className="segmented editor-kinds" role="group" aria-label="Шаблон участка">
+          {PLOT_TEMPLATE_ORDER.map((t) => (
+            <button key={t} type="button" title={PLOT_TEMPLATES[t].hint} className={plotTemplate === t ? 'active' : ''} onClick={() => setPlotTemplate(t)}>
+              {PLOT_TEMPLATES[t].label}
+            </button>
+          ))}
         </div>
       )}
       {tool === 'tree' && (
