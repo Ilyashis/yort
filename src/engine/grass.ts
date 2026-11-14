@@ -99,6 +99,8 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
     uRect: { value: [rect.x0, rect.z0, rect.x1 - rect.x0, rect.z1 - rect.z0] },
     uGroundA: { value: groundColours(city).a },
     uGroundB: { value: groundColours(city).b },
+    uLawn: { value: groundColours(city).lawn },
+    uWood: { value: groundColours(city).wood },
     uTime: shared.uTime,
     uTall: { value: city ? 0.26 : 0.42 },
     uFar: { value: FAR },
@@ -114,7 +116,7 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
         attribute vec3 aSide;
         uniform sampler2D uMaskA, uMaskB, uMaskC;
         uniform vec4 uRect;
-        uniform vec3 uGroundA, uGroundB;
+        uniform vec3 uGroundA, uGroundB, uLawn, uWood;
         uniform float uTime, uTall, uFar;
         varying vec3 vGrass;
         ${NOISE_GLSL}
@@ -170,8 +172,8 @@ export function createGrass(hm: HeightMap, masks: Masks, rect: Rect, city: boole
         transformed.y -= abs(wave) * y * y * tall * 0.14;
 
         vec3 g = mix(uGroundA, uGroundB, smoothstep(0.32, 0.68, nBig)) * (0.84 + 0.26 * nMid);
-        g = mix(g, vec3(0.105, 0.2, 0.06) * (0.86 + 0.24 * nMid), lawn);
-        g = mix(g, vec3(0.075, 0.13, 0.05) * (0.8 + 0.4 * nMid), wood);
+        g = mix(g, uLawn * (0.86 + 0.24 * nMid), lawn);
+        g = mix(g, uWood * (0.8 + 0.4 * nMid), wood);
         g = mix(g, photo.rgb, photoK);
         float tone = 0.72 + 0.56 * fract(seed * 17.9) * (0.6 + 0.8 * aSide.z);
         vec3 tip = mix(g * 1.38, vec3(0.14, 0.27, 0.065), 0.6) * tone + vec3(0.004, 0.02, 0.0);

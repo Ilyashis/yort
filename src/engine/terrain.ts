@@ -292,11 +292,28 @@ export function paintMiniMap(world: World, rect: Rect, footprints: readonly Foot
   return canvas;
 }
 
-/** Два оттенка «ничьей» земли — ими же красится трава. */
-export const groundColours = (city: boolean) => ({
-  a: city ? new Color().setRGB(0.17, 0.2, 0.1) : new Color().setRGB(0.17, 0.24, 0.075),
-  b: city ? new Color().setRGB(0.25, 0.235, 0.17) : new Color().setRGB(0.27, 0.29, 0.1),
-});
+/**
+ * Цвета «нарисованной» земли — ими же красится трава. a и b — два оттенка «ничьей» земли, lawn — газон,
+ * wood — земля в лесу, slope — голый склон. В деревне они сняты со сгенерированной карты (режим «Карта»):
+ * медианы её линейного цвета под каждым видом земли, размытые до ~30 м, — тёмный (25-й перцентиль яркости)
+ * и светлый (80-й) тон луга. Рисунок тогда по цвету совпадает с картой, а не светлее и зеленее её.
+ */
+export const groundColours = (city: boolean) =>
+  city
+    ? {
+        a: new Color().setRGB(0.17, 0.2, 0.1),
+        b: new Color().setRGB(0.25, 0.235, 0.17),
+        lawn: new Color().setRGB(0.105, 0.2, 0.06),
+        wood: new Color().setRGB(0.075, 0.13, 0.05),
+        slope: new Color().setRGB(0.3, 0.25, 0.17),
+      }
+    : {
+        a: new Color().setRGB(0.082, 0.098, 0.034),
+        b: new Color().setRGB(0.135, 0.155, 0.075),
+        lawn: new Color().setRGB(0.07, 0.1, 0.033),
+        wood: new Color().setRGB(0.07, 0.085, 0.035),
+        slope: new Color().setRGB(0.2, 0.18, 0.12),
+      };
 
 export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, underlay: GroundUnderlay, ortho: OrthoUniforms): MeshStandardMaterial {
   const material = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.96, metalness: 0 });
@@ -307,6 +324,9 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
     uRect: { value: [rect.x0, rect.z0, rect.x1 - rect.x0, rect.z1 - rect.z0] },
     uGroundA: { value: groundColours(city).a },
     uGroundB: { value: groundColours(city).b },
+    uLawn: { value: groundColours(city).lawn },
+    uWood: { value: groundColours(city).wood },
+    uSlope: { value: groundColours(city).slope },
     uGravel: { value: city ? 0 : 1 },
     uTime: shared.uTime,
     uLamps: shared.uLamps,
@@ -326,7 +346,7 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         varying vec3 vNrmW;
         uniform sampler2D uMaskA, uMaskB, uMaskC;
         uniform vec4 uRect;
-        uniform vec3 uGroundA, uGroundB;
+        uniform vec3 uGroundA, uGroundB, uLawn, uWood, uSlope;
         uniform float uTime, uLamps, uGravel;
         ${NOISE_GLSL}
         ${UNDERLAY_GLSL}
@@ -353,11 +373,11 @@ export function createTerrainMaterial(masks: Masks, rect: Rect, city: boolean, u
         float nGrain = (vnoise(vWPos.xz * 37.0) + vnoise(vWPos.xz * 113.0) - 1.0) * grainF;
         vec3 col = mix(uGroundA, uGroundB, smoothstep(0.32, 0.68, nBig)) * (0.84 + 0.26 * nMid + 0.22 * nFine + 0.3 * nGrain);
         float slope = 1.0 - normalize(vNrmW).y;
-        col = mix(col, vec3(0.3, 0.25, 0.17) * (0.8 + 0.4 * nMid), smoothstep(0.1, 0.28, slope));
+        col = mix(col, uSlope * (0.8 + 0.4 * nMid), smoothstep(0.1, 0.28, slope));
         float lawn = cov(mB.r);
-        col = mix(col, vec3(0.105, 0.2, 0.06) * (0.86 + 0.24 * nMid + 0.25 * nFine + 0.3 * nGrain), lawn);
+        col = mix(col, uLawn * (0.86 + 0.24 * nMid + 0.25 * nFine + 0.3 * nGrain), lawn);
         float wood = cov(mB.g);
-        col = mix(col, vec3(0.075, 0.13, 0.05) * (0.8 + 0.4 * nMid), wood);
+        col = mix(col, uWood * (0.8 + 0.4 * nMid), wood);
         // Снимок с дрона — настоящий цвет земли; вблизи к нему добавляется зерно, под домами его нет
         // (там на снимке крыши).
         vec4 photo = orthoAt(vWPos.xz);
