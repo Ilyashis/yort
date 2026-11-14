@@ -82,7 +82,8 @@ export type HouseModelId =
   | 'shed'
   | 'greenhouse'
   | 'mosque'
-  | 'garage';
+  | 'garage'
+  | 'firestation';
 
 /** Разделы каталога: жилые дома, общественные здания, мелкие постройки (двор, улица). */
 export type HouseModelGroup = 'house' | 'public' | 'small';

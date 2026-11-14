@@ -246,7 +246,7 @@ export interface FenceBoxes {
 }
 
 /** Вид забора — как в правках (edits.ts FenceKind). */
-export type FenceLook = 'boards' | 'picket' | 'profile' | 'rails';
+export type FenceLook = 'boards' | 'picket' | 'profile' | 'rails' | 'metal';
 
 /**
  * Коробки забора нужного вида вдоль отрезка p→q: panels — доски, штакетины, листы или жерди; posts — столбы.
@@ -271,6 +271,12 @@ export function fenceLookBoxes(p: Vec2, q: Vec2, look: FenceLook): FenceBoxes {
     // Сплошной лист 1,9 м, чуть над землёй; столбы — тонкая стальная труба через 2,5 м.
     along(-0.1, 0.03, 2.0);
     for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.07, 2.0);
+  } else if (look === 'metal') {
+    // Сварная решётка: две полосы и тонкие прутья через 0,13 м — двор видно насквозь; столбы — профильная труба.
+    for (const z of [0.12, 1.42]) along(z, 0.03, 0.04);
+    const count = Math.max(2, Math.round(length / 0.13));
+    for (let k = 0; k <= count; k++) result.pieces.push({ center: at((length * k) / count, 0.71), size: [0.018, 0.018, 1.5], angle });
+    for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.06, 1.6);
   } else if (look === 'rails') {
     for (const z of [0.35, 0.75, 1.15]) along(z, 0.05, 0.07);
     for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.11, 1.35);

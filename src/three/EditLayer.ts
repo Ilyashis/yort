@@ -37,7 +37,8 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { hashString } from '../utils/hash';
-import { chimneys, FENCE, FENCE_COLOR_HEX, fenceLookBoxes } from '../world/base/buildingDetails';
+import { chimneys, FENCE, FENCE_COLOR_HEX } from '../world/base/buildingDetails';
+import { fenceWithGates, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { findHouseModel } from '../world/village/houseModels';
 import { mirrorPartsX } from '../world/village/houseParts';
@@ -88,6 +89,7 @@ interface HandleStyle {
 }
 const CORNER_STYLE: HandleStyle = { size: 17, fill: '#ffffff', outline: '#1b1f27', ring: 2 };
 const ROTATE_STYLE: HandleStyle = { size: 19, fill: '#f5a524', outline: '#ffffff', ring: 2 };
+const GATE_STYLE: HandleStyle = { size: 21, fill: '#2f8fdc', outline: '#ffffff', ring: 2 };
 
 /** Докуда от угла дома (снаружи) тянется зона «повернуть», пикселей. */
 const ROTATE_RING_PX = 38;
@@ -99,7 +101,7 @@ const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
 )}") 13 13, alias`;
 
 /** Ручка выделенного дома: угол (растянуть) или поворот. */
-export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' };
+export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' } | { handle: 'gate'; index: number };
 
 /** Собранные меши правок; у треугольников стен и крыш — номер дома в ids. */
 interface Assembly {
@@ -136,6 +138,7 @@ export class EditLayer {
   private readonly modelCache = new Map<string, HouseMesh>();
   private readonly cornerPoints: Points;
   private readonly rotatePoints: Points;
+  private readonly gatePoints: Points;
   private main?: Assembly;
   private previewed?: Assembly;
   private line?: Line2;
@@ -161,8 +164,9 @@ export class EditLayer {
     this.houseMaterials = createHouseMaterials(city.csm);
     this.cornerPoints = handlePoints(CORNER_STYLE);
     this.rotatePoints = handlePoints(ROTATE_STYLE);
+    this.gatePoints = handlePoints(GATE_STYLE);
     this.group.name = 'edits';
-    this.group.add(this.cornerPoints, this.rotatePoints);
+    this.group.add(this.cornerPoints, this.rotatePoints, this.gatePoints);
     city.scene.add(this.group);
   }
 
@@ -226,17 +230,28 @@ export class EditLayer {
     }
     setPoints(this.cornerPoints, this.handleSpots.filter((s) => s.handle.handle === 'corner').map((s) => s.position));
     setPoints(this.rotatePoints, this.handleSpots.filter((s) => s.handle.handle === 'rotate').map((s) => s.position));
+    setPoints(this.gatePoints, []);
     this.city.requestRender();
   }
 
-  /** Ручки своего забора: по одной на каждом изломе. */
-  setLineHandles(line: readonly LonLat[]): void {
-    this.handleSpots = line.map((p, index) => {
-      const [x, y] = this.frame.toLocal(p);
-      return { handle: { handle: 'corner', index }, position: toThree(x, y, this.heightAt(x, y) + FENCE.street + 0.4), size: CORNER_STYLE.size };
-    });
-    setPoints(this.cornerPoints, this.handleSpots.map((s) => s.position));
+  /** Ручки своего забора: по одной на каждом изломе; синие — на воротах (тянуть вдоль забора). */
+  setLineHandles(line: readonly LonLat[], gates: readonly FenceGateSpec[] = []): void {
+    const local = line.map(this.frame.toLocal);
+    this.handleSpots = local.map(([x, y], index) => ({
+      handle: { handle: 'corner', index },
+      position: toThree(x, y, this.heightAt(x, y) + FENCE.street + 0.4),
+      size: CORNER_STYLE.size,
+    }));
+    const corners = this.handleSpots.map((s) => s.position);
+    const gateSpots = placeGates(local, gates).map((g) => ({
+      handle: { handle: 'gate', index: g.index } as Handle,
+      position: toThree(g.center[0], g.center[1], this.heightAt(g.center[0], g.center[1]) + 2.4),
+      size: GATE_STYLE.size,
+    }));
+    this.handleSpots.push(...gateSpots);
+    setPoints(this.cornerPoints, corners);
     setPoints(this.rotatePoints, []);
+    setPoints(this.gatePoints, gateSpots.map((s) => s.position));
     this.city.requestRender();
   }
 
@@ -295,7 +310,7 @@ export class EditLayer {
     this.removeLine(this.line);
     for (const line of this.highlights) this.removeLine(line);
     this.highlights = [];
-    for (const points of [this.cornerPoints, this.rotatePoints]) {
+    for (const points of [this.cornerPoints, this.rotatePoints, this.gatePoints]) {
       points.geometry.dispose();
       const material = points.material as PointsMaterial;
       material.map?.dispose();
@@ -461,11 +476,12 @@ export class EditLayer {
     const color = new Color(fence.color ?? FENCE_COLOR_HEX[hashString(id) % FENCE_COLOR_HEX.length]!);
     // У профнастила столбы — серая сталь, у остальных — то же дерево, темнее.
     const postColor = kind === 'profile' ? new Color('#6d7174') : color.clone().multiplyScalar(0.7);
-    for (let i = 1; i < line.length; i++) {
-      const { pieces, posts } = fenceLookBoxes(line[i - 1]!, line[i]!, kind);
-      for (const box of pieces) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), color, id);
-      for (const box of posts) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), postColor, id);
-    }
+    // Полотно с проёмами под ворота; створки — того же вида и цвета, столбы ворот — как столбы забора.
+    const { pieces, leaves, posts } = fenceWithGates(line, fence.gates ?? [], kind);
+    const leafColor = color.clone().multiplyScalar(0.78);
+    for (const box of pieces) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), color, id);
+    for (const box of leaves) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), leafColor, id);
+    for (const box of posts) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), postColor, id);
   }
 
   private addMesh(mesh: Mesh, name: string): Mesh {
@@ -548,6 +564,7 @@ export class EditLayer {
     const found = this.probe(clientX, clientY);
     if (!found) return undefined;
     if (found.handle.handle === 'rotate') return ROTATE_CURSOR;
+    if (found.handle.handle === 'gate') return 'ew-resize';
     return found.dx * found.dy > 0 ? 'nwse-resize' : 'nesw-resize';
   }
 

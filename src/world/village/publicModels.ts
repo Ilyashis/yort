@@ -868,6 +868,68 @@ function planGarage(o: HouseOptions): HousePlan {
   return finish('garage', parts, W, D, rect(W + t, D + t), { roof: roofColor, wall });
 }
 
+/**
+ * Пожарная часть (депо): кирпичное или оштукатуренное здание с одним-тремя боксами под красными воротами,
+ * сбоку — дежурка с окнами и дверью, надпись над воротами.
+ */
+function planFireStation(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 9500);
+  const W = clamp(o.width ?? 13, 9, 22);
+  const D = clamp(o.depth ?? 10, 8, 16);
+  const hp = 0.15, t = 0.3, wallH = 4.8;
+  const top = hp + wallH;
+  const wall = dice.pick([...BRICK_WHITE, '#ece6d6', ...BRICK_RED]);
+  const brick = BRICK_WHITE.includes(wall) || BRICK_RED.includes(wall);
+  const surface: Surface = brick ? 'brick' : 'plaster';
+  const trim = BRICK_RED.includes(wall) ? '#f1ece0' : '#b8302a';
+  const roofColor = dice.chance(0.5) ? dice.pick(SLATE) : dice.pick(['#7c3a2e', '#3a5f86', '#5a3e32']);
+  const roofSurface: Surface = SLATE.includes(roofColor) ? 'slate' : 'metal';
+  const walls = rectWalls(W, D);
+  const openings = emptyOpenings();
+  const parts: HousePart[] = [plinth(W + t + 0.08, D + t + 0.08, hp, '#a29d93')];
+  const style: WindowStyle = { trim: '#f2f0ea', accent: '#f2f0ea', frame: '#f2f0ea', top: 'none', apron: false, sash: 'modern' };
+
+  // Боксы слева, дежурка справа (3,6 м).
+  const office = 3.6;
+  const bays = clamp(Math.floor((W - office) / 4.2), 1, 3);
+  const bayW = (W - office) / bays;
+  const gw = Math.min(3.4, bayW - 0.8), gh = 3.5;
+  const gate = '#c0302a';
+  for (let i = 0; i < bays; i++) {
+    const u = bayW * (i + 0.5);
+    openings.front.push({ u0: u - gw / 2, u1: u + gw / 2, z0: hp, z1: hp + gh });
+    // Ворота: две створки с рядом окошек, щель, ручки.
+    for (const side of [-1, 1]) {
+      const uc = u + (side * gw) / 4;
+      parts.push(wallBox(walls.front, uc, t / 2 - 0.08, hp + gh / 2, [gw / 2 - 0.03, 0.05, gh], gate, 'metal'));
+      parts.push({ type: 'glass', center: at(walls.front, uc, t / 2 - 0.05, hp + gh * 0.74), size: [gw / 2 - 0.4, 0.02, 0.5], angle: 0, lit: dice.next(), curtain: false });
+      parts.push(wallBox(walls.front, u + side * 0.18, t / 2 - 0.04, hp + gh * 0.45, [0.05, 0.05, 0.4], '#2b2b2b'));
+    }
+    parts.push(wallBox(walls.front, u, t / 2 - 0.05, hp + gh / 2, [0.03, 0.03, gh], '#5a1814'));
+    parts.push(wallBox(walls.front, u, t / 2 + 0.03, hp + gh + 0.12, [gw + 0.3, 0.07, 0.2], trim));
+    // Пандус перед боксом.
+    parts.push({ type: 'box', center: [walls.front.x + u, -D / 2 - t / 2 - 0.9, 0.06], size: [gw + 0.6, 1.8, 0.12], color: '#8d8a84', surface: 'plaster' });
+  }
+  const ou = W - office / 2;
+  doorIn(parts, openings.front, walls.front, ou - 0.7, hp + 0.15, 0.95, 2.1, t / 2, '#7a4f33', '#f2f0ea');
+  windowIn(parts, openings.front, walls.front, ou + 0.8, hp + 1.0, 1.1, 1.4, { thickness: t }, style, dice);
+  for (const u of fitWindows(D, 1.1, false, 3)) windowIn(parts, openings.right, walls.right, u, hp + 1.0, 1.1, 1.4, { thickness: t }, style, dice);
+  for (const u of [W - office / 2, W * 0.3]) windowIn(parts, openings.back, walls.back, u, hp + 2.4, 1.2, 0.8, { thickness: t }, style, dice);
+  for (const key of ['front', 'right', 'back', 'left'] as const) parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, surface));
+  // Красный пояс под карнизом и надпись над воротами.
+  for (const f of Object.values(walls)) parts.push(wallBox(f, f.length / 2, t / 2 + 0.02, top - 0.25, [f.length + t, 0.05, 0.3], trim, 'wood'));
+  parts.push(...wallSign(walls.front, (W - office) / 2, t / 2, hp + gh + 0.62, Math.min(W - office - 0.6, 4.6), 0.5, 'ПОЖАРНАЯ ЧАСТЬ', '#b8302a', '#ffffff'));
+  parts.push({ type: 'box', center: [walls.front.x + ou - 0.7, -D / 2 - t / 2 - 0.5, hp / 2 + 0.05], size: [1.5, 1.0, hp + 0.1], color: '#a29d93', surface: 'plaster' });
+
+  const pitch = 20;
+  const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, side: 0.4, front: 0.45, back: 0.35, color: roofColor, surface: roofSurface });
+  parts.push(...roof.parts);
+  const gable = { top, ridge: roof.ridge, out: t / 2, side: 0.4, eave: roof.eave, color: wall, surface, trim: shade(wall, 0.85), towel: false };
+  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.45 }), ...gableEnd(walls.back, { ...gable, overhang: 0.35 }));
+
+  return finish('firestation', parts, W, D, rect(W + t, D + t), { roof: roofColor, wall });
+}
+
 export const PUBLIC_MODELS: HouseModel[] = [
   {
     id: 'mosque',
@@ -879,6 +941,17 @@ export const PUBLIC_MODELS: HouseModel[] = [
     width: { min: 7, value: 9, max: 14 },
     depth: { min: 8, value: 11, max: 18 },
     plan: withGround(planMosque),
+  },
+  {
+    id: 'firestation',
+    group: 'public',
+    name: 'Пожарная часть',
+    short: 'Пожарка',
+    summary: 'боксы · дежурка',
+    description: 'Сельская пожарная часть: один-три бокса под красными воротами, дежурка с окнами, и надпись «Пожарная часть» над воротами.',
+    width: { min: 9, value: 13, max: 22 },
+    depth: { min: 8, value: 10, max: 16 },
+    plan: withGround(planFireStation),
   },
   {
     id: 'garage',

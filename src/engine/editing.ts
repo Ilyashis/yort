@@ -145,6 +145,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     osmBuildings,
     yards: village?.yards ?? [],
     models: village?.models,
+    yardModels: village?.yardModels,
     mapFences: d.mapFences ?? [],
   });
 
@@ -207,7 +208,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     editLayer.highlight(lines);
     // У своего забора — ручки на изломах: точку можно тянуть, чуть снаружи — повернуть.
     const ownFence = selection?.type === 'fence' ? edits.fences.find((f) => f.id === selection.id) : undefined;
-    if (ownFence) editLayer.setLineHandles(ownFence.line);
+    if (ownFence) editLayer.setLineHandles(ownFence.line, ownFence.gates);
   };
 
   /** Правки → сцена: что скрыть из OSM, что дорисовать, кто мешает пешеходу. */

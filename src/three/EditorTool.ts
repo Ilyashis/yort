@@ -18,6 +18,7 @@ import { useUnderlayStore } from '../store/useUnderlayStore';
 import { hashString } from '../utils/hash';
 import type { BaseBuildingFeature } from '../world/base/types';
 import type { Yard } from '../world/base/yards';
+import { distanceAlong, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import {
   ROAD_KINDS,
   addFence,
@@ -81,7 +82,8 @@ type Drag =
   // Свой забор: перенос целиком, перенос одной точки, поворот вокруг середины.
   | { type: 'fmove'; id: string; original: Vec2[]; start: Vec2; current: Vec2[]; at: ScreenPoint }
   | { type: 'fvertex'; id: string; original: Vec2[]; index: number; current: Vec2[] }
-  | { type: 'frotate'; id: string; original: Vec2[]; center: Vec2; startAngle: number; current: Vec2[] };
+  | { type: 'frotate'; id: string; original: Vec2[]; center: Vec2; startAngle: number; current: Vec2[] }
+  | { type: 'fgate'; id: string; line: Vec2[]; index: number; gates: FenceGateSpec[] };
 
 export interface EditorContext {
   city: CityScene;
@@ -99,6 +101,8 @@ export interface EditorContext {
   yards: readonly Yard[];
   /** Деревня из моделей: дома OSM, нарисованные башкирскими домами (выбор, правка, скрытие). */
   models?: VillageModelsLayer;
+  /** Постройки во дворах с карты: гараж, баня, сарай. */
+  yardModels?: VillageModelsLayer;
   /** Заборы с карты (локальные метры): щелчок по такому забору берёт его в правку. */
   mapFences?: readonly { id: string; line: Vec2[] }[];
 }
@@ -145,7 +149,14 @@ export class EditorTool {
     const own = useEditStore.getState().edits.buildings.find((b) => b.id === id);
     if (own) return own;
     const info = this.ctx.base.buildingInfo(id);
-    if (!info || info.outline.length < 3) return undefined;
+    if (!info || info.outline.length < 3) {
+      // Постройка во дворе с карты — в правку моделью и её прямоугольником.
+      const yard = this.ctx.yardModels?.house(id);
+      const rect = yard && this.ctx.yardModels?.rectLonLat(id);
+      if (!yard || !rect) return undefined;
+      const shed: EditedBuilding = { id, source: id, kind: 'shed', footprint: rect, floors: 1, roof: 'gabled', facadeColor: '#9a8f7c', roofColor: '#6b7176' };
+      return withModel(shed, { id: yard.model, seed: yard.seed }, rect);
+    }
     const osm = fromOsm({
       id,
       building: info.props.building,
@@ -261,6 +272,14 @@ export class EditorTool {
       const last = drag.points[drag.points.length - 1]!;
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
       layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
+    } else if (drag.type === 'fgate') {
+      // Ворота едут вдоль забора: середина проёма — ближайшая к курсору точка линии.
+      const at = distanceAlong(drag.line, point);
+      drag.gates = drag.gates.map((g, i) => (i === drag.index ? { ...g, at } : g));
+      const { edits } = useEditStore.getState();
+      const fences = edits.fences.map((f) => (f.id === drag.id ? { ...f, gates: drag.gates } : f));
+      layer.render({ ...edits, fences }, undefined);
+      layer.setLineHandles(drag.line.map(this.ctx.frame.toLonLat), drag.gates);
     } else if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
       if (drag.type === 'fmove') drag.current = translate(drag.original, [point[0] - drag.start[0], point[1] - drag.start[1]]);
       else if (drag.type === 'fvertex') drag.current = drag.original.map((p, i) => (i === drag.index ? point : p));
@@ -297,12 +316,13 @@ export class EditorTool {
     const ownFence = editable && selection?.type === 'fence' ? useEditStore.getState().edits.fences.find((f) => f.id === selection.id) : undefined;
     let cursor: string | undefined;
     if (ownFence) {
-      // У забора: на точке — тянуть её, чуть снаружи — повернуть, на самой линии — двигать.
+      // У забора: на точке — тянуть её, чуть снаружи — повернуть, на воротах — двигать их, на линии — весь забор.
       const at = this.ctx.layer.cursorAt(position[0], position[1]);
       const point = this.ground(position);
       const line = ownFence.line.map(this.ctx.frame.toLocal);
       const near = !!point && line.some((p, i) => i > 0 && distanceToSegment(point, line[i - 1]!, p) < 1.5);
-      cursor = at ? (at.includes('resize') ? 'pointer' : at) : near ? 'move' : '';
+      // Синяя точка ворот — тянуть вдоль забора.
+      cursor = at ? (at === 'ew-resize' ? at : at.includes('resize') ? 'pointer' : at) : near ? 'move' : '';
     } else if (active) {
       // На углу — растянуть, снаружи угла — повернуть, на самом доме — двигать.
       cursor = this.ctx.layer.cursorAt(position[0], position[1]) ?? (this.pick(position).building === selection.id ? 'move' : '');
@@ -352,9 +372,19 @@ export class EditorTool {
       this.commitLine(drag.kind, simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3));
       return;
     }
+    if (drag.type === 'fgate') {
+      const fence = store.edits.fences.find((f) => f.id === drag.id);
+      // Ворота встают туда, где они на самом деле поместились (не через излом и не на соседние ворота).
+      const placed = placeGates(drag.line, drag.gates);
+      const gates = drag.gates.map((g, i) => ({ ...g, at: placed.find((p) => p.index === i)?.at ?? g.at }));
+      if (fence) store.commit(upsertFence(store.edits, { ...fence, gates }));
+      return;
+    }
     if (drag.type === 'fmove' || drag.type === 'fvertex' || drag.type === 'frotate') {
       if (drag.type === 'fmove' && screenDistance(drag.at, position) <= CLICK_PX) return;
-      if (drag.current !== drag.original) store.commit(upsertFence(store.edits, { id: drag.id, line: drag.current.map(this.ctx.frame.toLonLat) }));
+      const fence = store.edits.fences.find((f) => f.id === drag.id);
+      // Вид, цвет и ворота остаются при забору — меняется только линия.
+      if (fence && drag.current !== drag.original) store.commit(upsertFence(store.edits, { ...fence, line: drag.current.map(this.ctx.frame.toLonLat) }));
       return;
     }
     // Перетаскивание дома, поворот, растяжка.
@@ -378,6 +408,7 @@ export class EditorTool {
       if (!fence) return undefined;
       const original = fence.line.map(this.ctx.frame.toLocal);
       const handle = this.ctx.layer.hit(position[0], position[1]).handle;
+      if (handle?.handle === 'gate' && fence.gates?.[handle.index]) return { type: 'fgate', id: fence.id, line: original, index: handle.index, gates: fence.gates };
       if (handle?.handle === 'corner') return { type: 'fvertex', id: fence.id, original, index: handle.index, current: original };
       if (handle?.handle === 'rotate') {
         const center = centroidOf(original);
@@ -411,6 +442,12 @@ export class EditorTool {
 
     const point = this.ground(position);
     if (!point) return store.select(undefined);
+    // Свой забор — по близости к линии (сверху тонкий лист забора лучом почти не поймать).
+    const mine = store.edits.fences.find((f) => {
+      const line = f.line.map(this.ctx.frame.toLocal);
+      return line.some((p, i) => i > 0 && distanceToSegment(point, line[i - 1]!, p) < 1.5);
+    });
+    if (mine) return store.select({ type: 'fence', id: mine.id });
     // Забор с карты: берём его в правку — исходный прячется, появляется свой, который можно менять.
     const gone = new Set(store.edits.removedFences ?? []);
     const fromMap = (this.ctx.mapFences ?? []).find((f) => !gone.has(f.id) && f.line.some((p, i) => i > 0 && distanceToSegment(point, f.line[i - 1]!, p) < 1.5));
@@ -439,12 +476,12 @@ export class EditorTool {
    * побеждает ближайшее к камере; спрятанные слои не выбираются.
    */
   private pick([x, y]: ScreenPoint): { handle?: Handle; building?: string; fence?: string } {
-    const { city, layer, base, models } = this.ctx;
-    const objects = [...layer.pickables, ...base.pickables, ...(models?.pickables ?? [])].filter((object) => object.visible);
+    const { city, layer, base, models, yardModels } = this.ctx;
+    const objects = [...layer.pickables, ...base.pickables, ...(models?.pickables ?? []), ...(yardModels?.pickables ?? [])].filter((object) => object.visible);
     const intersection = city.pickObject(x, y, objects);
     const hit = layer.hit(x, y, intersection);
     if (hit.handle || hit.building || hit.fence) return hit;
-    const building = base.buildingFromPick(intersection)?.id ?? models?.buildingFromPick(intersection);
+    const building = base.buildingFromPick(intersection)?.id ?? models?.buildingFromPick(intersection) ?? yardModels?.buildingFromPick(intersection);
     return building ? { building } : {};
   }
 
@@ -662,6 +699,7 @@ export class EditorTool {
     const { edits } = useEditStore.getState();
     this.ctx.base.setHidden(new Set([...edits.removedBuildings, b.id]));
     this.ctx.models?.setHidden(new Set([...replacedOsmIds(edits), b.id]));
+    this.ctx.yardModels?.setHidden(new Set([...replacedOsmIds(edits), b.id]));
     this.ctx.layer.render(edits, undefined, b.id);
   }
 
@@ -670,6 +708,7 @@ export class EditorTool {
     const { edits, selection } = useEditStore.getState();
     this.ctx.base.setHidden(new Set(edits.removedBuildings));
     this.ctx.models?.setHidden(replacedOsmIds(edits));
+    this.ctx.yardModels?.setHidden(replacedOsmIds(edits));
     this.ctx.layer.render(edits, selection?.type === 'building' ? selection.id : undefined);
   }
 

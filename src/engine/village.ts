@@ -235,6 +235,8 @@ export interface VillageEdits {
 
 export interface VillageLayers {
   models?: VillageModelsLayer;
+  /** Постройки во дворах с карты (гараж, баня, сарай) — их тоже выбирают и правят. */
+  yardModels?: VillageModelsLayer;
   /** Дворы участков — редактору (выбор забора). */
   yards: Yard[];
   /** id дома OSM под лучом (дом-модель) и расстояние до него. */
@@ -264,6 +266,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
 
   return {
     models,
+    yardModels: estateModels,
     yards,
     pick: (raycaster) => {
       if (!models?.visible) return undefined;
@@ -286,7 +289,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
       const hidden = new Set([...removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]);
       models?.setHidden(replaced);
       estateLayer?.setHidden(hidden);
-      estateModels?.setHidden(new Set([...hidden].flatMap((id) => outbuildingsOf.get(id) ?? [])));
+      estateModels?.setHidden(new Set([...[...hidden].flatMap((id) => outbuildingsOf.get(id) ?? []), ...replaced]));
       gardens.setHidden(new Set(removedYards), new Set());
       return hidden;
     },
@@ -296,7 +299,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
     setVisible: (visible) => {
       for (const layer of [models, estateModels, estateLayer, gardens]) layer?.setVisible(visible);
     },
-    pickables: () => models?.pickables ?? [],
+    pickables: () => [...(models?.pickables ?? []), ...(estateModels?.pickables ?? [])],
     dispose: () => {
       models?.destroy();
       estateLayer?.destroy();

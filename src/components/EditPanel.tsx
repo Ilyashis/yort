@@ -4,6 +4,7 @@ import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { hashString } from '../utils/hash';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
+import { cumulative, defaultGateAt, GATE_KINDS, GATE_ORDER, placeGates, type FenceGateSpec } from '../world/base/fenceGates';
 import {
   BUILDING_KINDS,
   FENCE_KINDS,
@@ -27,6 +28,7 @@ import {
   type EditRoadKind,
   type EditRoof,
   type EditedBuilding,
+  type EditedFence,
   type FenceKind,
 } from '../world/edit/edits';
 
@@ -37,6 +39,13 @@ const ROOFS: { roof: EditRoof; label: string }[] = [
   { roof: 'hipped', label: 'Вальмовая' },
 ];
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
+
+/** Линия забора в метрах (для ворот важны только длины по линии). */
+const metres = (line: readonly [number, number][]): [number, number][] => {
+  const [lon0, lat0] = line[0] ?? [0, 0];
+  const kx = 111_320 * Math.cos((lat0 * Math.PI) / 180);
+  return line.map(([lon, lat]) => [(lon - lon0) * kx, (lat - lat0) * 111_320]);
+};
 
 const fmt = (v: number) => v.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
@@ -94,6 +103,7 @@ export function EditPanel() {
     if (!building) return null;
     const own = edits.buildings.some((b) => b.id === selection.id);
     const fromOsm = !!building.source;
+    const fromMap = !!building.source?.startsWith('render/');
     const update = (patch: Partial<EditedBuilding>) => commit(upsertBuilding(useEditStore.getState().edits, { ...building, ...patch }));
     const lift = edits.plotLifts?.[plotKey(building)] ?? 0;
     const setLift = (value: number) => commit(setPlotLift(useEditStore.getState().edits, plotKey(building), value));
@@ -118,7 +128,7 @@ export function EditPanel() {
         {close}
         <h2>{model ? model.name : BUILDING_KINDS[building.kind].label}</h2>
         <p className="muted">
-          {fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью; белые точки — растянуть,
+          {fromMap ? (own ? 'Постройка с карты — изменена вами' : 'Постройка во дворе с карты') : fromOsm ? (own ? 'Дом из OSM — изменён вами' : 'Дом из OpenStreetMap') : 'Ваш дом'} · тяните его мышью; белые точки — растянуть,
           чуть снаружи угла — повернуть
         </p>
 
@@ -408,6 +418,7 @@ export function EditPanel() {
           </div>
         </div>
       )}
+      {ownFence && <FenceGates fence={ownFence} />}
       {ownFence && (
         <div className="field">
           <span>Повернуть забор</span>
@@ -438,3 +449,52 @@ export function EditPanel() {
   );
 }
 
+
+/** Ворота и калитки своего забора: включить или убрать каждый вид, сдвинуть вдоль забора. */
+function FenceGates({ fence }: { fence: EditedFence }) {
+  const commit = useEditStore((s) => s.commit);
+  const notify = useEditStore((s) => s.notify);
+  const local = metres(fence.line);
+  const total = cumulative(local).at(-1) ?? 0;
+  const gates = fence.gates ?? [];
+  const placed = placeGates(local, gates);
+  const setGates = (next: FenceGateSpec[]) => commit(upsertFence(useEditStore.getState().edits, { ...fence, gates: next }));
+  const toggle = (kind: FenceGateSpec['kind']) => {
+    const index = gates.findIndex((g) => g.kind === kind);
+    if (index >= 0) return setGates(gates.filter((_, i) => i !== index));
+    const at = defaultGateAt(local, kind, gates);
+    if (at === undefined) return notify(`${GATE_KINDS[kind].label} (${fmt(GATE_KINDS[kind].width)} м) здесь не помещается — нужен прямой участок забора подлиннее`);
+    setGates([...gates, { kind, at }]);
+  };
+  return (
+    <div className="field">
+      <span>Ворота и калитки</span>
+      <div className="segmented segmented-small segmented-grid" role="group" aria-label="Ворота и калитки">
+        {GATE_ORDER.map((kind) => (
+          <button key={kind} type="button" title={GATE_KINDS[kind].hint} className={gates.some((g) => g.kind === kind) ? 'active' : ''} onClick={() => toggle(kind)}>
+            {GATE_KINDS[kind].label}
+          </button>
+        ))}
+      </div>
+      {gates.map((gate, i) => {
+        const place = placed.find((p) => p.index === i);
+        return (
+          <label key={gate.kind} className="field">
+            <span>
+              {GATE_KINDS[gate.kind].label} — {place ? `${fmt(place.at)} м от начала` : 'не помещается, сдвиньте'}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0.1, total)}
+              step={0.1}
+              value={place?.at ?? gate.at}
+              onChange={(e) => setGates(gates.map((g, j) => (j === i ? { ...g, at: Number(e.target.value) } : g)))}
+            />
+          </label>
+        );
+      })}
+      {gates.length > 0 && <p className="muted">Синие точки над забором — ворота: тяните их мышью вдоль забора.</p>}
+    </div>
+  );
+}
