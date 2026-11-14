@@ -37,7 +37,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { hashString } from '../utils/hash';
-import { chimneys, FENCE, FENCE_COLOR_HEX, fenceBoxes } from '../world/base/buildingDetails';
+import { chimneys, FENCE, FENCE_COLOR_HEX, fenceLookBoxes } from '../world/base/buildingDetails';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { findHouseModel } from '../world/village/houseModels';
 import { mirrorPartsX } from '../world/village/houseParts';
@@ -333,10 +333,10 @@ export class EditLayer {
       }
       this.addBuilding(building, index, tint, walls, roofs, extras);
     });
-    const fenceLines = fences.map(({ id, line }) => {
-      const local = line.map(this.frame.toLocal);
-      this.addFence(id, local, fenceParts);
-      return { id, line: local };
+    const fenceLines = fences.map((fence) => {
+      const local = fence.line.map(this.frame.toLocal);
+      this.addFence(fence, local, fenceParts);
+      return { id: fence.id, line: local };
     });
     return {
       walls: walls.vertexCount ? this.addMesh(new Mesh(walls.geometry(), this.wallMaterial), `${name}-walls`) : undefined,
@@ -455,11 +455,14 @@ export class EditLayer {
   }
 
   /** Забор по линии: доски кусками (каждый — на своей высоте земли) и столбы. */
-  private addFence(id: string, line: readonly Vec2[], builder: MergedBuilder): void {
-    const color = new Color(FENCE_COLOR_HEX[hashString(id) % FENCE_COLOR_HEX.length]!);
-    const postColor = color.clone().multiplyScalar(0.7);
+  private addFence(fence: EditedFence, line: readonly Vec2[], builder: MergedBuilder): void {
+    const id = fence.id;
+    const kind = fence.kind ?? 'boards';
+    const color = new Color(fence.color ?? FENCE_COLOR_HEX[hashString(id) % FENCE_COLOR_HEX.length]!);
+    // У профнастила столбы — серая сталь, у остальных — то же дерево, темнее.
+    const postColor = kind === 'profile' ? new Color('#6d7174') : color.clone().multiplyScalar(0.7);
     for (let i = 1; i < line.length; i++) {
-      const { pieces, posts } = fenceBoxes(line[i - 1]!, line[i]!, FENCE.street, true);
+      const { pieces, posts } = fenceLookBoxes(line[i - 1]!, line[i]!, kind);
       for (const box of pieces) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), color, id);
       for (const box of posts) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), postColor, id);
     }

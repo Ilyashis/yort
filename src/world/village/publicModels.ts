@@ -767,7 +767,130 @@ function planGreenhouse(o: HouseOptions): HousePlan {
 
 // --- каталог ------------------------------------------------------------------------------------
 
+/**
+ * Мечеть: побелённый или кирпичный молельный зал под вальмовой крышей, высокие арочные окна, вход с улицы,
+ * михраб-выступ на задней стене и минарет у входа — восьмигранный ствол, балкон, шатёр с полумесяцем.
+ */
+function planMosque(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 9100);
+  const W = clamp(o.width ?? 9, 7, 14);
+  const D = clamp(o.depth ?? 11, 8, 18);
+  const hp = 0.5, t = 0.3, wallH = 4.2;
+  const top = hp + wallH;
+  const wall = dice.pick([...BRICK_WHITE, '#ece6d6', '#dfe6e6', ...BRICK_RED]);
+  const brick = BRICK_RED.includes(wall);
+  const roofColor = dice.pick(['#2f6f4f', '#2f6f6a', '#3a5f86', '#4a7a56']);
+  const trim = brick ? '#f1ece0' : dice.pick(['#2f6f4f', '#3a5f86', '#2f6f6a']);
+  const walls = rectWalls(W, D);
+  const openings = emptyOpenings();
+  const parts: HousePart[] = [plinth(W + t + 0.1, D + t + 0.1, hp, dice.pick(['#a29d93', '#928d83', '#b0a99c']))];
+  const style: WindowStyle = { trim, accent: trim, frame: '#f1ece0', top: 'arch', apron: false, sash: 'modern' };
+  const sides = Math.max(2, Math.min(4, Math.floor(D / 3.2)));
+  for (const key of ['left', 'right'] as const) {
+    for (let i = 0; i < sides; i++) windowIn(parts, openings[key], walls[key], (D * (i + 0.5)) / sides, hp + 1.0, 0.8, 1.9, { thickness: t }, style, dice);
+  }
+  for (const u of [W * 0.2, W * 0.8]) windowIn(parts, openings.front, walls.front, u, hp + 1.0, 0.75, 1.9, { thickness: t }, style, dice);
+  doorIn(parts, openings.front, walls.front, W / 2, hp, 1.3, 2.3, t / 2, dice.pick(['#5a3e2b', '#2f5f4a', '#3a4f6b']), trim);
+  for (const key of ['front', 'right', 'back', 'left'] as const) {
+    parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, brick ? 'brick' : 'plaster'));
+  }
+  // Карниз под крышей и ступени входа.
+  parts.push(
+    wallBox(walls.front, W / 2, t / 2 + 0.02, top - 0.12, [W + t, 0.05, 0.24], trim),
+    wallBox(walls.back, W / 2, t / 2 + 0.02, top - 0.12, [W + t, 0.05, 0.24], trim),
+    wallBox(walls.left, D / 2, t / 2 + 0.02, top - 0.12, [D + t, 0.05, 0.24], trim),
+    wallBox(walls.right, D / 2, t / 2 + 0.02, top - 0.12, [D + t, 0.05, 0.24], trim),
+    { type: 'box', center: [0, -D / 2 - t / 2 - 0.9, hp / 2], size: [2.6, 1.8, hp], color: '#a29d93', surface: 'plaster' },
+    { type: 'box', center: [0, -D / 2 - t / 2 - 2.0, hp / 4], size: [2.6, 0.5, hp / 2], color: '#a29d93', surface: 'plaster' },
+  );
+  parts.push(...wallSign(walls.front, W / 2, t / 2, hp + 3.2, 1.7, 0.42, 'МЕЧЕТЬ', '#1f6b4a', '#ffffff'));
+  // Михраб — выступ на задней стене (в сторону от улицы).
+  parts.push(
+    { type: 'box', center: [0, D / 2 + t / 2 + 0.55, hp / 2], size: [2.2, 1.1, hp], color: '#a29d93', surface: 'plaster' },
+    { type: 'box', center: [0, D / 2 + t / 2 + 0.5, hp + 1.5], size: [2.0, 1.0, 3.0], color: wall, surface: brick ? 'brick' : 'plaster' },
+    { type: 'cylinder', from: [0, D / 2 + t / 2 + 0.5, hp + 3.0], to: [0, D / 2 + t / 2 + 0.5, hp + 3.9], radius: 1.0, radiusTop: 0.05, segments: 8, color: roofColor, surface: 'metal' },
+  );
+  const pitch = 30;
+  parts.push(...hipRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, overhang: 0.5, color: roofColor, surface: 'metal' }).parts);
+  // Минарет у правого переднего угла.
+  const mx = W / 2 - 0.2, my = -D / 2 - t / 2 - 1.0;
+  const shaft = 10.5 + (W - 9) * 0.25;
+  parts.push(
+    { type: 'box', center: [mx, my, hp / 2], size: [2.0, 2.0, hp], color: '#a29d93', surface: 'plaster' },
+    { type: 'box', center: [mx, my, hp + 1.6], size: [1.8, 1.8, 3.2], color: wall, surface: brick ? 'brick' : 'plaster' },
+    { type: 'cylinder', from: [mx, my, hp + 3.2], to: [mx, my, shaft], radius: 0.72, radiusTop: 0.62, segments: 8, color: wall, surface: brick ? 'brick' : 'plaster', caps: false },
+    { type: 'cylinder', from: [mx, my, shaft - 2.3], to: [mx, my, shaft - 2.05], radius: 1.15, segments: 8, color: trim, caps: trim },
+    { type: 'cylinder', from: [mx, my, shaft - 2.05], to: [mx, my, shaft - 1.25], radius: 1.1, radiusTop: 1.1, segments: 8, color: shade(trim, 0.85), surface: 'boards', caps: false },
+    { type: 'cylinder', from: [mx, my, shaft], to: [mx, my, shaft + 0.2], radius: 0.95, segments: 8, color: trim, caps: trim },
+    { type: 'cylinder', from: [mx, my, shaft + 0.2], to: [mx, my, shaft + 3.2], radius: 0.9, radiusTop: 0.04, segments: 8, color: roofColor, surface: 'metal', caps: false },
+    { type: 'cylinder', from: [mx, my, shaft + 3.2], to: [mx, my, shaft + 3.9], radius: 0.03, segments: 6, color: '#d9b23a' },
+    { type: 'blob', center: [mx, my, shaft + 4.1], radii: [0.24, 0.05, 0.24], color: '#e2bd45', detail: 0 },
+  );
+  return finish('mosque', parts, W, D, rect(W + t, D + t), { roof: roofColor, wall });
+}
+
+/** Гараж: кирпичная или металлическая коробка с широкими двустворчатыми воротами на улицу, пологая крыша. */
+function planGarage(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 9300);
+  const W = clamp(o.width ?? 4, 3, 8);
+  const D = clamp(o.depth ?? 6, 4.5, 9);
+  const base = 0.12, t = 0.22;
+  const metal = dice.chance(0.45);
+  const wall = metal ? dice.pick(['#8f9392', '#6f8a78', '#5f7f9a', '#9a8f7c']) : dice.pick([...BRICK_RED, ...BRICK_WHITE]);
+  const surface: Surface = metal ? 'metal' : 'brick';
+  const top = base + 2.5 + dice.next() * 0.3;
+  const roofColor = dice.chance(0.5) ? dice.pick(SLATE) : dice.pick(METAL_ROOFS);
+  const roofSurface: Surface = SLATE.includes(roofColor) ? 'slate' : 'metal';
+  const walls = rectWalls(W, D);
+  const openings = emptyOpenings();
+  const parts: HousePart[] = [plinth(W + t + 0.06, D + t + 0.06, base, '#928d83')];
+  // Ворота почти во всю ширину: проём в стене, две створки, щель между ними, петли и засов.
+  const gw = Math.min(W - 0.7, 3.0), gh = Math.min(2.2, top - base - 0.25);
+  openings.front.push({ u0: W / 2 - gw / 2, u1: W / 2 + gw / 2, z0: base, z1: base + gh });
+  for (const key of ['front', 'right', 'back', 'left'] as const) parts.push(...solidWall(walls[key], base, top - base, t, openings[key], wall, surface));
+  const gate = dice.pick(['#6b7a86', '#7a4f33', '#3e6b52', '#8a3b30', '#55606b']);
+  const dark = shade(gate, 0.6);
+  parts.push(
+    wallBox(walls.front, W / 2 - gw / 4, t / 2 - 0.06, base + gh / 2, [gw / 2 - 0.02, 0.05, gh], gate, 'metal'),
+    wallBox(walls.front, W / 2 + gw / 4, t / 2 - 0.06, base + gh / 2, [gw / 2 - 0.02, 0.05, gh], gate, 'metal'),
+    wallBox(walls.front, W / 2, t / 2 - 0.02, base + gh / 2, [0.03, 0.03, gh], '#1f1f1f'),
+    wallBox(walls.front, W / 2, t / 2 - 0.01, base + gh * 0.5, [0.55, 0.04, 0.07], dark),
+    wallBox(walls.front, W / 2, t / 2 + 0.02, base + gh + 0.12, [gw + 0.3, 0.06, 0.18], shade(wall, 0.8)),
+  );
+  for (const side of [-1, 1]) {
+    for (const k of [0.2, 0.8]) parts.push(wallBox(walls.front, W / 2 + side * (gw / 2 - 0.12), t / 2 - 0.01, base + gh * k, [0.22, 0.04, 0.06], dark));
+  }
+  const pitch = 12 + dice.next() * 8;
+  const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, side: 0.25, front: 0.35, back: 0.2, color: roofColor, surface: roofSurface });
+  parts.push(...roof.parts);
+  const gable = { top, ridge: roof.ridge, out: t / 2, side: 0.25, eave: roof.eave, color: wall, surface, trim: shade(wall, 0.8), towel: false };
+  parts.push(...gableEnd(walls.front, { ...gable, overhang: 0.35 }), ...gableEnd(walls.back, { ...gable, overhang: 0.2 }));
+  return finish('garage', parts, W, D, rect(W + t, D + t), { roof: roofColor, wall });
+}
+
 export const PUBLIC_MODELS: HouseModel[] = [
+  {
+    id: 'mosque',
+    group: 'public',
+    name: 'Мечеть',
+    short: 'Мечеть',
+    summary: 'молельный зал · минарет',
+    description: 'Сельская мечеть: молельный зал под вальмовой крышей с высокими арочными окнами, вход с улицы, михраб на задней стене и минарет с балконом и шатром под полумесяцем.',
+    width: { min: 7, value: 9, max: 14 },
+    depth: { min: 8, value: 11, max: 18 },
+    plan: withGround(planMosque),
+  },
+  {
+    id: 'garage',
+    group: 'small',
+    name: 'Гараж',
+    short: 'Гараж',
+    summary: 'кирпич или металл · ворота',
+    description: 'Гараж на одну машину: кирпичная или металлическая коробка с широкими двустворчатыми воротами на улицу и пологой двускатной крышей.',
+    width: { min: 3, value: 4, max: 8 },
+    depth: { min: 4.5, value: 6, max: 9 },
+    plan: withGround(planGarage),
+  },
   {
     id: 'school',
     group: 'public',

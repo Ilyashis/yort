@@ -245,6 +245,45 @@ export interface FenceBoxes {
   posts: DetailBox[];
 }
 
+/** Вид забора — как в правках (edits.ts FenceKind). */
+export type FenceLook = 'boards' | 'picket' | 'profile' | 'rails';
+
+/**
+ * Коробки забора нужного вида вдоль отрезка p→q: panels — доски, штакетины, листы или жерди; posts — столбы.
+ * Каждая коробка ставится на свою высоту земли, поэтому длинные детали режутся кусками не длиннее 5 м.
+ */
+export function fenceLookBoxes(p: Vec2, q: Vec2, look: FenceLook): FenceBoxes {
+  if (look === 'boards') return fenceBoxes(p, q, FENCE.street, true);
+  const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+  const result: FenceBoxes = { pieces: [], posts: [] };
+  if (length < 0.3) return result;
+  const dir: Vec2 = [(q[0] - p[0]) / length, (q[1] - p[1]) / length];
+  const angle = Math.atan2(dir[1], dir[0]);
+  const at = (t: number, z: number): Vec3 => [p[0] + dir[0] * t, p[1] + dir[1] * t, z];
+  const chunks = Math.ceil(length / FENCE.piece);
+  const chunk = length / chunks;
+  /** Горизонтальная деталь во всю длину (кусками): низ на высоте z, толщина и высота. */
+  const along = (z: number, thickness: number, height: number) => {
+    for (let k = 0; k < chunks; k++) result.pieces.push({ center: at(chunk * (k + 0.5), z + height / 2), size: [chunk, thickness, height], angle });
+  };
+  const post = (t: number, side: number, height: number) => result.posts.push({ center: at(t, height / 2 - 0.1), size: [side, side, height + 0.2], angle });
+  if (look === 'profile') {
+    // Сплошной лист 1,9 м, чуть над землёй; столбы — тонкая стальная труба через 2,5 м.
+    along(-0.1, 0.03, 2.0);
+    for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.07, 2.0);
+  } else if (look === 'rails') {
+    for (const z of [0.35, 0.75, 1.15]) along(z, 0.05, 0.07);
+    for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.11, 1.35);
+  } else {
+    // Штакетник: две прожилины и штакетины через 0,16 м.
+    for (const z of [0.25, 0.8]) along(z, 0.04, 0.07);
+    const count = Math.max(2, Math.round(length / 0.16));
+    for (let k = 0; k <= count; k++) result.pieces.push({ center: at((length * k) / count, 0.5), size: [0.08, 0.025, 1.1], angle });
+    for (let t = 0; t <= length + 1e-6; t += 2.5) post(t, 0.09, 1.15);
+  }
+  return result;
+}
+
 /** Коробки забора вдоль отрезка p→q (z — от земли в центре коробки); posts — со столбами. */
 export function fenceBoxes(p: Vec2, q: Vec2, height: number, posts: boolean): FenceBoxes {
   const result: FenceBoxes = { pieces: [], posts: [] };

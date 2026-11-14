@@ -108,7 +108,7 @@ describe('модели башкирских домов', () => {
   it('у домов и общественных зданий есть окна, у юрты, остановки, туалета, колодца, сарая и теплицы — нет', () => {
     for (const model of HOUSE_MODELS) {
       const glass = model.plan().parts.filter((p) => p.type === 'glass').length;
-      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'greenhouse'].includes(model.id)) expect(glass).toBe(0);
+      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'greenhouse', 'garage'].includes(model.id)) expect(glass).toBe(0);
       else expect(glass).toBeGreaterThan(model.id === 'banya' ? 0 : model.id === 'shop' ? 2 : 4);
     }
   });

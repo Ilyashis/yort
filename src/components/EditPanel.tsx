@@ -6,6 +6,8 @@ import { hashString } from '../utils/hash';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import {
   BUILDING_KINDS,
+  FENCE_KINDS,
+  FENCE_PAINTS,
   FACADE_COLORS,
   ROAD_KINDS,
   ROOF_COLORS,
@@ -25,6 +27,7 @@ import {
   type EditRoadKind,
   type EditRoof,
   type EditedBuilding,
+  type FenceKind,
 } from '../world/edit/edits';
 
 const KINDS = Object.keys(BUILDING_KINDS) as EditBuildingKind[];
@@ -377,6 +380,34 @@ export function EditPanel() {
       {close}
       <h2>Забор</h2>
       <p className="muted">{own ? 'Тяните забор мышью, чтобы подвинуть; белые точки — изломы, их можно тянуть по одной; чуть снаружи точки — повернуть' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
+      {ownFence && (
+        <div className="field">
+          <span>Вид забора</span>
+          <div className="segmented segmented-small segmented-grid" role="group" aria-label="Вид забора">
+            {(Object.keys(FENCE_KINDS) as FenceKind[]).map((kind) => (
+              <button
+                key={kind} type="button" title={FENCE_KINDS[kind].hint} className={(ownFence.kind ?? 'boards') === kind ? 'active' : ''}
+                onClick={() => commit(upsertFence(useEditStore.getState().edits, { ...ownFence, kind }))}
+              >
+                {FENCE_KINDS[kind].label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {ownFence && (
+        <div className="field">
+          <span>Цвет</span>
+          <div className="swatches" role="group" aria-label="Цвет забора">
+            {FENCE_PAINTS.map((color) => (
+              <button
+                key={color} type="button" aria-label={color} className={ownFence.color === color ? 'active' : ''} style={{ background: color }}
+                onClick={() => commit(upsertFence(useEditStore.getState().edits, { ...ownFence, color }))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {ownFence && (
         <div className="field">
           <span>Повернуть забор</span>

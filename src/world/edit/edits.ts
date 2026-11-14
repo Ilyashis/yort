@@ -54,9 +54,26 @@ export interface EditedRoad {
   axis: LonLat[];
 }
 
+/** Вид забора: сплошной дощатый, штакетник, профнастил на металлических столбах, жерди. */
+export type FenceKind = 'boards' | 'picket' | 'profile' | 'rails';
+
+export const FENCE_KINDS: Record<FenceKind, { label: string; hint: string }> = {
+  boards: { label: 'Доски', hint: 'Сплошной дощатый забор' },
+  picket: { label: 'Штакетник', hint: 'Невысокий штакетник с просветами' },
+  profile: { label: 'Профнастил', hint: 'Высокий забор из профлиста на металлических столбах' },
+  rails: { label: 'Жерди', hint: 'Столбы и три жерди — ограда огорода или выгона' },
+};
+
+/** Краски заборов: дерево некрашеное и морёное, серый, зелёный, синий, охра, коричневый, красный, белый. */
+export const FENCE_PAINTS = ['#8a6a48', '#7a5a3e', '#857f73', '#5f7f4f', '#5b7b97', '#a8874f', '#6b4a3a', '#8a3b30', '#e6e0d2', '#3f5f7a'];
+
 export interface EditedFence {
   id: string;
   line: LonLat[];
+  /** Вид забора; нет — дощатый. */
+  kind?: FenceKind;
+  /** Цвет (#rrggbb); нет — подбирается по id. */
+  color?: string;
 }
 
 export interface Edits {
@@ -319,7 +336,12 @@ export function parseEdits(value: unknown): Edits | undefined {
     removedRoads: strings(v.removedRoads),
     fences: arr<EditedFence>(v.fences)
       .filter((f) => f && typeof f.id === 'string')
-      .map((f) => ({ ...f, line: points(f.line) }))
+      .map((f) => ({
+        id: f.id,
+        line: points(f.line),
+        ...(typeof f.kind === 'string' && f.kind in FENCE_KINDS ? { kind: f.kind } : {}),
+        ...(typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? { color: f.color } : {}),
+      }))
       .filter((f) => f.line.length >= 2),
     removedYards: strings(v.removedYards),
     removedFences: strings(v.removedFences),

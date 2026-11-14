@@ -160,7 +160,7 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
   // баня — баней. Прямоугольник ставится фасадом к ближайшей улице.
   const outbuildings: VillageHouse[] = world.yardBuildings.map((b) => ({
     id: b.id,
-    model: b.kind === 'banya' ? 'banya' : 'shed',
+    model: b.kind === 'banya' ? 'banya' : b.kind === 'garage' ? 'garage' : 'shed',
     seed: 1 + (hashString(b.id) % VILLAGE_VARIANTS),
     rect: modelFootprint(ringLocal(b.ring), roadLines),
   }));
