@@ -8,6 +8,9 @@ import { DEFAULT_TIME } from '../three/dayNight';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../world/base/heightGrid';
 import { readPref, writePref } from '../utils/prefs';
+
+/** Варианты усиления рельефа в панели. */
+export const RELIEF_SCALES = [1, 1.2, 1.5, 2, 3] as const;
 import type { BuildingColorMode } from '../world/base/buildingPlan';
 import type { BaseBuildingProperties, BaseBuildingsStats } from '../world/base/types';
 import type { UserBuilding } from '../world/user/userBuildings';
@@ -158,6 +161,8 @@ interface AppState {
   outlines: boolean;
   /** Уточнения по своей съёмке с дрона: рельеф, цвета домов, новые постройки (запоминается в браузере). */
   surveyOn: boolean;
+  /** Во сколько раз усилить перепады рельефа (для сравнения; 1 — как в данных). */
+  reliefScale: number;
   /** Что из съёмки есть у этого района (undefined — съёмки нет). */
   survey?: { terrain: boolean; colored: number; added: number };
   /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
@@ -201,6 +206,7 @@ interface AppState {
   setBlur: (on: boolean) => void;
   setOutlines: (on: boolean) => void;
   setSurveyOn: (on: boolean) => void;
+  setReliefScale: (scale: number) => void;
   setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setDriveControls: (controls: DriveControls | undefined) => void;
@@ -245,6 +251,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
   surveyOn: readPref('survey', ['on', 'off'] as const, 'on') === 'on',
+  reliefScale: Number(readPref('relief', RELIEF_SCALES.map(String), '1')),
   walkMouseLocked: false,
   driveHud: { speed: 0, gear: 'N' },
   driveView: 'chase',
@@ -330,6 +337,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setSurveyOn: (surveyOn) => {
     writePref('survey', surveyOn ? 'on' : 'off');
     set({ surveyOn });
+  },
+  setReliefScale: (reliefScale) => {
+    writePref('relief', String(reliefScale));
+    set({ reliefScale });
   },
   setSurvey: (survey) => set({ survey }),
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),

@@ -1,3 +1,4 @@
+import type { Vector3 } from 'three';
 import { buffer, lineString } from '@turf/turf';
 import { useEffect, useRef, useState } from 'react';
 import { Soundscape } from '../audio/Soundscape';
@@ -53,6 +54,9 @@ import { StreetIndex } from '../world/walk/streets';
 import { chooseVillageModel, growRect, modelFacadeShift, type VillageHouse } from '../world/village/villagePlan';
 import { VillageModelsLayer } from '../three/VillageModelsLayer';
 import { FrontGardensLayer, type GardenSite } from '../three/FrontGardensLayer';
+
+/** Камера при пересборке сцены (смена рельефа, съёмки, плана): тот же район открывается с того же места. */
+let keptView: { territory: string; position: Vector3; target: Vector3 } | undefined;
 
 /** Рельеф района: сетка DEM из terrain.json; нет файла — плоская земля. */
 async function loadHeights(territory: Territory, survey: boolean): Promise<{ heightAt: (lon: number, lat: number) => number; kind: TerrainKind; credit?: string; detail?: DetailHeights }> {
@@ -210,8 +214,13 @@ export function CityViewer({ territory }: { territory: Territory }) {
     async function init() {
       store.setStatus('loading');
       const surveyOn = useAppStore.getState().surveyOn;
-      const heights = await loadHeights(territory, surveyOn);
+      const loaded = await loadHeights(territory, surveyOn);
       if (disposed) return;
+      // Усиление рельефа (настройка «Рельеф ×k»): перепады от высоты центра района умножаются на k.
+      const k = useAppStore.getState().reliefScale;
+      const { south: s0, west: w0, north: n0, east: e0 } = territory.bbox;
+      const h0 = loaded.heightAt((w0 + e0) / 2, (s0 + n0) / 2);
+      const heights = k === 1 ? loaded : { ...loaded, heightAt: (lon: number, lat: number) => h0 + (loaded.heightAt(lon, lat) - h0) * k };
       store.setTerrain(heights.kind);
       setCredit(heights.credit);
 
@@ -260,7 +269,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
           if (state.timeFlowing && !prev.timeFlowing) c.requestRender();
         }),
       });
-      setIntroView(c, territory, frame, localHeight);
+      // Пересборка того же района (рельеф, съёмка, план) — камера остаётся, где была.
+      const kept = keptView?.territory === territory.id ? keptView : undefined;
+      keptView = undefined;
+      if (kept) c.setView(kept.position, kept.target);
+      else setIntroView(c, territory, frame, localHeight);
       store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5));
 
       const [osmCollection, buildingParts, environment, surveyFile] = await Promise.all([
@@ -901,7 +914,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
       store.setStatus('ready');
       // Всё загружено — плавный пролёт к району.
-      flyToTerritory(c, territory, frame, localHeight, 3.2);
+      if (!kept) flyToTerritory(c, territory, frame, localHeight, 3.2);
     }
 
     init().catch((error: unknown) => {
@@ -923,6 +936,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       disposed = true;
       window.removeEventListener('keydown', onKeyDown);
       for (const item of owned.reverse()) item.destroy();
+      if (city) keptView = { territory: territory.id, position: city.camera.position.clone(), target: city.target.clone() };
       city?.dispose();
       store.setFlyHome(undefined);
       store.setPlotControls(undefined);

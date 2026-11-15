@@ -23,11 +23,12 @@ export function App() {
   const surveyOn = useAppStore((s) => s.surveyOn);
   // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
   const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
+  const reliefScale = useAppStore((s) => s.reliefScale);
 
   return (
     <main className="app">
       {/* Свой ключ у каждого населённого пункта: при переключении сцена собирается заново. */}
-      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}`} territory={territory} />
+      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}:${reliefScale}`} territory={territory} />
       {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
       <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
         <div className="intro-title">

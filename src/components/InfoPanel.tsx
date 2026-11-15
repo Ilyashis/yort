@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
-import { useAppStore } from '../store/useAppStore';
+import { RELIEF_SCALES, useAppStore } from '../store/useAppStore';
 import { readPref, writePref } from '../utils/prefs';
 import { BUILDING_COLORS } from '../world/base/buildingPlan';
 
@@ -24,6 +24,8 @@ export function InfoPanel() {
   const survey = useAppStore((s) => s.survey);
   const surveyOn = useAppStore((s) => s.surveyOn);
   const setSurveyOn = useAppStore((s) => s.setSurveyOn);
+  const reliefScale = useAppStore((s) => s.reliefScale);
+  const setReliefScale = useAppStore((s) => s.setReliefScale);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
   // Панель можно свернуть до выбора места — сцене больше места (запоминается).
@@ -93,6 +95,15 @@ export function InfoPanel() {
               </div>
             </dl>
           )}
+
+          <div className="relief-scale" title="Усилить перепады высот, чтобы сравнить. Сцена пересоберётся, камера останется на месте">
+            <span>Рельеф</span>
+            {RELIEF_SCALES.map((k) => (
+              <button key={k} type="button" className={k === reliefScale ? 'active' : undefined} onClick={() => setReliefScale(k)}>
+                ×{String(k).replace('.', ',')}
+              </button>
+            ))}
+          </div>
 
           {survey && (
             <label className="toggle" title="Своя съёмка с дрона: подробный рельеф, цвета крыш и стен домов, постройки, которых нет в OSM">

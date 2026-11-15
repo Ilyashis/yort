@@ -403,6 +403,35 @@ p {
   accent-color: var(--accent);
 }
 
+.relief-scale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0 2px;
+  font-size: 12.5px;
+}
+
+.relief-scale span {
+  margin-right: 4px;
+}
+
+.relief-scale button {
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.relief-scale button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1d1400;
+  font-weight: 600;
+}
+
 /* --- конструктор здания -------------------------------------------------------- */
 
 .builder-panel {
