@@ -13,6 +13,8 @@ import {
   Raycaster,
   Scene,
   Vector2,
+  type Material,
+  type Object3D,
   type Texture,
   Vector3,
   WebGLRenderer,
@@ -22,9 +24,12 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import type { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { createIllustrationPass } from './illustrationPass';
 import { findTerritory, loadWorld, type Territory, type World } from '../core/data';
 import { RingIndex, RoadIndex, SegmentGrid } from '../core/spatial';
-import { urlParams, useStore, type Ground, type Mode } from '../state/store';
+import { urlParams, useStore, type Ground, type LookSettings, type Mode } from '../state/store';
 import { createBuildings, type Building, type BuildingSet } from './buildings';
 import { CAR_COLOURS, Drive, Overview, Walk, type Ctx, type Player } from './controls';
 import { createProps, placeLamps, type Props } from './props';
@@ -32,7 +37,7 @@ import { breathe, shared, type Rect } from './shared';
 import { Atmosphere } from './sky';
 import { createTerrainMaterial, createTerrainMeshes, HeightMap, paintMasks, paintMiniMap, type Masks } from './terrain';
 import { createContours } from './contours';
-import { createFences } from './fences';
+import type { createFences } from './fences';
 import { createGrass, type Grass } from './grass';
 import { applyLines, applyShapes, applySpots, computeLevels, type LevelHouse } from './levelling';
 import { createOrthoUniforms, findOrtho, loadOrtho, loadSatellite, satelliteSource } from './ortho';
@@ -70,6 +75,10 @@ export class Engine {
   private readonly scene = new Scene();
   private readonly camera = new PerspectiveCamera(45, 1, 1, 40000);
   private readonly composer: EffectComposer;
+  private readonly ao: GTAOPass;
+  private readonly illustration: ShaderPass;
+  private look?: LookSettings;
+  private lookMode?: Mode;
   private readonly bloom: UnrealBloomPass;
   private readonly atmosphere: Atmosphere;
   private readonly keys = new Set<string>();
@@ -116,9 +125,35 @@ export class Engine {
     const target = new WebGLRenderTarget(4, 4, { type: HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // «Рисованный» вид, как в первой версии: мягкое затенение во впадинах и у стен (GTAO), потом свечение
+    // огней, тонирование и — по глубине из прохода AO — тонкие контуры, цветокоррекция, виньетка, мягкая даль.
+    this.ao = new GTAOPass(this.scene, this.camera, 1, 1);
+    this.ao.updateGtaoMaterial({ radius: 3, distanceExponent: 1.5, thickness: 2, scale: 1.2, samples: 12 });
+    this.ao.blendIntensity = 0.9;
+    // Накладки редактора (линии, ручки, подсветка) и небо — не поверхности: на время AO их прячем,
+    // иначе они затемняли бы то, что под ними.
+    const renderAo = this.ao.render.bind(this.ao);
+    this.ao.render = (...args: Parameters<GTAOPass['render']>) => {
+      const overlays: Object3D[] = [];
+      this.scene.traverseVisible((object) => {
+        const material = (object as { material?: Material | Material[] }).material;
+        const list = Array.isArray(material) ? material : material ? [material] : [];
+        if (list.some((m) => !m.depthWrite || !m.depthTest)) overlays.push(object);
+      });
+      for (const object of overlays) object.visible = false;
+      try {
+        renderAo(...args);
+      } finally {
+        for (const object of overlays) object.visible = true;
+      }
+    };
+    this.composer.addPass(this.ao);
     this.bloom = new UnrealBloomPass(new Vector2(256, 256), 0.15, 0.55, 1.0);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
+    this.illustration = createIllustrationPass(this.camera, this.ao.depthTexture);
+    this.illustration.uniforms['blurStrength']!.value = 1;
+    this.composer.addPass(this.illustration);
 
     this.atmosphere = new Atmosphere(this.scene, renderer, 4096);
     this.scene.add(this.camera);
@@ -463,8 +498,8 @@ export class Engine {
       this.worldGroup = group;
       const village = villagePlan && createVillageLayers(villagePlan, world, hm, this.host);
       // Настоящие заборы — когда придуманных («обустроенный посёлок») нет.
-      const fences = villagePlan?.estates ? undefined : createFences(world, hm, solid.footprints);
-      if (fences) group.add(fences.mesh);
+      // Заборы с карты удалены: заборы рисуют заново — свои и заборы участков.
+      const fences = undefined as ReturnType<typeof createFences> | undefined;
       this.village = village;
       Object.assign(this.ctx, { hm, walls: solid.walls, roads, rect, city });
 
@@ -702,6 +737,31 @@ export class Engine {
       if (Object.keys(patch).length) state.set(patch);
     }
 
+    // Рисованный вид можно выключить (на слабом компьютере): без AO нет и буфера глубины для контуров.
+    const illustrated = state.illustrated;
+    // Объём (AO) — только в обзоре: пешком и за рулём его шумовой узор на ходу «ползёт» по траве и мерцает.
+    const ao = illustrated && this.mode === 'overview';
+    if (this.ao.enabled !== ao) this.ao.enabled = ao;
+    if (this.illustration.enabled !== illustrated) this.illustration.enabled = illustrated;
+    // Тонкая настройка рисованного вида — только когда её поменяли (или сменился режим).
+    if (state.look !== this.look || this.mode !== this.lookMode) {
+      this.look = state.look;
+      this.lookMode = this.mode;
+      const u = this.illustration.uniforms;
+      // Пешком и за рулём вблизи тысячи травинок и листьев: их контуры на ходу мерцают, а фокус всё время
+      // у ног — контуры и мягкую даль выключаем, остаётся цветокоррекция.
+      const overview = this.mode === 'overview';
+      this.ao.blendIntensity = state.look.ao;
+      u['outlineStrength']!.value = state.look.outlines;
+      u['useOutlines']!.value = overview && state.look.outlines > 0.01 ? 1 : 0;
+      u['blurStrength']!.value = overview ? state.look.blur : 0;
+      u['saturation']!.value = state.look.saturation;
+      u['warmth']!.value = state.look.warmth;
+      u['contrast']!.value = state.look.contrast;
+      u['vignette']!.value = state.look.vignette;
+    }
+    // Резко там, куда смотрит камера; дальше — мягче.
+    this.illustration.uniforms['focusDistance']!.value = Math.min(900, Math.max(30, this.camera.position.distanceTo(mode.focus)));
     this.composer.render(dt);
 
     // Если кадр стабильно тяжёлый — снижаем разрешение, но не ниже 1.

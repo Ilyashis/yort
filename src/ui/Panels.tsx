@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { findTerritory } from '../core/data';
 import { CAR_COLOURS } from '../engine/controls';
 import { probe } from '../engine/probe';
-import { useStore, type Ground, type Mode } from '../state/store';
+import { DEFAULT_LOOK, useStore, type Ground, type LookSettings, type Mode } from '../state/store';
 import { toggleContours } from './Contours';
 
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
@@ -22,6 +22,8 @@ const ICONS = {
   top: 'M4 4h16v16H4zM4 12h16M12 4v16',
   contours: 'M3 12c3-5 6 5 9 0s6 5 9 0M3 6.5c3-5 6 5 9 0s6 5 9 0M3 17.5c3-5 6 5 9 0s6 5 9 0',
   relief: 'M3 18l5.5-9 3.5 5 3-4 6 8zM3 21h18',
+  brush: 'M14.5 4.5l5 5-8.5 8.5-5-5zM6 13l-2.5 6.5L10 17M16 3l5 5',
+  fence: 'M4 20V7l2-2.5L8 7v13M11 20V7l2-2.5L15 7v13M18 20V7l2-2.5 0 0M2 10h20M2 16h20',
   tilt: 'M3 17l9-12 9 12zM7.5 11h9',
   close: 'M6 6l12 12M18 6L6 18',
 };
@@ -138,9 +140,22 @@ export function Tools() {
   const carColour = useStore((s) => s.carColour);
   const sound = useStore((s) => s.sound);
   const contours = useStore((s) => s.contours);
+  const illustrated = useStore((s) => s.illustrated);
   const set = useStore((s) => s.set);
+  const [lookOpen, setLookOpen] = useState(false);
   return (
     <aside className="tools">
+      <div className="look-wrap">
+        <button
+          className={`panel round ${illustrated ? 'on' : ''}`}
+          title="Рисованный вид: объём, контуры, цвет, мягкая даль — включить и настроить"
+          aria-pressed={lookOpen}
+          onClick={() => setLookOpen(!lookOpen)}
+        >
+          <Icon d={ICONS.brush} />
+        </button>
+        {lookOpen && <LookPanel onClose={() => setLookOpen(false)} />}
+      </div>
       {mode === 'overview' && (
         <button className="panel round" title={topView ? 'Вид под углом' : 'Вид сверху'} onClick={() => set({ topView: !topView })}>
           <Icon d={topView ? ICONS.tilt : ICONS.top} />
@@ -294,6 +309,57 @@ export function Loader() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const LOOK_SLIDERS: { key: keyof LookSettings; label: string; min: number; max: number; step: number; hint: string; fmt: (v: number) => string }[] = [
+  { key: 'ao', label: 'Объём', min: 0, max: 1.6, step: 0.05, hint: 'Мягкая тень во впадинах, у стен и у кромки леса', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'outlines', label: 'Контуры', min: 0, max: 1, step: 0.05, hint: 'Тонкие тёмные линии по силуэтам домов, заборов, леса', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'blur', label: 'Мягкая даль', min: 0, max: 1.5, step: 0.05, hint: 'Резко там, куда смотрит камера, дальше — размыто, как у макета', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'saturation', label: 'Насыщенность', min: 0.6, max: 1.6, step: 0.02, hint: '100% — цвета как есть', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'warmth', label: 'Тёплый свет, холодные тени', min: 0, max: 2.5, step: 0.05, hint: '0 — нейтрально', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'contrast', label: 'Контраст', min: 0, max: 0.6, step: 0.02, hint: 'Мягкая S-кривая: светлое светлее, тёмное темнее', fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'vignette', label: 'Виньетка', min: 0, max: 0.5, step: 0.01, hint: 'Затемнение к краям кадра', fmt: (v) => `${Math.round(v * 100)}%` },
+];
+
+/** Тонкая настройка рисованного вида (как в первой версии): включить и подкрутить каждую часть. */
+function LookPanel({ onClose }: { onClose: () => void }) {
+  const illustrated = useStore((s) => s.illustrated);
+  const look = useStore((s) => s.look);
+  const set = useStore((s) => s.set);
+  return (
+    <div className="panel look-panel" role="dialog" aria-label="Рисованный вид">
+      <div className="look-head">
+        <strong>Рисованный вид</strong>
+        <button type="button" className="close" aria-label="Закрыть" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <label className="look-toggle">
+        <input type="checkbox" checked={illustrated} onChange={(e) => set({ illustrated: e.target.checked })} />
+        <span>Включён — выключите, если компьютер не тянет</span>
+      </label>
+      <fieldset disabled={!illustrated}>
+        {LOOK_SLIDERS.map((s) => (
+          <label key={s.key} className="look-row" title={s.hint}>
+            <span>
+              {s.label} <b>{s.fmt(look[s.key])}</b>
+            </span>
+            <input
+              type="range"
+              min={s.min}
+              max={s.max}
+              step={s.step}
+              value={look[s.key]}
+              onChange={(e) => set({ look: { ...look, [s.key]: Number(e.target.value) } })}
+            />
+          </label>
+        ))}
+      </fieldset>
+      <button type="button" className="look-reset" onClick={() => set({ look: DEFAULT_LOOK })}>
+        Как в первой версии
+      </button>
     </div>
   );
 }

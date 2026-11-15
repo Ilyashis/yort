@@ -56,7 +56,7 @@ import {
 } from '../world/edit/edits';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { removeVertex, segmentLength, snapPoint, treeRow, type Snap } from '../world/edit/snapLine';
-import { createPlot, insidePlot, PLOT_TEMPLATES, removePlot, resizePlot, transformPlot } from '../world/edit/plots';
+import { createPlot, insidePlot, materializePlot, orientPlot, PLOT_TEMPLATES, plotFromOutline, removePlot, resizePlot, roleOfModel, transformPlot, type MapPlot } from '../world/edit/plots';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
@@ -89,13 +89,16 @@ const TREE_ERASE_M = 3;
 /** Своё дерево выбирается щелчком ближе этого к его кроне на экране, px. */
 const TREE_PICK_PX = 28;
 
+/** Что ставят по точкам: дорогу, забор или обводку участка. */
+type LineKind = 'road' | 'fence' | 'plot';
+
 /** Точка экрана (координаты клиента, px). */
 type ScreenPoint = [number, number];
 
 type Drag =
   | { type: 'click'; at: ScreenPoint }
   | { type: 'house'; start: Vec2; dir: Vec2; current?: Vec2 }
-  | { type: 'line'; kind: 'road' | 'fence'; points: Vec2[]; at: ScreenPoint }
+  | { type: 'line'; kind: LineKind; points: Vec2[]; at: ScreenPoint }
   | { type: 'move'; original: EditedBuilding; start: Vec2; current: EditedBuilding; at: ScreenPoint }
   | { type: 'rotate'; original: EditedBuilding; center: Vec2; startAngle: number; current: EditedBuilding }
   | { type: 'resize'; original: EditedBuilding; index: number; current: EditedBuilding }
@@ -110,9 +113,9 @@ type Drag =
   | { type: 'tmove'; id: string; start: Vec2; at: ScreenPoint; current?: Vec2 }
   // Участки: новый (щелчок или протяжка), перенос, растяжка за угол, поворот.
   | { type: 'plotnew'; start: Vec2; at: ScreenPoint; current?: Vec2 }
-  | { type: 'pmove'; id: string; start: Vec2; at: ScreenPoint; next?: Edits }
-  | { type: 'presize'; id: string; index: number; original: Vec2[]; next?: Edits }
-  | { type: 'protate'; id: string; center: Vec2; startAngle: number; next?: Edits };
+  | { type: 'pmove'; id: string; start: Vec2; at: ScreenPoint; next?: Edits; base?: Edits }
+  | { type: 'presize'; id: string; index: number; original: Vec2[]; next?: Edits; free?: boolean }
+  | { type: 'protate'; id: string; center: Vec2; startAngle: number; next?: Edits; base?: Edits };
 
 export interface EditorContext {
   city: CityScene;
@@ -132,6 +135,8 @@ export interface EditorContext {
   models?: VillageModelsLayer;
   /** Постройки во дворах с карты: гараж, баня, сарай. */
   yardModels?: VillageModelsLayer;
+  /** Участки с карты (локальные метры): щелчок внутри — выбрать участок. */
+  mapPlots?: readonly MapPlot[];
   /** Показать свои деревья как в списке (перенос дерева, до записи в правки). */
   previewTrees?: (trees: readonly EditedTree[]) => void;
   /** Свои деревья: id и середина кроны в координатах three — для выбора щелчком. */
@@ -164,6 +169,7 @@ export class EditorTool {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerCancel);
     window.addEventListener('keydown', this.onKey);
+    useEditStore.getState().setLineCloser(() => this.closePending());
     this.obstacleShapes = ctx.osmBuildings.flatMap((f) =>
       (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings) => {
         const xs = (rings[0] ?? []).map(([x]) => x);
@@ -181,6 +187,15 @@ export class EditorTool {
   resolve(id: string): EditedBuilding | undefined {
     const own = useEditStore.getState().edits.buildings.find((b) => b.id === id);
     if (own) return own;
+    // Дом или постройка с карты на участке: правка сразу помечена участком и ролью.
+    const plot = useEditStore.getState().edits.plots?.find((p) => p.mapMembers?.some((m) => m.id === id));
+    const found = this.resolveMap(id);
+    if (!found || !plot) return found;
+    return { ...found, plot: plot.id, plotRole: plot.mapMembers!.find((m) => m.id === id)!.role };
+  }
+
+  /** Дом с карты (OSM или постройка во дворе) в виде правки. */
+  private resolveMap(id: string): EditedBuilding | undefined {
     const info = this.ctx.base.buildingInfo(id);
     if (!info || info.outline.length < 3) {
       // Постройка во дворе с карты — в правку моделью и её прямоугольником.
@@ -240,6 +255,7 @@ export class EditorTool {
     canvas.removeEventListener('pointerup', this.onPointerUp);
     canvas.removeEventListener('pointercancel', this.onPointerCancel);
     window.removeEventListener('keydown', this.onKey);
+    useEditStore.getState().setLineCloser(undefined);
     this.releasePointer();
     this.setCamera(true);
   }
@@ -281,6 +297,12 @@ export class EditorTool {
       if (this.pending && this.pending.kind !== tool) this.dropPending();
       this.drag = { type: 'line', kind: tool, points: [start], at: position };
       this.setCamera(false);
+    } else if (tool === 'plot' && point && useEditStore.getState().plotMode === 'outline') {
+      // Обвести постройки: контур по точкам (как забор), замкнуть — участок с тем, что внутри.
+      const start = this.pending ? point : (this.fenceSnap(point, position)?.point ?? point);
+      if (this.pending && this.pending.kind !== 'plot') this.dropPending();
+      this.drag = { type: 'line', kind: 'plot', points: [start], at: position };
+      this.setCamera(false);
     } else if (tool === 'plot' && point) {
       this.drag = { type: 'plotnew', start: point, at: position };
       this.setCamera(false);
@@ -316,15 +338,19 @@ export class EditorTool {
       if (screenDistance(drag.at, position) <= CLICK_PX) return;
       const last = drag.points[drag.points.length - 1]!;
       if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= (drag.kind === 'road' ? 1.5 : 0.5)) drag.points.push(point);
+      if (drag.kind === 'plot') this.showOutline([...drag.points, point]);
       useEditStore.getState().setDrawing({ kind: drag.kind, points: drag.points.length, segment: 0, total: lengthOf([...drag.points, point]) });
-      layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), drag.kind === 'road' ? useEditStore.getState().roadKind : 'fence');
+      layer.previewLine([...drag.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(drag.kind));
     } else if (drag.type === 'plotnew') {
       if (screenDistance(drag.at, position) <= CLICK_PX) return;
       drag.current = point;
       const rect = this.plotRectFrom(drag.start, point);
       layer.previewLine([...rect, rect[0]!].map(this.ctx.frame.toLonLat), 'fence');
     } else if (drag.type === 'pmove' || drag.type === 'presize' || drag.type === 'protate') {
-      const { edits } = useEditStore.getState();
+      const store = useEditStore.getState();
+      // Перенос и поворот двигают и постройки: те, что ещё с карты, переходят в правки.
+      // Один раз, в начале: дальше постройки с карты уже спрятаны и не находятся.
+      const edits = drag.type === 'presize' ? store.edits : (drag.base ??= materializePlot(store.edits, drag.id, (id) => this.resolve(id)));
       const plot = edits.plots?.find((p) => p.id === drag.id);
       if (!plot) return;
       if (drag.type === 'pmove') {
@@ -334,10 +360,16 @@ export class EditorTool {
         const angle = Math.atan2(point[1] - drag.center[1], point[0] - drag.center[0]) - drag.startAngle;
         drag.next = transformPlot(edits, drag.id, (p) => rotate([p], drag.center, angle)[0]!, this.ctx.frame);
       } else {
-        drag.next = resizePlot(edits, drag.id, resizedPlot(drag.original, drag.index, point), this.ctx.frame);
+        const outline = drag.free ? drag.original.map((q, i) => (i === drag.index ? point : q)) : resizedPlot(drag.original, drag.index, point);
+        drag.next = resizePlot(edits, drag.id, outline, this.ctx.frame);
       }
       layer.render(drag.next, undefined);
-      layer.setHandles(undefined, drag.next.plots!.find((p) => p.id === drag.id)!.outline);
+      // Дома с карты, перешедшие в правки, не должны стоять на старом месте.
+      this.ctx.models?.setHidden(replacedOsmIds(drag.next));
+      this.ctx.yardModels?.setHidden(replacedOsmIds(drag.next));
+      const moved = drag.next.plots!.find((p) => p.id === drag.id)!;
+      if (moved.free) layer.setLineHandles([...moved.outline, moved.outline[0]!]);
+      else layer.setHandles(undefined, moved.outline);
       layer.highlight([closedLine(drag.next.plots!.find((p) => p.id === drag.id)!.outline)]);
       this.ctx.previewTrees?.(drag.next.trees ?? []);
     } else if (drag.type === 'plant') {
@@ -401,21 +433,23 @@ export class EditorTool {
       else {
         const raw = this.ground(position);
         if (raw) {
-          const snap = this.pending.kind === 'fence' ? this.fenceSnap(raw, position) : undefined;
+          const snap = this.pending.kind !== 'road' ? this.fenceSnap(raw, position) : undefined;
           const point = snap?.point ?? raw;
           this.ctx.layer.setSnapMarker(snap);
           this.ctx.layer.previewLine([...this.pending.points, point].map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
           const last = this.pending.points[this.pending.points.length - 1]!;
+          const capture = this.pending.kind === 'plot' ? this.showOutline([...this.pending.points, point]) : undefined;
           useEditStore.getState().setDrawing({
             kind: this.pending.kind,
             points: this.pending.points.length,
             segment: segmentLength(last, point),
             total: lengthOf([...this.pending.points, point]),
             snap: snap?.kind,
+            ...(capture !== undefined ? { capture } : {}),
           });
         }
       }
-    } else if (tool === 'fence' && !useUnderlayStore.getState().mode) {
+    } else if ((tool === 'fence' || (tool === 'plot' && useEditStore.getState().plotMode === 'outline')) && !useUnderlayStore.getState().mode) {
       // Первая точка тоже прилипает — метка показывает, куда она встанет.
       const raw = this.ground(position);
       this.ctx.layer.setSnapMarker(raw ? this.fenceSnap(raw, position) : undefined);
@@ -487,8 +521,9 @@ export class EditorTool {
       // Протяжка — линия «кистью», как карандашом; конец забора прилипает, как и начало.
       useEditStore.getState().setDrawing(undefined);
       const points = simplifyLine(drag.points, drag.kind === 'road' ? 1.2 : 0.3);
-      if (drag.kind === 'fence') {
+      if (drag.kind !== 'road') {
         const end = this.fenceSnap(points[points.length - 1]!, position);
+        if (drag.kind === 'plot') this.ctx.layer.setOutlineArea(undefined);
         if (end) points[points.length - 1] = end.point;
       }
       this.commitLine(drag.kind, points);
@@ -579,6 +614,12 @@ export class EditorTool {
       if (plot) {
         const local = plot.outline.map(this.ctx.frame.toLocal);
         const handle = this.ctx.layer.hit(position[0], position[1]).handle;
+        if (plot.free && (handle?.handle === 'corner' || handle?.handle === 'mid')) {
+          // Участок с карты: угол тянется один; середина стороны — новый угол.
+          const original = handle.handle === 'mid' ? [...local.slice(0, handle.index + 1), point, ...local.slice(handle.index + 1)] : local;
+          const index = handle.handle === 'mid' ? handle.index + 1 : handle.index % local.length;
+          return { type: 'presize', id: plot.id, index, original, free: true };
+        }
         if (handle?.handle === 'corner') {
           // Ручки строятся по углам ориентированного прямоугольника — порядок может не совпасть с контуром.
           const c = footprintCorners(local)[handle.index]!;
@@ -664,6 +705,10 @@ export class EditorTool {
       store.commit(adoptFence(store.edits, fromMap.id, { id, line: fromMap.line.map(this.ctx.frame.toLonLat) }));
       return store.select({ type: 'fence', id });
     }
+    // Участок с карты вокруг жилого дома (ещё не взятый в правку).
+    const adopted = new Set((store.edits.plots ?? []).map((p) => p.source));
+    const mapPlot = this.ctx.mapPlots?.find((p) => !adopted.has(p.house) && insidePlot(p.outline, point));
+    if (mapPlot) return store.select({ type: 'plot', id: mapPlot.id });
     // Заборы дворов — по близости к линии.
     const yard = this.ctx.yards.find(
       (y) => !store.edits.removedYards.includes(y.houseId) && y.fence.some(([a, b]) => distanceToSegment(point, a, b) < 2),
@@ -724,6 +769,10 @@ export class EditorTool {
         return this.ctx.layer.previewLine(this.pending.points.map(this.ctx.frame.toLonLat), this.lineStyle(this.pending.kind));
       }
       if (event.code === 'Escape') return this.dropPending();
+      if (event.code === 'KeyC') {
+        event.preventDefault();
+        return this.closePending();
+      }
       this.dropPending();
     }
     const tool = HOTKEYS[event.code];
@@ -753,29 +802,96 @@ export class EditorTool {
   // --- дорога и забор по точкам ---------------------------------------------------
 
   /** Линия, которую ставят щелчками: точки уже поставлены, следующая — под курсором. */
-  private pending?: { kind: 'road' | 'fence'; points: Vec2[] };
+  private pending?: { kind: LineKind; points: Vec2[] };
 
-  private lineStyle(kind: 'road' | 'fence') {
+  private lineStyle(kind: LineKind) {
     return kind === 'road' ? useEditStore.getState().roadKind : 'fence';
   }
 
   /** Очередная точка: щелчок по последней точке (или двойной щелчок) — закончить, по первой — замкнуть забор. */
-  private addPoint(kind: 'road' | 'fence', raw: Vec2, position?: ScreenPoint): void {
+  private addPoint(kind: LineKind, raw: Vec2, position?: ScreenPoint): void {
     const point = kind === 'road' ? (this.pending ? raw : this.snapToRoad(raw)) : ((position && this.fenceSnap(raw, position)?.point) ?? raw);
     if (!this.pending) {
       this.pending = { kind, points: [point] };
-      useEditStore.getState().notify(kind === 'road' ? 'Ставьте точки дороги. Двойной щелчок или Enter — готово, Backspace — убрать точку' : 'Ставьте точки забора. Щелчок по первой точке замкнёт участок; двойной щелчок или Enter — готово');
+      useEditStore.getState().notify(
+        kind === 'road'
+          ? 'Ставьте точки дороги. Двойной щелчок или Enter — готово, Backspace — убрать точку'
+          : kind === 'plot'
+            ? 'Обведите двор по точкам. Щелчок по первой точке, C или Enter — замкнуть: участок возьмёт всё, что внутри'
+            : 'Ставьте точки забора. Щелчок по первой точке или C — замкнуть; двойной щелчок или Enter — готово',
+      );
     } else {
       const points = this.pending.points;
       const near = (q: Vec2, metres: number) => Math.hypot(point[0] - q[0], point[1] - q[1]) < metres;
       if (points.length >= 2 && near(points[points.length - 1]!, 1.2)) return this.finishPending();
-      if (kind === 'fence' && points.length >= 3 && near(points[0]!, 2.5)) {
+      if (kind !== 'road' && points.length >= 3 && near(points[0]!, 2.5)) {
         points.push(points[0]!);
         return this.finishPending();
       }
       if (!near(points[points.length - 1]!, 0.4)) points.push(point);
     }
     this.ctx.layer.previewLine(this.pending.points.map(this.ctx.frame.toLonLat), this.lineStyle(kind));
+    // Подсказка с длинами и кнопкой «Замкнуть» — сразу, не дожидаясь движения мыши.
+    const capture = kind === 'plot' ? this.showOutline(this.pending.points) : undefined;
+    useEditStore.getState().setDrawing({ kind, points: this.pending.points.length, segment: 0, total: lengthOf(this.pending.points), ...(capture !== undefined ? { capture } : {}) });
+  }
+
+  /** Замкнуть забор или обводку участка: последняя точка — в первую (нужно хотя бы три точки). */
+  closePending(): void {
+    const pending = this.pending;
+    if (!pending || pending.kind === 'road') return;
+    if (pending.points.length < 3) return useEditStore.getState().notify('Чтобы замкнуть, поставьте хотя бы три точки');
+    pending.points.push(pending.points[0]!);
+    this.finishPending();
+  }
+
+  /**
+   * Участок по обводке: контур (замыкается сам), улица — к ближайшей дороге; внутри — дома и постройки
+   * с карты и свои, чья середина в контуре и которые ещё ни на каком участке.
+   */
+  private outlinePlot(points: Vec2[]): void {
+    const store = useEditStore.getState();
+    let ring = points.slice();
+    const [f, l] = [ring[0]!, ring[ring.length - 1]!];
+    if (ring.length > 3 && Math.hypot(f[0] - l[0], f[1] - l[1]) < 0.5) ring = ring.slice(0, -1);
+    if (ring.length < 3) return store.notify('Обведите двор хотя бы тремя точками');
+    const outline = orientPlot(ring, this.roadLines());
+    const { edits } = store;
+    const { map, own } = this.capturable(outline);
+    if (!map.length && !own.length) store.notify('Внутри обводки построек нет — участок пустой, только забор с воротами');
+    this.ctx.layer.setOutlineArea(undefined);
+    const id = `plot-${Date.now().toString(36)}`;
+    store.commit(plotFromOutline(edits, id, outline, { map, own }, this.ctx.frame));
+    store.setTool('select');
+    store.select({ type: 'plot', id });
+  }
+
+  /** Что попадёт на участок с таким контуром: постройки с карты и свои, чья середина внутри, ещё ни на каком участке. */
+  private capturable(outline: readonly Vec2[]) {
+    const { edits } = useEditStore.getState();
+    const removed = new Set(edits.removedBuildings);
+    const replaced = replacedOsmIds(edits);
+    const taken = new Set([...(edits.plots ?? []).flatMap((p) => (p.mapMembers ?? []).map((m) => m.id)), ...edits.buildings.filter((b) => b.plot).map((b) => b.id)]);
+    const middle = (r: readonly Vec2[]): Vec2 => [r.reduce((s, p) => s + p[0], 0) / r.length, r.reduce((s, p) => s + p[1], 0) / r.length];
+    const map = [...(this.ctx.models?.houses ?? []), ...(this.ctx.yardModels?.houses ?? [])]
+      .filter((h) => !removed.has(h.id) && !replaced.has(h.id) && !taken.has(h.id) && insidePlot(outline, middle(h.rect)))
+      .map((h) => ({ id: h.id, role: roleOfModel(h.model), rect: h.rect }));
+    const own = edits.buildings
+      .filter((b) => !b.plot && b.footprint.length >= 3)
+      .map((b) => ({ id: b.id, model: b.model?.id, rect: b.footprint.map(this.ctx.frame.toLocal) }))
+      .filter((b) => insidePlot(outline, middle(b.rect)));
+    return { map, own };
+  }
+
+  /** Обводка по ходу: заливка, замыкающая линия, рамки вокруг того, что попадёт на участок, — и подпись. */
+  private showOutline(polygon: readonly Vec2[] | undefined): string | undefined {
+    if (!polygon || polygon.length < 3) {
+      this.ctx.layer.setOutlineArea(undefined);
+      return undefined;
+    }
+    const { map, own } = this.capturable(polygon);
+    this.ctx.layer.setOutlineArea(polygon, [...map.map((m) => m.rect), ...own.map((b) => b.rect)]);
+    return captureSummary([...map.map((m) => m.role), ...own.map((b) => roleOfModel(b.model))]);
   }
 
   private finishPending(): void {
@@ -787,6 +903,7 @@ export class EditorTool {
   private dropPending(): void {
     this.pending = undefined;
     this.ctx.layer.previewLine(undefined);
+    this.ctx.layer.setOutlineArea(undefined);
     this.ctx.layer.setSnapMarker(undefined);
     useEditStore.getState().setDrawing(undefined);
   }
@@ -814,14 +931,15 @@ export class EditorTool {
       ...edits.fences.filter((f) => f.id !== except).map((f) => f.line.map(this.ctx.frame.toLocal)),
       ...(this.ctx.mapFences ?? []).filter((f) => !gone.has(f.id)).map((f) => f.line),
     ];
-    const pending = this.pending?.kind === 'fence' ? this.pending.points : [];
+    const pending = this.pending && this.pending.kind !== 'road' ? this.pending.points : [];
     // Свои уже поставленные точки (кроме последней — от неё идёт отрезок) тоже притягивают.
     if (pending.length >= 2) lines.push(pending.slice(0, -1));
     return snapPoint(raw, lines, tolerance, pending[pending.length - 1], pending[pending.length - 2]);
   }
 
   /** Готовая линия — в правки: дорога прилипает концами к соседним, слишком короткое не берём. */
-  private commitLine(kind: 'road' | 'fence', points: Vec2[]): void {
+  private commitLine(kind: LineKind, points: Vec2[]): void {
+    if (kind === 'plot') return this.outlinePlot(points);
     const store = useEditStore.getState();
     const isRoad = kind === 'road';
     const line = isRoad ? snapEnds(points, this.roadLines(), ROAD_SNAP_M) : points;
@@ -935,6 +1053,7 @@ export class EditorTool {
   private cancelDrag(): void {
     if (this.drag?.type === 'tmove') this.ctx.previewTrees?.(useEditStore.getState().edits.trees ?? []);
     if (this.drag?.type === 'plant' || this.drag?.type === 'erase') this.ctx.layer.setSnapMarkers([]);
+    if (this.drag?.type === 'line' && this.drag.kind === 'plot' && !this.pending) this.ctx.layer.setOutlineArea(undefined);
     this.drag = undefined;
     this.ctx.layer.setSnapMarker(undefined);
     useEditStore.getState().setDrawing(this.pending ? useEditStore.getState().drawing : undefined);
@@ -1117,4 +1236,32 @@ export function resizedPlot(original: readonly Vec2[], index: number, p: Vec2): 
   const u0 = Math.min(fu, nu), u1 = Math.max(fu, nu), v0 = Math.min(fv, nv), v1 = Math.max(fv, nv);
   const P = (u: number, v: number): Vec2 => [a[0] + along[0] * u + inward[0] * v, a[1] + along[1] * u + inward[1] * v];
   return [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)];
+}
+
+/** Подпись: что попадёт на участок — «дом, 2 бани, сарай» (жилой дом один, лишние — сараи). */
+function captureSummary(roles: readonly string[]): string {
+  if (!roles.length) return 'внутри построек нет';
+  const counts = new Map<string, number>();
+  let houses = 0;
+  for (const r of roles) {
+    const role = r === 'house' && houses++ > 0 ? 'shed' : r;
+    counts.set(role, (counts.get(role) ?? 0) + 1);
+  }
+  // Один, два-четыре, пять и больше.
+  const names: Record<string, [string, string, string]> = {
+    house: ['дом', 'дома', 'домов'],
+    garage: ['гараж', 'гаража', 'гаражей'],
+    banya: ['баня', 'бани', 'бань'],
+    shed: ['сарай', 'сарая', 'сараев'],
+    greenhouse: ['теплица', 'теплицы', 'теплиц'],
+    well: ['колодец', 'колодца', 'колодцев'],
+  };
+  const word = (n: number, [one, few, many]: [string, string, string]) => {
+    const m10 = n % 10, m100 = n % 100;
+    return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+  };
+  return ['house', 'garage', 'banya', 'shed', 'greenhouse', 'well']
+    .filter((r) => counts.has(r))
+    .map((r) => (counts.get(r)! > 1 ? `${counts.get(r)} ${word(counts.get(r)!, names[r]!)}` : names[r]![0]))
+    .join(', ');
 }

@@ -17,6 +17,7 @@ import { VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
 import { planEstates, type EstateInput, type EstatePlan } from '../world/village/estates';
 import { hashString } from '../utils/hash';
 import { modelFootprint, modelPlacement } from '../world/edit/edits';
+import { insidePlot, orientPlot, type MapMember, type MapPlot } from '../world/edit/plots';
 import { chooseVillageModel, drawnRect, fitPreset, fitScale, modelFacadeShift, VILLAGE_VARIANTS, type VillageHouse } from '../world/village/villagePlan';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
 import { createLocalFrame, type Vec2 } from '../world/walk/localFrame';
@@ -42,6 +43,8 @@ export interface VillagePlan {
   estates?: EstatePlan;
   outbuildings: VillageHouse[];
   gardens: GardenSite[];
+  /** Участки с карты вокруг жилых домов-моделей: контур, дом, дворовые постройки внутри. */
+  mapPlots: MapPlot[];
   /** Для земли и деревьев (координаты мира): подъезды, огороды, контуры дворовых построек, деревья участков. */
   driveways: P2[][];
   vegetable: P2[][];
@@ -193,6 +196,19 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
     return site ? [site] : [];
   });
 
+  // Участки с карты: контур улицей к дороге, постройки — те, чья середина внутри.
+  const modelled = new Set(houses.map((h) => h.id));
+  const mapPlots: MapPlot[] = world.mapPlots
+    .filter((p) => modelled.has(p.house))
+    .map((p) => {
+      const outline = orientPlot(p.outline.map(toLocal), roadLines);
+      const house = houses.find((h) => h.id === p.house)!;
+      const yard = outbuildings
+        .filter((o) => insidePlot(outline, [(o.rect[0]![0] + o.rect[2]![0]) / 2, (o.rect[0]![1] + o.rect[2]![1]) / 2]))
+        .map((o): MapMember => ({ id: o.id, role: o.model === 'banya' ? 'banya' : o.model === 'garage' ? 'garage' : 'shed', rect: o.rect }));
+      return { id: `map:${p.house}`, house: p.house, outline, members: [{ id: house.id, role: 'house', rect: modelRect(house.model, house.rect) }, ...yard] };
+    });
+
   const plots = estates?.plots ?? [];
   return {
     replaced: new Set(houses.map((h) => h.id)),
@@ -200,6 +216,7 @@ export function planVillage(world: World, withEstates: boolean): VillagePlan | u
     estates,
     outbuildings,
     gardens,
+    mapPlots,
     driveways: plots.flatMap((p) => (p.driveway ? [p.driveway.map(toWorld)] : [])),
     vegetable: plots.flatMap((p) => (p.garden ? [p.garden.ring.map(toWorld)] : [])),
     pads: outbuildings.map((b) => b.rect.map(toWorld)),
@@ -261,6 +278,8 @@ export interface VillageLayers {
   yardModels?: VillageModelsLayer;
   /** Дворы участков — редактору (выбор забора). */
   yards: Yard[];
+  /** Участки с карты — редактору (выбор и «сделать участком»). */
+  mapPlots: MapPlot[];
   /** id дома OSM под лучом (дом-модель) и расстояние до него. */
   pick: (raycaster: Raycaster) => { id: string; distance: number } | undefined;
   /** Применить правки; возвращает скрытые участки (id). */
@@ -279,7 +298,8 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
   const models = plan.houses.length ? new VillageModelsLayer(host, frame, heightAt, plan.houses, noCsm) : undefined;
   const estateLayer = plan.estates ? new EstateLayer(host, heightAt, undefined, plan.estates) : undefined;
   const estateModels = plan.outbuildings.length ? new VillageModelsLayer(host, frame, heightAt, plan.outbuildings, noCsm, 60) : undefined;
-  const gardens = new FrontGardensLayer(host, heightAt, undefined);
+  // Где деревья сняты с карты, в палисадниках их не придумываем — только цветы и кусты.
+  const gardens = new FrontGardensLayer(host, heightAt, undefined, world.mapTrees);
   gardens.setSites(plan.gardens);
   let gardenKey = '';
   const yards = plan.estates ? plotYards(plan.estates) : [];
@@ -290,6 +310,7 @@ export function createVillageLayers(plan: VillagePlan, world: World, hm: HeightM
     models,
     yardModels: estateModels,
     yards,
+    mapPlots: plan.mapPlots,
     pick: (raycaster) => {
       if (!models?.visible) return undefined;
       const hit = raycaster.intersectObjects(models.pickables, false)[0];

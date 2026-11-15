@@ -3,7 +3,7 @@ import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuildin
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptMode } from '../world/base/sculpt';
 import type { SnapKind } from '../world/edit/snapLine';
-import type { PlotTemplate } from '../world/edit/plots';
+import type { MapPlot, PlotTemplate } from '../world/edit/plots';
 import type { LocalFrame } from '../world/walk/localFrame';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
@@ -50,7 +50,7 @@ function saveEdits(territoryId: string, edits: Edits): void {
 }
 
 export interface DrawingInfo {
-  kind: 'road' | 'fence';
+  kind: 'road' | 'fence' | 'plot';
   /** Поставлено точек. */
   points: number;
   /** Длина отрезка от последней точки до курсора, м. */
@@ -58,6 +58,8 @@ export interface DrawingInfo {
   /** Длина всей линии вместе с этим отрезком, м. */
   total: number;
   snap?: SnapKind;
+  /** Обводка участка: что попадёт на участок («дом, 2 бани, сарай»). */
+  capture?: string;
 }
 
 interface EditState {
@@ -71,12 +73,24 @@ interface EditState {
   roadKind: EditRoadKind;
   /** Модель для инструмента «Дом» (изба, кирпичный…); нет — простой объём растяжкой. */
   houseModel?: HouseModelId;
+  /** Участки с карты (ещё не взятые в правку) — карточке и подсказкам. */
+  mapPlots: MapPlot[];
+  setMapPlots: (plots: MapPlot[]) => void;
+  /** Взять участок с карты в правку (регистрирует сцена — знает дома и заборы с карты). */
+  adoptPlot?: (mapId: string) => void;
+  setPlotAdopter: (adopt: ((mapId: string) => void) | undefined) => void;
   /** Локальные метры сцены (для участков в карточке; регистрирует сцена). */
   frame?: LocalFrame;
   setFrame: (frame: LocalFrame | undefined) => void;
   /** Шаблон для инструмента «Участок». */
   plotTemplate: PlotTemplate;
   setPlotTemplate: (template: PlotTemplate) => void;
+  /** Инструмент «Участок»: поставить шаблон или обвести уже стоящие постройки. */
+  plotMode: 'template' | 'outline';
+  setPlotMode: (mode: 'template' | 'outline') => void;
+  /** Замкнуть линию, которую сейчас ставят по точкам (забор, обводка участка); регистрирует сцена. */
+  closeLine?: () => void;
+  setLineCloser: (close: (() => void) | undefined) => void;
   /** Инструмент «Дерево»: порода, возраст и что делает. */
   tree: { kind: TreeKind; size: TreeSize; mode: TreeMode };
   /** Кисть для инструмента «Рельеф». */
@@ -132,7 +146,13 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setSculpt: (patch) => set({ sculpt: { ...get().sculpt, ...patch } }),
   tree: { kind: 'birch', size: 'medium', mode: 'plant' },
   setFrame: (frame) => set({ frame }),
+  mapPlots: [],
+  setMapPlots: (mapPlots) => set({ mapPlots }),
+  setPlotAdopter: (adoptPlot) => set({ adoptPlot }),
   plotTemplate: 'yard',
+  plotMode: 'template',
+  setPlotMode: (plotMode) => set({ plotMode }),
+  setLineCloser: (closeLine) => set({ closeLine }),
   setPlotTemplate: (plotTemplate) => set({ plotTemplate }),
   setTree: (patch) => set({ tree: { ...get().tree, ...patch } }),
 
@@ -163,7 +183,7 @@ export const useEditStore = create<EditState>()((set, get) => ({
     const now = get().drawing;
     // Курсор двигается каждый кадр — не будим интерфейс, если цифры на экране не поменялись.
     if (!drawing && !now) return;
-    if (drawing && now && now.kind === drawing.kind && now.points === drawing.points && now.snap === drawing.snap &&
+    if (drawing && now && now.kind === drawing.kind && now.points === drawing.points && now.snap === drawing.snap && now.capture === drawing.capture &&
         Math.abs(now.segment - drawing.segment) < 0.05 && Math.abs(now.total - drawing.total) < 0.05) return;
     set({ drawing });
   },

@@ -24,7 +24,13 @@ export interface GardenSite {
 export class FrontGardensLayer {
   private readonly layer: PartsLayer;
 
-  constructor(city: CityScene, heightAt: (x: number, y: number) => number, csm: CSM | undefined) {
+  constructor(
+    city: CityScene,
+    heightAt: (x: number, y: number) => number,
+    csm: CSM | undefined,
+    /** Деревья только с карты: в палисадниках их не придумываем. */
+    private readonly noTrees = false,
+  ) {
     this.layer = new PartsLayer(city, heightAt, csm, 'front-gardens');
   }
 
@@ -41,6 +47,7 @@ export class FrontGardensLayer {
               width: site.width,
               depth: site.depth,
               seed: site.seed,
+              noTrees: this.noTrees,
               far,
             });
             // Ось x палисадника — вдоль фасада (влево от направления к улице), y — от улицы к дому.

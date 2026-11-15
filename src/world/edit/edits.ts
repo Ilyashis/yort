@@ -473,11 +473,16 @@ export function parseEdits(value: unknown): Edits | undefined {
       .filter((t) => t && typeof t.id === 'string' && typeof t.kind === 'string' && t.kind in TREE_KINDS && points([t.at]).length === 1 && Number.isFinite(t.scale))
       .map((t) => ({ id: t.id, at: t.at, kind: t.kind, scale: Math.min(1.6, Math.max(0.3, t.scale)), ...(typeof t.plot === 'string' ? { plot: t.plot } : {}) })),
     plots: arr<EditedPlot>(v.plots)
-      .filter((p) => p && typeof p.id === 'string' && typeof p.template === 'string' && p.template in PLOT_TEMPLATES && points(p.outline).length === 4)
+      .filter((p) => p && typeof p.id === 'string' && typeof p.template === 'string' && p.template in PLOT_TEMPLATES && points(p.outline).length >= 3)
       .map((p) => ({
         id: p.id,
         outline: points(p.outline),
         template: p.template,
+        ...(p.free === true ? { free: true } : {}),
+        ...(typeof p.source === 'string' ? { source: p.source } : {}),
+        ...(Array.isArray(p.mapMembers)
+          ? { mapMembers: p.mapMembers.filter((m) => m && typeof m.id === 'string' && typeof m.role === 'string').map((m) => ({ id: m.id, role: m.role })) }
+          : {}),
         fence: {
           ...(typeof p.fence?.kind === 'string' && p.fence.kind in FENCE_KINDS ? { kind: p.fence.kind } : {}),
           ...(typeof p.fence?.color === 'string' && /^#[0-9a-f]{6}$/i.test(p.fence.color) ? { color: p.fence.color } : {}),

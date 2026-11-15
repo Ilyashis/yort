@@ -154,6 +154,17 @@ export function EditPanel() {
     return (
       <aside className="panel building-card edit-panel">
         {close}
+        {!building.plot && !own && (() => {
+          // Дом или постройка с карты: на взятом участке — к нему, иначе — к участку с карты.
+          const adopted = edits.plots?.find((p) => p.mapMembers?.some((m) => m.id === selection.id));
+          const map = adopted ? undefined : useEditStore.getState().mapPlots.find((p) => p.house === selection.id);
+          if (!adopted && !map) return null;
+          return (
+            <button type="button" className="link-button back-link" onClick={() => select({ type: 'plot', id: adopted ? adopted.id : map!.id })}>
+              {adopted ? '← К участку' : 'Участок этого дома →'}
+            </button>
+          );
+        })()}
         {building.plot && (
           <button type="button" className="link-button back-link" onClick={() => select({ type: 'plot', id: building.plot! })}>
             ← К участку{building.plotRole ? ` · ${PLOT_ROLES[building.plotRole].label.toLowerCase()}` : ''}
@@ -355,6 +366,49 @@ export function EditPanel() {
     );
   }
 
+  if (selection.type === 'plot' && selection.id.startsWith('map:')) {
+    const { mapPlots, adoptPlot, resolveBuilding } = useEditStore.getState();
+    const mapPlot = mapPlots.find((p) => p.id === selection.id);
+    if (!mapPlot) return null;
+    const house = resolveBuilding?.(mapPlot.house);
+    const counts = mapPlot.members
+      .filter((m) => m.role !== 'house')
+      .reduce<Record<string, number>>((acc, m) => {
+        acc[m.role] = (acc[m.role] ?? 0) + 1;
+        return acc;
+      }, {});
+    const names: Record<string, string> = { banya: 'баня', garage: 'гараж', shed: 'сарай' };
+    const xs = mapPlot.outline;
+    const W = Math.hypot(xs[1]![0] - xs[0]![0], xs[1]![1] - xs[0]![1]);
+    return (
+      <aside className="panel building-card edit-panel">
+        {close}
+        <h2>Участок с карты</h2>
+        <p className="muted card-sub">
+          Контур — по заборам с карты, улица — {fmt(W)} м. Внутри: {house?.model ? findHouseModel(house.model.id)?.name.toLowerCase() : 'дом'}
+          {Object.entries(counts).map(([k, n]) => `, ${names[k] ?? k}${n > 1 ? ` × ${n}` : ''}`).join('')}.
+        </p>
+        <p className="muted">
+          Сделайте его участком — дом и постройки перейдут в правки, забор будет упираться в постройки на границе, а контур, ворота, состав
+          и вид забора можно будет менять, как у шаблона.
+        </p>
+        <div className="button-row card-footer">
+          <button type="button" className="button button-primary" onClick={() => adoptPlot?.(mapPlot.id)}>
+            Сделать участком
+          </button>
+          <button
+            type="button"
+            className="button button-small"
+            title="Все дворы деревни — участками; дома и постройки остаются с карты, пока их не тронуть (вернуть — «Отменить»)"
+            onClick={() => adoptPlot?.('*')}
+          >
+            Все дворы деревни
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   if (selection.type === 'plot') {
     const plot = edits.plots?.find((p) => p.id === selection.id);
     const frame = useEditStore.getState().frame;
@@ -401,17 +455,23 @@ export function EditPanel() {
 
         <Section id="plot-contents" title="Что на участке">
           {PLOT_ROLE_ORDER.map((role) => {
+            const fromMap = (plot.mapMembers ?? []).filter((m) => m.role === role && !edits.removedBuildings.includes(m.id));
             const member = members.find((b) => b.plotRole === role);
+            const target = member?.id ?? fromMap[0]?.id;
+            const count = members.filter((b) => b.plotRole === role).length + fromMap.length;
             return (
               <div className="plot-role" key={role}>
-                <span>{PLOT_ROLES[role].label}</span>
-                {member && (
-                  <button type="button" className="link-button" onClick={() => select({ type: 'building', id: member.id })} title="Открыть постройку: двигать, крутить, цвета, крыльцо">
+                <span>
+                  {PLOT_ROLES[role].label}
+                  {count > 1 ? ` × ${count}` : ''}
+                </span>
+                {target && (
+                  <button type="button" className="link-button" onClick={() => select({ type: 'building', id: target })} title="Открыть постройку: двигать, крутить, цвета, крыльцо">
                     настроить →
                   </button>
                 )}
                 <Toggle
-                  value={!!member}
+                  value={count > 0}
                   label={PLOT_ROLES[role].label}
                   onChange={(on) => {
                     const store = useEditStore.getState();

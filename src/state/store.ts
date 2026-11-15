@@ -5,6 +5,20 @@ import { TERRITORIES, findTerritory } from '../core/data';
 
 export type Mode = 'overview' | 'walk' | 'drive';
 /** Чем раскрашена земля: рисунком движка, снимком своей съёмки с дрона или спутниковым. */
+/** Рисованный вид: объём (AO), контуры, мягкая даль, насыщенность, тепло, контраст, виньетка. */
+export interface LookSettings {
+  ao: number;
+  outlines: number;
+  blur: number;
+  saturation: number;
+  warmth: number;
+  contrast: number;
+  vignette: number;
+}
+
+/** Как в первой версии. */
+export const DEFAULT_LOOK: LookSettings = { ao: 0.9, outlines: 0.7, blur: 1, saturation: 1.12, warmth: 1, contrast: 0.12, vignette: 0.1 };
+
 export type Ground = 'drawn' | 'drone' | 'satellite' | 'render';
 
 export interface Selected {
@@ -35,6 +49,10 @@ interface State {
   carColour: number;
   /** Обустроенный посёлок: участки, заборы, дворовые постройки (деревня). */
   estates: boolean;
+  /** «Рисованный» вид: затенение во впадинах, контуры, цветокоррекция, мягкая даль (как в первой версии). */
+  illustrated: boolean;
+  /** Тонкая настройка рисованного вида. */
+  look: LookSettings;
   sound: boolean;
   ground: Ground;
   /** Подпись источника спутникового снимка (её обязаны показывать) или сообщение, что он не загрузился. */
@@ -98,6 +116,8 @@ export const useStore = create<State>((set) => ({
   topView: false,
   carColour: read('car', 0),
   estates: read('estates', true),
+  illustrated: read('illustrated', true),
+  look: { ...DEFAULT_LOOK, ...read<Partial<LookSettings>>('look', {}) },
   sound: read('sound', true),
   ground: (['drawn', 'drone', 'satellite', 'render'] as Ground[]).find((g) => g === (urlParams.get('ground') ?? read('ground', 'drone'))) ?? 'drone',
   groundCredit: '',
@@ -126,6 +146,8 @@ useStore.subscribe((s, prev) => {
   if (s.flow !== prev.flow) write('flow', s.flow);
   if (s.carColour !== prev.carColour) write('car', s.carColour);
   if (s.estates !== prev.estates) write('estates', s.estates);
+  if (s.illustrated !== prev.illustrated) write('illustrated', s.illustrated);
+  if (s.look !== prev.look) write('look', s.look);
   if (s.sound !== prev.sound) write('sound', s.sound);
   if (s.ground !== prev.ground) write('ground', s.ground);
   if (s.contourStep !== prev.contourStep) write('contourStep', s.contourStep);

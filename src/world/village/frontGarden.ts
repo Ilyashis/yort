@@ -16,6 +16,8 @@ export interface FrontGardenOptions {
   far?: boolean;
   /** Подобрать именно этот сад (в мастерской); иначе — по зерну. */
   style?: GardenStyle;
+  /** Без деревьев: деревья берутся только с карты, палисадник — цветы, кусты и живая изгородь. */
+  noTrees?: boolean;
 }
 
 export interface FrontGarden {
@@ -79,6 +81,7 @@ export function planFrontGarden(o: FrontGardenOptions): FrontGarden {
   let style: GardenStyle = o.style ?? pickStyle(dice, W, D);
   if (style === 'orchard' && (D < 2.4 || W < 5)) style = 'tree';
   if (style === 'tree' && D < 1.8) style = 'flowers';
+  if (o.noTrees && (style === 'tree' || style === 'orchard')) style = 'flowers';
   if (D < 0.9) return { parts, style };
 
   // Сад внутри: от забора отступ 0,25 м, от стены — 0,35 м.
@@ -119,7 +122,7 @@ export function planFrontGarden(o: FrontGardenOptions): FrontGarden {
   if (D >= 3.8 && style !== 'orchard') {
     const extra = own(5);
     const xMid = -sideOf * extra.range(0, W / 6);
-    if (style === 'tree') {
+    if (style === 'tree' || o.noTrees) {
       for (const dx of [-0.9, 0.9]) shrub(parts, xMid + dx + (dx < 0 ? -0.8 : 0.8), dx < 0 ? -1 : 1, -D / 2 + 0.6, extra, far, true);
     } else {
       tree(parts, xMid, D, extra.pick(['birch', 'rowan', 'apple'] as const), extra, far);

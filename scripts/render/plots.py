@@ -200,6 +200,27 @@ def main():
     # Сгладить ступеньки сетки по краям.
     filled = ndimage.binary_opening(owner > 0, iterations=2)
     owner[~filled] = 0
+    # Контур каждого участка (для участков-шаблонов в редакторе): выпуклая оболочка его клеток, упрощённая.
+    from scipy.spatial import ConvexHull
+    plot_out = []
+    for n, (oid, _, _) in enumerate(houses, start=1):
+        cells = np.argwhere(owner == n)
+        if len(cells) < 4:
+            continue
+        pts = np.c_[cells[:, 1], cells[:, 0]] * cell + [gx0, gy0] + cell / 2
+        hull = pts[ConvexHull(pts).vertices]
+        # Упрощаем как открытую ломаную (у замкнутой начало совпадает с концом — упрощение вырождается).
+        ring = np.asarray(simplify(hull, 1.1))
+        if len(ring) < 3:
+            continue
+        lon, lat = t.lonlat(ring[:, 0], ring[:, 1])
+        plot_out.append({'house': oid, 'outline': [[round(float(x), 7), round(float(y), 7)] for x, y in zip(lon, lat)]})
+    save_json(t.data / 'plots-render.json', {
+        'metadata': {'territory': t.id, 'source': 'Участки жилых домов: области, на которые земля поделена между домами по линиям заборов с картинки-рендера (выпуклая оболочка)',
+                     'generatedAt': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},
+        'plots': plot_out,
+    })
+
     border = np.zeros(owner.shape, bool)
     border[:, :-1] |= owner[:, :-1] != owner[:, 1:]
     border[:-1, :] |= owner[:-1, :] != owner[1:, :]

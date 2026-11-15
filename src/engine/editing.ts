@@ -21,7 +21,8 @@ import { changeAt, changeRect, replayStrokes, SculptField, type SculptChange, ty
 import type { BaseBuildingFeature } from '../world/base/types';
 import { addStroke, modelOptions, parseOsmAddress, plateText, plotKey, replacedOsmIds, ROAD_KINDS, type Edits, type HouseAddress, type LonLat } from '../world/edit/edits';
 import { AddressPlates, type PlateItem } from '../three/AddressPlates';
-import { createLocalFrame, type LocalFrame } from '../world/walk/localFrame';
+import { adoptMapPlots, mapPlotId, type MapPlot } from '../world/edit/plots';
+import { createLocalFrame, distanceToSegment, type LocalFrame } from '../world/walk/localFrame';
 import type { BuildingSet } from './buildings';
 import type { Rect } from './shared';
 import type { HeightMap } from './terrain';
@@ -216,6 +217,7 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     properties: b.props,
     geometry: { type: 'Polygon', coordinates: b.rings.map((ring) => [...ring, ring[0]].map(lonLat)) },
   })) as unknown as BaseBuildingFeature[];
+  const mapPlots = village?.mapPlots ?? [];
   const editor = new EditorTool({
     city: host,
     frame,
@@ -231,10 +233,36 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     yardModels: village?.yardModels,
     mapFences: d.mapFences ?? [],
     ownTrees: () => d.trees?.ownCrowns().map((c) => ({ x: c.x, y: c.y, z: c.z, id: c.id })) ?? [],
+    mapPlots,
     previewTrees: (trees) => d.trees?.setOwn(trees.map((t) => ({ id: t.id, ...xzOf(t.at), species: t.kind, s: t.scale }))),
   });
   useEditStore.getState().setMapFenceIds((d.mapFences ?? []).map((f) => f.id));
   useEditStore.getState().setFrame(frame);
+  // Участки с карты: выбрать и «сделать участком» — дом и постройки переходят в правки, прежний забор прячется.
+  useEditStore.getState().setMapPlots(mapPlots);
+  // Постройки с карты на участках: их контур (локальные метры) — для забора участка.
+  const mapRects = new Map(mapPlots.flatMap((p) => p.members.map((m) => [m.id, m.rect] as const)));
+  editLayer.setMapFootprint((id) => mapRects.get(id));
+  /** Что участки с карты заменяют: заборы с карты на их границах и дворы «обустроенного посёлка». */
+  const replacedBy = (plots: readonly MapPlot[]) => {
+    const edges = plots.flatMap((plot) => plot.outline.map((a, i) => [a, plot.outline[(i + 1) % plot.outline.length]!] as const));
+    const onEdge = (p: readonly [number, number]) => edges.some(([a, b]) => distanceToSegment(p as [number, number], a, b) < 1.5);
+    const houses = new Set(plots.map((p) => p.house));
+    return {
+      fences: (d.mapFences ?? []).filter((f) => f.line.filter(onEdge).length >= f.line.length * 0.7).map((f) => f.id),
+      yards: (village?.yards ?? []).filter((y) => houses.has(y.houseId.slice(0, y.houseId.lastIndexOf(':')))).map((y) => y.houseId),
+    };
+  };
+  useEditStore.getState().setPlotAdopter((mapId) => {
+    const store = useEditStore.getState();
+    const plots = mapId === '*' ? mapPlots : mapPlots.filter((p) => p.id === mapId);
+    if (!plots.length) return;
+    // Вся деревня по шаблону: все прежние заборы с карты убираются — остаются заборы участков.
+    const hidden = mapId === '*' ? { ...replacedBy(plots), fences: (d.mapFences ?? []).map((f) => f.id) } : replacedBy(plots);
+    store.commit(adoptMapPlots(store.edits, plots, frame, hidden));
+    if (mapId === '*') store.notify(`${plots.length} дворов — по шаблону: дом, гараж, баня, сарай там, где они есть на карте; ворота с калиткой у всех; прежние заборы убраны`);
+    else store.select({ type: 'plot', id: mapPlotId(plots[0]!.house) });
+  });
 
   // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
   const followGround = (change: SculptChange) => {
@@ -301,7 +329,13 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       lines = fence ? [fence.line] : (yard?.fence ?? []).map((segment) => segment.map(frame.toLonLat) as LonLat[]);
     }
     const plot = selection?.type === 'plot' ? edits.plots?.find((p) => p.id === selection.id) : undefined;
-    if (plot) {
+    const mapPlot = selection?.type === 'plot' && !plot ? mapPlots.find((p) => p.id === selection.id) : undefined;
+    if (mapPlot) lines = [[...mapPlot.outline, mapPlot.outline[0]!].map(frame.toLonLat) as LonLat[]];
+    if (plot?.free) {
+      // Участок с карты: ручки на каждом углу (тянутся по одному) и посередине сторон (добавить угол).
+      lines = [[...plot.outline, plot.outline[0]!]];
+      editLayer.setLineHandles([...plot.outline, plot.outline[0]!]);
+    } else if (plot) {
       // Участок: контур и ручки — углы растянуть, чуть снаружи угла — повернуть.
       lines = [[...plot.outline, plot.outline[0]!]];
       editLayer.setHandles(undefined, plot.outline);
@@ -393,6 +427,8 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
       const s = useEditStore.getState();
       s.setResolver(undefined);
       s.setFrame(undefined);
+      s.setPlotAdopter(undefined);
+      s.setMapPlots([]);
       s.setModelApplier(undefined);
       s.setTool(undefined);
       s.select(undefined);

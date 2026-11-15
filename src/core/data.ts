@@ -82,8 +82,12 @@ export interface World {
   surveyFences: P2[][];
   /** Дворовые постройки, снятые с карты: прямоугольник (мир) и догадка о назначении. */
   yardBuildings: { id: string; kind: 'garage' | 'banya' | 'shed'; ring: P2[] }[];
+  /** Участки жилых домов с карты (scripts/render/plots.py): контур (мир) и чей дом. */
+  mapPlots: { house: string; outline: P2[] }[];
   /** Снято ли это место съёмкой: там деревья не сажаются наугад. */
   surveyed: (x: number, z: number) => boolean;
+  /** Деревья сняты с карты (trees-render.json): других деревьев на ней не придумываем. */
+  mapTrees: boolean;
   /** Цвета домов по съёмке с дрона: id → крыша и стены. */
   surveyColours: Record<string, { roof?: string; wall?: string }>;
   osmTimestamp?: string;
@@ -240,7 +244,7 @@ function coverage(frame: Frame, c: TreeSurveyFile['coverage']): (x: number, z: n
 
 export async function loadWorld(territory: Territory, progress: (label: string) => void): Promise<World> {
   progress('Загружаем данные');
-  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender, yardRender, streetRender] = await Promise.all([
+  const [terrain, detailFile, buildingsFile, partsFile, groundFile, streets, treesFile, survey, treeSurvey, streetSurvey, treeRender, fenceRender, houseFit, riverRender, yardRender, streetRender, plotRender] = await Promise.all([
     getJson<TerrainFile>(territory, 'terrain.json'),
     getJson<TerrainFile>(territory, 'terrain-detail.json'),
     getJson<{ metadata?: { osmTimestamp?: string }; features: Feature<BuildingProps>[] }>(territory, 'buildings.geojson'),
@@ -257,6 +261,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     getJson<{ rivers?: [number, number, number][][] }>(territory, 'water-render.json'),
     getJson<{ buildings?: { id: string; kind: 'garage' | 'banya' | 'shed'; footprint: number[][] }[] }>(territory, 'outbuildings-render.json'),
     getJson<StreetsFile & { widths?: Record<string, number> }>(territory, 'streets-render.json'),
+    getJson<{ plots?: { house: string; outline: number[][] }[] }>(territory, 'plots-render.json'),
   ]);
   if (!terrain || !buildingsFile) throw new Error(`Нет данных территории «${territory.name}»`);
 
@@ -286,6 +291,7 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
   }
 
   const line = (coords: number[][]): P2[] => coords.map((c) => frame.xz(c[0], c[1]));
+  const mapCovered = coverage(frame, treeRender?.coverage);
   const point = (c: number[]): P2 => frame.xz(c[0], c[1]);
 
   return {
@@ -311,13 +317,19 @@ export async function loadWorld(territory: Territory, progress: (label: string) 
     lamps: (streets?.lamps ?? []).map(point),
     benches: (streets?.benches ?? []).map(point),
     trees: (treesFile?.trees ?? []).map(point),
-    // Сначала деревья со съёмки с дрона (с настоящими высотами), потом — снятые с рендера там, где дрона нет.
-    surveyTrees: [...(treeSurvey?.trees ?? []), ...(treeRender?.trees ?? [])].map(([lon, lat, height, radius, kind, dense]) => {
+    // Деревья — только те, что есть на карте (trees-render.json); деревья со съёмки с дрона — лишь там, куда
+    // карта не достаёт (на ней их и так видно, а вторые — лишние и стоят мимо).
+    surveyTrees: [
+      ...(treeSurvey?.trees ?? []).filter(([lon, lat]) => !mapCovered(...frame.xz(lon!, lat!))),
+      ...(treeRender?.trees ?? []),
+    ].map(([lon, lat, height, radius, kind, dense]) => {
       const [x, z] = frame.xz(lon, lat);
       return { x, z, height, radius, spruce: kind === 's', dense: dense === undefined ? undefined : dense === 1 };
     }),
-    surveyed: ((a, b) => (x: number, z: number) => a(x, z) || b(x, z))(coverage(frame, treeSurvey?.coverage), coverage(frame, treeRender?.coverage)),
+    surveyed: ((a, b) => (x: number, z: number) => a(x, z) || b(x, z))(coverage(frame, treeSurvey?.coverage), mapCovered),
+    mapTrees: !!treeRender?.trees?.length,
     surveyFences: (fenceRender?.fences ?? []).map(line),
+    mapPlots: (plotRender?.plots ?? []).map((p) => ({ house: p.house, outline: line(p.outline) })).filter((p) => p.outline.length >= 3),
     yardBuildings: (yardRender?.buildings ?? []).map((b) => ({ id: b.id, kind: b.kind, ring: line(b.footprint) })).filter((b) => b.ring.length === 4),
     surveyColours: survey?.houses ?? {},
     osmTimestamp: buildingsFile.metadata?.osmTimestamp,

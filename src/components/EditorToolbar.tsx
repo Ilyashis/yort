@@ -102,6 +102,10 @@ export function EditorToolbar() {
   const mapFenceIds = useEditStore((s) => s.mapFenceIds);
   const treeSettings = useEditStore((s) => s.tree);
   const plotTemplate = useEditStore((s) => s.plotTemplate);
+  const adoptPlot = useEditStore((s) => s.adoptPlot);
+  const plotMode = useEditStore((s) => s.plotMode);
+  const setPlotMode = useEditStore((s) => s.setPlotMode);
+  const closeLine = useEditStore((s) => s.closeLine);
   const setPlotTemplate = useEditStore((s) => s.setPlotTemplate);
   const setTree = useEditStore((s) => s.setTree);
   const [menu, setMenu] = useState(false);
@@ -168,15 +172,24 @@ export function EditorToolbar() {
       {visibleNotice && <div className="editor-notice">{visibleNotice}</div>}
       {underlayMode ? (
         <div className="editor-hint editor-hint-accent">{underlayMode === 'move' ? MOVE_HINT : alignHint(underlayMode, align)}</div>
-      ) : drawing && (tool === 'road' || tool === 'fence') ? (
+      ) : drawing && (tool === 'road' || tool === 'fence' || tool === 'plot') ? (
         <div className="editor-hint editor-hint-drawing">
           <span className="editor-measure">
             <b>{formatMetres(drawing.segment)}</b> отрезок · {formatMetres(drawing.total)} всего · точек {drawing.points}
             {drawing.snap && <em className={`editor-snap editor-snap-${drawing.snap}`}>{SNAP_TEXT[drawing.snap]}</em>}
           </span>
+          {drawing.capture && (
+            <span className="editor-capture">
+              На участок: <b>{drawing.capture}</b>
+            </span>
+          )}
           <span className="editor-keys">
-            {drawing.kind === 'fence' && drawing.points >= 3 && 'Щелчок по первой точке — замкнуть · '}
-            <kbd>Enter</kbd> готово · <kbd>Backspace</kbd> убрать точку · <kbd>Esc</kbd> бросить
+            {drawing.kind !== 'road' && drawing.points >= 3 && (
+              <button type="button" className="editor-close-line" onClick={() => closeLine?.()} title="Соединить последнюю точку с первой">
+                Замкнуть <kbd>C</kbd>
+              </button>
+            )}
+            <kbd>Enter</kbd> {drawing.kind === 'plot' ? 'замкнуть и создать' : 'готово'} · <kbd>Backspace</kbd> убрать точку · <kbd>Esc</kbd> бросить
           </span>
         </div>
       ) : (
@@ -184,6 +197,8 @@ export function EditorToolbar() {
           <div className="editor-hint">
             {active.tool === 'select' && selectionType === 'fence'
               ? FENCE_SELECTED_HINT
+              : active.tool === 'plot' && plotMode === 'outline'
+                ? 'Обведите по точкам двор с уже стоящими домом и постройками; замкните (щелчок по первой точке, C или Enter) — участок возьмёт всё, что внутри, забор упрётся в постройки на границе, ворота с калиткой — на улице.'
               : active.tool === 'plot'
                 ? `${PLOT_TEMPLATES[plotTemplate].label}: ${PLOT_TEMPLATES[plotTemplate].hint.toLowerCase()}. Щелчок у дороги — участок ${PLOT_TEMPLATES[plotTemplate].size.join(' × ')} м, протяжка — своего размера.`
               : active.tool === 'tree'
@@ -291,12 +306,35 @@ export function EditorToolbar() {
         </div>
       )}
       {tool === 'plot' && (
-        <div className="segmented editor-kinds" role="group" aria-label="Шаблон участка">
-          {PLOT_TEMPLATE_ORDER.map((t) => (
-            <button key={t} type="button" title={PLOT_TEMPLATES[t].hint} className={plotTemplate === t ? 'active' : ''} onClick={() => setPlotTemplate(t)}>
-              {PLOT_TEMPLATES[t].label}
+        <div className="editor-models">
+          <div className="segmented editor-kinds" role="group" aria-label="Как создать участок">
+            <button type="button" className={plotMode === 'template' ? 'active' : ''} onClick={() => setPlotMode('template')} title="Поставить участок по шаблону">
+              По шаблону
             </button>
-          ))}
+            <button type="button" className={plotMode === 'outline' ? 'active' : ''} onClick={() => setPlotMode('outline')} title="Обвести двор с уже стоящими постройками">
+              Обвести постройки
+            </button>
+          </div>
+          {plotMode === 'template' && (
+          <div className="segmented editor-kinds" role="group" aria-label="Шаблон участка">
+            {PLOT_TEMPLATE_ORDER.map((t) => (
+              <button key={t} type="button" title={PLOT_TEMPLATES[t].hint} className={plotTemplate === t ? 'active' : ''} onClick={() => setPlotTemplate(t)}>
+                {PLOT_TEMPLATES[t].label}
+              </button>
+            ))}
+          </div>
+          )}
+          {adoptPlot && plotMode === 'template' && (
+            <div className="segmented editor-kinds" role="group" aria-label="Дворы с карты">
+              <button
+                type="button"
+                title="Каждый двор — участок по шаблону «Деревенский двор»: дом, гараж, баня и сарай встают на свои места с карты (чего на карте нет — нет; лишние постройки убираются), ворота с калиткой у всех, прежние заборы с карты убираются. Вернуть — «Отменить»."
+                onClick={() => adoptPlot('*')}
+              >
+                Все дворы — по шаблону
+              </button>
+            </div>
+          )}
         </div>
       )}
       {tool === 'tree' && (

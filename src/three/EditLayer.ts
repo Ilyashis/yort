@@ -21,7 +21,10 @@ import {
   CanvasTexture,
   Color,
   Group,
+  BufferAttribute,
+  DoubleSide,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Points,
   PointsMaterial,
@@ -148,6 +151,9 @@ export class EditLayer {
   private readonly houseMaterials: HouseMaterials;
   /** Геометрия моделей по виду и размеру — перетаскивание и перерисовка не пересобирают дом. */
   private readonly modelCache = new Map<string, HouseMesh>();
+  private mapFootprint?: (id: string) => readonly Vec2[] | undefined;
+  private plotFenceKey = '';
+  private plotFence?: { mesh?: Mesh; lines: { id: string; line: Vec2[] }[] };
   /** Размер плана модели в кэше (модель ограничена своими пределами размеров). */
   private readonly planSizes = new Map<string, [number, number]>();
   private readonly cornerPoints: Points;
@@ -201,10 +207,37 @@ export class EditLayer {
     const items = edits.buildings
       .filter((b) => b.id !== hiddenId)
       .map((building) => ({ building, tint: building.id === selectedId ? SELECTED : undefined }));
-    // Заборы участков не хранятся — считаются по контуру и постройкам на границе.
-    this.main = this.assemble('edit', items, [...edits.fences, ...plotFences(edits, this.frame)]);
+    this.main = this.assemble('edit', items, edits.fences);
+    this.renderPlotFences(edits);
     this.sweepModels();
     this.city.requestRender();
+  }
+
+  /** Контур постройки с карты (локальные метры) — для заборов участков. */
+  setMapFootprint(lookup: (id: string) => readonly Vec2[] | undefined): void {
+    this.mapFootprint = lookup;
+  }
+
+  /**
+   * Заборы участков: не хранятся, а считаются по контуру и постройкам на границе. Их бывают десятки
+   * километров — меш пересобирается, только когда заборы на самом деле поменялись.
+   */
+  private renderPlotFences(edits: Edits): void {
+    const list = plotFences(edits, this.frame, this.mapFootprint);
+    const key = JSON.stringify(list);
+    if (key === this.plotFenceKey) return;
+    this.plotFenceKey = key;
+    if (this.plotFence?.mesh) {
+      this.group.remove(this.plotFence.mesh);
+      this.plotFence.mesh.geometry.dispose();
+    }
+    const parts = new MergedBuilder();
+    const lines = list.map((fence) => {
+      const local = fence.line.map(this.frame.toLocal);
+      this.addFence(fence, local, parts);
+      return { id: fence.id, line: local };
+    });
+    this.plotFence = { mesh: this.boxes(parts, 'plot-fences'), lines };
   }
 
   /** Предпросмотр дома (растяжка, перетаскивание); invalid — красным: здесь ставить нельзя. */
@@ -239,6 +272,54 @@ export class EditLayer {
     setPoints(this.anglePoints, at && snap.kind === 'angle' ? [at] : []);
     this.city.requestRender();
   }
+
+  /**
+   * Обводка участка: полупрозрачная заливка области (локальные метры), замыкающая линия от последней точки к
+   * первой и рамки вокруг построек, которые попадут на участок. undefined — спрятать.
+   */
+  setOutlineArea(polygon: readonly Vec2[] | undefined, captured: readonly (readonly Vec2[])[] = []): void {
+    if (this.area) {
+      this.group.remove(this.area);
+      this.area.geometry.dispose();
+      this.area = undefined;
+    }
+    this.removeLine(this.closing);
+    this.closing = undefined;
+    for (const line of this.captured) this.removeLine(line);
+    this.captured = [];
+    if (polygon && polygon.length >= 3) {
+      // Заливка — треугольниками по рельефу, чуть над землёй (за домами прячется, сквозь себя не мешает).
+      const tris = ShapeUtils.triangulateShape(polygon.map(([x, y]) => new Vector2(x, y)), []);
+      const pos = new Float32Array(tris.length * 9);
+      tris.forEach((t, k) =>
+        t.forEach((i, j) => {
+          const [x, y] = polygon[i]!;
+          pos.set([x, this.heightAt(x, y) + 0.35, -y], k * 9 + j * 3);
+        }),
+      );
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(pos, 3));
+      this.area = new Mesh(geometry, this.areaMaterial);
+      this.area.name = 'edit-outline-area';
+      this.area.renderOrder = LINE_ORDER - 1;
+      this.group.add(this.area);
+      const first = polygon[0]!, last = polygon[polygon.length - 1]!;
+      this.closing = this.addLine([last, first].map(this.frame.toLonLat) as LonLat[], this.closingMaterial);
+    }
+    this.captured = captured.flatMap((ring) => {
+      const line = this.addLine([...ring, ring[0]!].map(this.frame.toLonLat) as LonLat[], this.capturedMaterial);
+      return line ? [line] : [];
+    });
+    this.city.requestRender();
+  }
+
+  private area?: Mesh;
+  private closing?: Line2;
+  private captured: Line2[] = [];
+  private readonly areaMaterial = new MeshBasicMaterial({ color: '#f5a524', transparent: true, opacity: 0.18, depthWrite: false, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -6 });
+  private readonly closingMaterial = lineMaterial('#f5a524', 2, 0.55);
+  /** Рамки захватываемых построек — поверх всего (иначе сверху их закрывают крыши). */
+  private readonly capturedMaterial = Object.assign(lineMaterial('#5fd068', 4, 1), { depthTest: false });
 
   /** Точки на земле (локальные метры): где встанут деревья аллеи или где прошёл ластик; [] — спрятать. */
   setSnapMarkers(points: readonly Vec2[], kind: 'plant' | 'erase' = 'plant'): void {
@@ -314,6 +395,7 @@ export class EditLayer {
       this.main?.walls,
       this.main?.roofs,
       this.main?.fences,
+      this.plotFence?.mesh,
       this.previewed?.walls,
       this.previewed?.roofs,
       ...(this.main?.models ?? []),
@@ -342,11 +424,12 @@ export class EditLayer {
       const id = index === undefined ? undefined : assembly.ids[index];
       if (id) return { building: id };
     }
-    if (this.main?.fences && intersection.object === this.main.fences) {
+    const fenceSet = this.main?.fences && intersection.object === this.main.fences ? this.main.fenceLines : this.plotFence?.mesh && intersection.object === this.plotFence.mesh ? this.plotFence.lines : undefined;
+    if (fenceSet) {
       // Луч попал в доску или столб — забор тот, чья ось ближе всего к точке попадания.
       const point = toLocal2(intersection.point);
       let best: { id: string; distance: number } | undefined;
-      for (const { id, line } of this.main.fenceLines) {
+      for (const { id, line } of fenceSet) {
         const distance = nearestOnLines(point, [line])?.distance ?? Number.POSITIVE_INFINITY;
         if (!best || distance < best.distance) best = { id, distance };
       }
@@ -356,6 +439,11 @@ export class EditLayer {
   }
 
   destroy(): void {
+    this.setOutlineArea(undefined);
+    if (this.plotFence?.mesh) {
+      this.group.remove(this.plotFence.mesh);
+      this.plotFence.mesh.geometry.dispose();
+    }
     this.disposeAssembly(this.main);
     this.disposeAssembly(this.previewed);
     this.main = undefined;
