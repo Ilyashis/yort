@@ -72,6 +72,8 @@ export type HouseModelId =
   | 'museum'
   | 'club'
   | 'office'
+  | 'firestation'
+  | 'hospital'
   | 'shop'
   | 'store'
   | 'busstop'

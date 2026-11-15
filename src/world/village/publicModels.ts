@@ -1,5 +1,5 @@
 // Общественные здания и мелкие постройки башкирской деревни: школа (лицей), музей, сельский клуб
-// (дом культуры), контора (администрация), магазин, универмаг; на улице и во дворе — остановка,
+// (дом культуры), контора (администрация), пожарная часть, больница (амбулатория, ФАП), магазин, универмаг; на улице и во дворе — остановка,
 // уличный туалет, колодец. Те же правила, что у жилых домов: x — вдоль уличного фасада, улица — со
 // стороны −y, зерно выбирает окраску и мелочи. Надписи — таблички (рисуются текстурой), у школы и
 // конторы — флаги Башкортостана и России.
@@ -328,6 +328,171 @@ function planClub(o: HouseOptions): HousePlan {
   const zc = top + (roof.ridge - top) * 0.4;
   parts.push({ type: 'cylinder', from: at(pf, W / 2, 0, zc), to: at(pf, W / 2, 0.06, zc), radius: 0.6, segments: 5, color: dice.pick(['#c8463a', '#e2b23a']) });
   return finish('club', parts, W, D, rect(W + t, D + t));
+}
+
+// --- пожарная часть, больница --------------------------------------------------------------------
+
+/**
+ * Пожарная часть (пожарное депо): одноэтажный гараж с двумя-тремя высокими красными воротами на улицу,
+ * пристройка с дверью и окнами для дежурных, красная полоса с надписью над воротами и рукавосушильная
+ * башня-каланча в заднем углу.
+ */
+function planFireStation(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 12000);
+  const W = clamp(o.width ?? 18, 12, 30);
+  const D = clamp(o.depth ?? 12, 9, 16);
+  const brick = dice.chance(0.6);
+  const wall = brick ? dice.pick(BRICK_WHITE) : dice.pick(['#ece6d6', '#e6e2da', '#efe3cf']);
+  const surface: Surface = brick ? 'brick' : 'plaster';
+  const red = dice.pick(['#b8322a', '#c0392b', '#a92a24']);
+  const roofColor = dice.pick(['#7c3a2e', '#5a3e32', '#3a5f86', '#8a8f94']);
+  const hp = 0.35;
+  const t = 0.42;
+  const wallH = 5.0;
+  const top = hp + wallH;
+  const walls = rectWalls(W, D);
+  const parts: HousePart[] = [plinth(W + t + 0.1, D + t + 0.1, hp, '#9d9a92')];
+  const openings = emptyOpenings();
+  const style: WindowStyle = { trim: '#ffffff', accent: red, frame: '#f7f7f4', top: 'none', apron: false, sash: 'modern' };
+
+  // Ворота — в левой части фасада, служебная часть — справа.
+  const gates = W >= 20 ? 3 : 2;
+  const gateW = 3.4;
+  const gateH = 3.9;
+  const gap = 1.0;
+  const gateSpan = gates * gateW + (gates - 1) * gap;
+  const gx0 = 0.9;
+  const gateUs = Array.from({ length: gates }, (_, i) => gx0 + gateW / 2 + i * (gateW + gap));
+  for (const u of gateUs) {
+    doorIn(parts, openings.front, walls.front, u, hp - 0.3, gateW, gateH, t / 2, red, '#f2f0ea');
+    // Окна-полоса в воротах.
+    parts.push(wallBox(walls.front, u, t / 2 + 0.07, hp + gateH - 1.0, [gateW - 0.6, 0.03, 0.42], '#2c3a48'));
+  }
+  // Служебная часть: дверь и окна.
+  const officeU0 = gx0 + gateSpan + 0.8;
+  const officeW = W - officeU0;
+  if (officeW > 2.2) {
+    doorIn(parts, openings.front, walls.front, officeU0 + 1.1, hp + 0.02, 1.1, 2.2, t / 2, dice.pick(['#5a3a2e', '#3a3f45']), '#f2f0ea');
+    const us = fitWindows(officeW - 2.2, 1.2, false, 4, 0.4).map((u) => officeU0 + 2.2 + u);
+    windowRows(parts, openings.front, walls.front, us, { floors: 1, base: hp, floorHeight: 3, sill: 0.9, w: 1.2, h: 1.4, t, style, dice });
+  }
+  for (const key of ['left', 'right', 'back'] as const) {
+    const us = fitWindows(walls[key].length, 1.2, false, key === 'back' ? 5 : 3, 1.2);
+    windowRows(parts, openings[key], walls[key], us, { floors: 1, base: hp, floorHeight: 3, sill: 1.4, w: 1.2, h: 1.2, t, style, dice });
+  }
+  for (const key of Object.keys(walls) as WallKey[]) parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, surface));
+  // Красная полоса с надписью над воротами и пояс по верху.
+  parts.push(wallBox(walls.front, W / 2, t / 2 + 0.03, hp + gateH + 0.45, [W + t, 0.06, 0.5], red, 'plaster'));
+  parts.push(...wallSign(walls.front, gx0 + gateSpan / 2, t / 2 + 0.04, hp + gateH + 0.45, Math.min(gateSpan - 0.4, 7), 0.42, 'ПОЖАРНАЯ ЧАСТЬ', red, '#ffffff'));
+  cornice(parts, walls, t, top - 0.12, red, 'plaster', 0.24);
+  // Номер на служебной части.
+  if (officeW > 2.2) parts.push(...wallSign(walls.front, officeU0 + officeW / 2 + 0.6, t / 2, hp + 3.3, 1.0, 0.55, '01\n112', '#ffffff', red));
+
+  const pitch = 18;
+  const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, side: 0.5, front: 0.6, back: 0.5, color: roofColor, surface: 'metal' });
+  parts.push(...roof.parts);
+  const gable = { top, ridge: roof.ridge, side: 0.5, eave: roof.eave, color: wall, surface, trim: '#f2f0ea', towel: false };
+  parts.push(...gableEnd(walls.left, { ...gable, out: t / 2, overhang: 0.5 }));
+  parts.push(...gableEnd(walls.right, { ...gable, out: t / 2, overhang: 0.5 }));
+
+  // Каланча (рукавосушильная башня) — в заднем правом углу, выше крыши.
+  const S = 3.0;
+  const towerH = Math.round(dice.range(13, 16));
+  const tx = W / 2 - S / 2 - 0.4;
+  const ty = D / 2 + S / 2 - 0.2;
+  const tw = rectWalls(S, S, tx, ty);
+  const tOpen = emptyOpenings();
+  for (const key of Object.keys(tw) as WallKey[]) {
+    windowIn(parts, tOpen[key], tw[key], S / 2, towerH - 2.6, 0.8, 1.2, { thickness: 0.3 }, style, dice, '#f2f0ea');
+    windowIn(parts, tOpen[key], tw[key], S / 2, top + 1.8, 0.5, 0.8, { thickness: 0.3 }, style, dice, '#f2f0ea');
+    parts.push(...solidWall(tw[key], hp, towerH - hp, 0.3, tOpen[key], wall, surface));
+  }
+  parts.push(plinth(S + 0.4, S + 0.4, hp, '#9d9a92', tx, ty));
+  parts.push({ type: 'box', center: [tx, ty, towerH - 0.1], size: [S + 0.5, S + 0.5, 0.25], color: red, surface: 'plaster' });
+  const tRoof = hipRoof({ w: S, d: S, top: towerH, pitch: 38, overhang: 0.35, color: roofColor, surface: 'metal' });
+  for (const part of tRoof.parts) parts.push(shiftPart(part, tx, ty));
+  return finish('firestation', parts, W, D, rect(W + t, D + t));
+}
+
+/**
+ * Сельская больница (врачебная амбулатория, ФАП): длинный одноэтажный дом, светлая штукатурка с цветным
+ * поясом, ряд окон, крыльцо под козырьком с пандусом, вывеска и красный крест у входа.
+ */
+function planHospital(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 13000);
+  const W = clamp(o.width ?? 20, 10, 34);
+  const D = clamp(o.depth ?? 11, 8, 16);
+  const wall = dice.pick(['#f3f1ea', '#eef0ec', '#f2ebdc', '#e9eef0']);
+  const band = dice.pick(['#4f8fbf', '#3f8f7a', '#6aa0c8']);
+  const roofColor = dice.pick(['#3f6b4f', '#3a5f86', '#2f6f6a', '#8a8f94']);
+  const hp = 0.7;
+  const t = 0.42;
+  const wallH = 3.3;
+  const top = hp + wallH;
+  const walls = rectWalls(W, D);
+  const parts: HousePart[] = [plinth(W + t + 0.1, D + t + 0.1, hp, '#a8a397')];
+  const openings = emptyOpenings();
+  const style: WindowStyle = { trim: '#ffffff', accent: band, frame: '#f7f7f4', top: 'none', apron: false, sash: 'modern' };
+  const rows = { floors: 1, base: hp, floorHeight: 3, sill: 0.85, w: 1.4, h: 1.5, t, style, dice };
+  const entry = W / 2;
+  doorIn(parts, openings.front, walls.front, entry, hp + 0.05, 1.6, 2.3, t / 2, dice.pick(['#f2f2ef', '#d8dde2']), '#f2f0ea');
+  const lines: Record<WallKey, number[]> = {
+    front: fitWindows(W, rows.w, false, 14, 1.0),
+    back: fitWindows(W, rows.w, false, 14, 1.0),
+    left: fitWindows(D, rows.w, false, 5, 1.0),
+    right: fitWindows(D, rows.w, false, 5, 1.0),
+  };
+  for (const key of Object.keys(walls) as WallKey[]) {
+    const skip = key === 'front' ? (u: number) => Math.abs(u - entry) < 2.2 : undefined;
+    windowRows(parts, openings[key], walls[key], lines[key], rows, skip);
+    parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, 'plaster'));
+    // Цветной пояс под окнами.
+    parts.push(wallBox(walls[key], walls[key].length / 2, t / 2 + 0.02, hp + 0.55, [walls[key].length + t, 0.04, 0.22], band, 'plaster'));
+  }
+  cornice(parts, walls, t, top - 0.12, '#ffffff', 'plaster', 0.24);
+  parts.push(
+    ...porch(walls.front, {
+      u: entry,
+      width: 3.2,
+      depth: 2.0,
+      floor: hp + 0.05,
+      wallOut: t / 2,
+      canopy: { kind: 'gable', z: hp + 2.75 },
+      wood: '#b9b4aa',
+      roof: roofColor,
+      roofSurface: 'metal',
+      trim: '#ecebe6',
+    }),
+  );
+  // Пандус вдоль фасада к крыльцу (для носилок и колясок) с перилами.
+  const rampL = 5.5;
+  const r0 = entry + 1.6;
+  const rf = walls.front;
+  // Пологий пандус — пятью короткими плитами, каждая ниже предыдущей.
+  for (let k = 0; k < 5; k++) {
+    const h = ((hp + 0.05) * (5 - k)) / 5;
+    parts.push(wallBox(rf, r0 + (k + 0.5) * (rampL / 5), t / 2 + 0.9, h / 2, [rampL / 5 + 0.02, 1.2, h], '#b9b4aa', 'plaster'));
+  }
+  parts.push({ type: 'cylinder', from: at(rf, r0, t / 2 + 1.5, hp + 0.95), to: at(rf, r0 + rampL, t / 2 + 1.5, 0.92), radius: 0.03, segments: 6, color: '#c9ccd0' });
+  // Вывеска и красный крест у входа.
+  parts.push(...wallSign(walls.front, entry, t / 2, top - 0.45, Math.min(5.2, W * 0.4), 0.5, W >= 16 ? 'ВРАЧЕБНАЯ АМБУЛАТОРИЯ' : 'ФАП', '#ffffff', '#1f4f8a'));
+  const cu = entry + Math.min(3.4, W / 2 - 1);
+  const cz = hp + 2.3;
+  parts.push(wallBox(walls.front, cu, t / 2 + 0.02, cz, [1.0, 0.04, 1.0], '#ffffff', 'plaster'));
+  parts.push(wallBox(walls.front, cu, t / 2 + 0.05, cz, [0.78, 0.03, 0.24], '#d42a2a'));
+  parts.push(wallBox(walls.front, cu, t / 2 + 0.05, cz, [0.24, 0.03, 0.78], '#d42a2a'));
+  const pitch = 24;
+  parts.push(...hipRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, overhang: 0.55, color: roofColor, surface: 'metal' }).parts);
+  return finish('hospital', parts, W, D, rect(W + t, D + t));
+}
+
+/** Деталь, сдвинутая по x, y (для частей, построенных вокруг начала координат). */
+function shiftPart(part: HousePart, dx: number, dy: number): HousePart {
+  const move = (p: readonly number[]): [number, number, number] => [p[0]! + dx, p[1]! + dy, p[2]!];
+  if ('center' in part) return { ...part, center: move(part.center) } as HousePart;
+  if (part.type === 'cylinder') return { ...part, from: move(part.from), to: move(part.to) };
+  if (part.type === 'slab') return { ...part, points: part.points.map(move) };
+  return part;
 }
 
 // --- магазины ------------------------------------------------------------------------------------
@@ -811,6 +976,28 @@ export const PUBLIC_MODELS: HouseModel[] = [
     width: { min: 11, value: 16, max: 26 },
     depth: { min: 9, value: 11, max: 15 },
     plan: withGround(planOffice),
+  },
+  {
+    id: 'firestation',
+    group: 'public',
+    name: 'Пожарная часть',
+    short: 'Пожарная',
+    summary: 'гараж · каланча',
+    description: 'Пожарное депо: высокие красные ворота на два-три выезда, красная полоса с надписью, служебная часть с дверью и окнами, рукавосушильная башня-каланча в заднем углу.',
+    width: { min: 12, value: 18, max: 30 },
+    depth: { min: 9, value: 12, max: 16 },
+    plan: withGround(planFireStation),
+  },
+  {
+    id: 'hospital',
+    group: 'public',
+    name: 'Больница (амбулатория, ФАП)',
+    short: 'Больница',
+    summary: 'штукатурка · 1 этаж',
+    description: 'Сельская врачебная амбулатория (маленькая — ФАП): длинный одноэтажный дом, светлая штукатурка с цветным поясом, крыльцо под козырьком с пандусом, вывеска и красный крест у входа.',
+    width: { min: 10, value: 20, max: 34 },
+    depth: { min: 8, value: 11, max: 16 },
+    plan: withGround(planHospital),
   },
   {
     id: 'shop',

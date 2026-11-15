@@ -5,7 +5,7 @@ import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { EMPTY_EDITS, ROAD_KINDS, isEmpty, parseEdits, type EditRoadKind } from '../world/edit/edits';
 import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelGroup } from '../world/village/houseModels';
-import { SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptMode } from '../world/base/sculpt';
+import { AREA_MODES, SCULPT_LEVELS, SCULPT_MODES, SCULPT_RADIUS, SCULPT_STRENGTH, type SculptLevelBy, type SculptMode } from '../world/base/sculpt';
 
 const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: ReactNode }[] = [
   {
@@ -139,7 +139,13 @@ export function EditorToolbar() {
             {active.tool === 'house' && houseModel
               ? `Клик по земле — поставить «${findHouseModel(houseModel)?.name}» фасадом к ближайшей улице; растяните — дом встанет по размеру.`
               : active.tool === 'terrain'
-                ? `${SCULPT_MODES[sculpt.mode].hint} [ и ] — размер кисти.`
+                ? sculpt.shape === 'area' && AREA_MODES.includes(sculpt.mode)
+                  ? sculpt.mode === 'flatten'
+                    ? `Обведите область с зажатой кнопкой и отпустите — земля внутри выровняется ${SCULPT_LEVELS[sculpt.levelBy ?? 'median'].hint} (у края — плавный переход).`
+                    : 'Обведите область с зажатой кнопкой и отпустите — бугры и ямки внутри сгладятся, общий уклон останется.'
+                  : sculpt.mode === 'flatten' && (sculpt.levelBy === 'low' || sculpt.levelBy === 'high')
+                    ? `Земля под кистью тянется ${SCULPT_LEVELS[sculpt.levelBy].hint.replace('внутри', 'под кистью в момент нажатия')}. [ и ] — размер кисти.`
+                    : `${SCULPT_MODES[sculpt.mode].hint} [ и ] — размер кисти.`
                 : active.hint}
           </div>
         )
@@ -186,24 +192,66 @@ export function EditorToolbar() {
         <div className="editor-models">
           <div className="segmented editor-kinds" role="group" aria-label="Кисть рельефа">
             {SCULPT_ORDER.map((m) => (
-              <button key={m} type="button" className={sculpt.mode === m ? 'active' : ''} onClick={() => setSculpt({ mode: m })}>
+              <button
+                key={m}
+                type="button"
+                className={sculpt.mode === m ? 'active' : ''}
+                disabled={sculpt.shape === 'area' && !AREA_MODES.includes(m)}
+                onClick={() => setSculpt({ mode: m })}
+              >
                 {SCULPT_MODES[m].label}
               </button>
             ))}
           </div>
+          <div className="segmented editor-kinds" role="group" aria-label="Кистью или обвести область">
+            <button type="button" className={sculpt.shape !== 'area' ? 'active' : ''} onClick={() => setSculpt({ shape: 'brush' })} title="Водить кистью по земле">
+              Кистью
+            </button>
+            <button
+              type="button"
+              className={sculpt.shape === 'area' ? 'active' : ''}
+              title="Обвести произвольную область — выровнять или сгладить её целиком"
+              onClick={() => setSculpt({ shape: 'area', ...(AREA_MODES.includes(sculpt.mode) ? {} : { mode: 'flatten' }) })}
+            >
+              Обвести область
+            </button>
+          </div>
+          {sculpt.mode === 'flatten' && (
+            <div className="segmented editor-kinds" role="group" aria-label="Выровнять к высоте">
+              {(Object.keys(SCULPT_LEVELS) as SculptLevelBy[]).map((by) => {
+                // Кистью по умолчанию — к высоте точки, с которой начали мазок; обводкой — к средней.
+                const brush = sculpt.shape !== 'area';
+                const label = brush && by === 'median' ? 'От точки' : SCULPT_LEVELS[by].label;
+                const hint = brush ? (by === 'median' ? 'к высоте точки, с которой начали' : SCULPT_LEVELS[by].hint.replace('внутри', 'под кистью')) : SCULPT_LEVELS[by].hint;
+                return (
+                  <button
+                    key={by}
+                    type="button"
+                    className={(sculpt.levelBy ?? 'median') === by ? 'active' : ''}
+                    title={`Выровнять ${hint}`}
+                    onClick={() => setSculpt({ levelBy: by })}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div className="panel editor-sliders">
-            <label>
-              <span>Размер</span>
-              <input
-                type="range"
-                min={SCULPT_RADIUS.min}
-                max={SCULPT_RADIUS.max}
-                step={1}
-                value={sculpt.radius}
-                onChange={(e) => setSculpt({ radius: Number(e.target.value) })}
-              />
-              <output>{sculpt.radius} м</output>
-            </label>
+            {sculpt.shape !== 'area' && (
+              <label>
+                <span>Размер</span>
+                <input
+                  type="range"
+                  min={SCULPT_RADIUS.min}
+                  max={SCULPT_RADIUS.max}
+                  step={1}
+                  value={sculpt.radius}
+                  onChange={(e) => setSculpt({ radius: Number(e.target.value) })}
+                />
+                <output>{sculpt.radius} м</output>
+              </label>
+            )}
             <label>
               <span>Сила</span>
               <input

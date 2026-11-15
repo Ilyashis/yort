@@ -138,3 +138,67 @@ describe('simplify', () => {
     ]);
   });
 });
+
+describe('участки по кадастру', () => {
+  it('дом на кадастровом участке получает ровно его, соседний — не заходит', () => {
+    // Узкий длинный участок под n1 (x 18…30, от улицы до 70 м) и широкий под n2 (x 30…60).
+    const narrow: Vec2[] = [
+      [18, 5],
+      [30, 5],
+      [30, 70],
+      [18, 70],
+    ];
+    const wide: Vec2[] = [
+      [30, 5],
+      [60, 5],
+      [60, 40],
+      [30, 40],
+    ];
+    const withParcels = planEstates({ houses: north.slice(0, 4), sheds: [], blockers: [], roads: [road], tracks: [], parcels: [narrow, wide] });
+    const area = (ring: readonly Vec2[]) => Math.abs(ring.reduce((s, [x, y], i) => s + x * ring[(i + 1) % ring.length]![1] - ring[(i + 1) % ring.length]![0] * y, 0) / 2);
+    const n1 = withParcels.plots.find((p) => p.id === 'n1:0' || p.id === 'n1')!;
+    const n2 = withParcels.plots.find((p) => p.id === 'n2:0' || p.id === 'n2')!;
+    // Площадь — как у кадастрового (растр 1 м даёт погрешность по краю).
+    expect(Math.abs(area(n1.ring) - area(narrow)) / area(narrow)).toBeLessThan(0.12);
+    expect(Math.abs(area(n2.ring) - area(wide)) / area(wide)).toBeLessThan(0.12);
+    // Соседний n0 (без кадастра) не заходит на участок n1.
+    const n0 = withParcels.plots.find((p) => p.id === 'n0:0' || p.id === 'n0')!;
+    expect(n0.ring.every(([x]) => x <= 18.8)).toBe(true);
+  });
+});
+
+describe('прямые заборы', () => {
+  it('косая кадастровая граница — забор одной прямой по ней, без лесенки', () => {
+    // Два участка с общей косой границей от (30, 5) до (40, 60).
+    const left: Vec2[] = [
+      [6, 5],
+      [30, 5],
+      [40, 60],
+      [16, 60],
+    ];
+    const right: Vec2[] = [
+      [30, 5],
+      [56, 5],
+      [66, 60],
+      [40, 60],
+    ];
+    const plan = planEstates({ houses: [house('a', 22, 14), house('b', 46, 14)], sheds: [], blockers: [], roads: [road], tracks: [], parcels: [left, right] });
+    const side = plan.runs.find((r) => r.kind === 'side' && r.owners.length === 2);
+    expect(side).toBeDefined();
+    // Все точки — на кадастровой линии (не дальше 0,3 м), а точек — немного: прямая, а не лесенка.
+    const dist = ([x, y]: Vec2) => {
+      const [ax, ay] = [30, 5];
+      const [dx, dy] = [10, 55];
+      return Math.abs((x - ax) * dy - (y - ay) * dx) / Math.hypot(dx, dy);
+    };
+    for (const p of side!.line) expect(dist(p)).toBeLessThan(0.3);
+    expect(side!.line.length).toBeLessThanOrEqual(4);
+  });
+
+  it('без кадастра лесенка растра спрямляется: отрезки длиннее клетки', () => {
+    const plan = planEstates({ houses: [...north, ...south], sheds: [], blockers: [], roads: [road], tracks: [] });
+    const lens = plan.runs.flatMap((r) => r.line.slice(1).map((b, i) => Math.hypot(b[0] - r.line[i]![0], b[1] - r.line[i]![1])));
+    const short = lens.filter((l) => l < 1.6).length;
+    expect(short / lens.length).toBeLessThan(0.15);
+  });
+});

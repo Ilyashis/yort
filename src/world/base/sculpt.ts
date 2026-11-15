@@ -15,12 +15,23 @@ export interface SculptBrush {
   strength: number;
   /** Для «выровнять» — высота, к которой тянется земля (там, где начали мазок), м. */
   level?: number;
+  /** «Выровнять» обводкой: к средней (медиане) высоте внутри — по умолчанию, к самой низкой или самой высокой точке. */
+  levelBy?: SculptLevelBy;
 }
+
+export type SculptLevelBy = 'median' | 'low' | 'high';
+export const SCULPT_LEVELS: Record<SculptLevelBy, { label: string; hint: string }> = {
+  median: { label: 'Средний', hint: 'к средней высоте внутри' },
+  low: { label: 'По нижней', hint: 'к самой низкой точке внутри (срезать)' },
+  high: { label: 'По верхней', hint: 'к самой высокой точке внутри (подсыпать)' },
+};
 
 export interface SculptStroke extends SculptBrush {
   id: string;
   /** Касания кисти — центры в lon/lat. */
   dabs: [number, number][];
+  /** Обведённая область (lon/lat): «выровнять» или «сгладить» всё внутри разом; тогда касаний нет. */
+  area?: [number, number][];
 }
 
 export const SCULPT_MODES: Record<SculptMode, { label: string; hint: string }> = {
@@ -29,7 +40,9 @@ export const SCULPT_MODES: Record<SculptMode, { label: string; hint: string }> =
   flatten: { label: 'Выровнять', hint: 'Земля под кистью тянется к высоте точки, с которой начали: площадка, двор, дорога.' },
   smooth: { label: 'Сгладить', hint: 'Убирает бугры и ямки, общий уклон остаётся.' },
 };
-export const SCULPT_RADIUS = { min: 2, max: 40 };
+export const SCULPT_RADIUS = { min: 2, max: 200 };
+/** Режимы, которые работают и обводкой. */
+export const AREA_MODES: SculptMode[] = ['flatten', 'smooth'];
 export const SCULPT_STRENGTH = { min: 0.05, max: 1 };
 
 /** Шаг сетки поправок, м, и сторона участка сетки в узлах. */
@@ -41,7 +54,10 @@ const RAISE_PER_DAB = 0.12;
 const FLATTEN_RATE = 0.6;
 /** «Сгладить»: доля разницы со средним по соседям (в 2 м) за касание на полной силе. */
 const SMOOTH_RATE = 0.5;
-const SMOOTH_REACH = 2;
+/** Сглаживание берёт соседей на таком расстоянии, м: у большой кисти — шире (иначе уходят только мелкие бугры). */
+const smoothReach = (radius: number) => (radius <= 40 ? 2 : Math.round(radius / 20));
+/** Обводка: край области — плавный переход такой ширины (внутрь), м. */
+const AREA_FEATHER = 5;
 
 /** Прибавка к поправкам от касания: узлы i0…i0+ni−1 по x и j0…j0+nj−1 по y (узел — i·SCULPT_STEP м). */
 export interface SculptChange {
@@ -86,7 +102,7 @@ export class SculptField {
     const nj = Math.floor((center[1] + r) / SCULPT_STEP) - j0 + 1;
     const values = new Float32Array(Math.max(ni, 0) * Math.max(nj, 0));
     // Высоты узлов под кистью (для сглаживания — с запасом на соседей) — один раз, а не на каждый узел.
-    const pad = brush.mode === 'smooth' ? Math.round(SMOOTH_REACH / SCULPT_STEP) : 0;
+    const pad = brush.mode === 'smooth' ? Math.round(smoothReach(r) / SCULPT_STEP) : 0;
     const gw = ni + 2 * pad;
     const heights = brush.mode === 'flatten' || brush.mode === 'smooth' ? new Float64Array(Math.max(gw, 0) * Math.max(nj + 2 * pad, 0)) : undefined;
     if (heights) {
@@ -122,6 +138,77 @@ export class SculptField {
       }
     }
     const change = { i0, j0, ni: Math.max(ni, 0), nj: Math.max(nj, 0), values };
+    this.add(change);
+    return change;
+  }
+
+  /**
+   * Обведённая область (локальные метры) целиком: «выровнять» — к средней (медиане) высоте внутри (или к самой
+   * низкой / высокой точке — levelBy), «сгладить» — к размытой земле (бугры уходят, общий уклон остаётся).
+   * Сила — доля пути; у края — плавный переход на AREA_FEATHER м внутрь. Возвращает, что изменилось.
+   */
+  area(brush: SculptBrush, polygon: readonly Vec2[], ground: GroundHeight): SculptChange {
+    const s = Math.min(Math.max(brush.strength, SCULPT_STRENGTH.min), SCULPT_STRENGTH.max);
+    const xs = polygon.map((p) => p[0]);
+    const ys = polygon.map((p) => p[1]);
+    const i0 = Math.ceil(Math.min(...xs) / SCULPT_STEP);
+    const j0 = Math.ceil(Math.min(...ys) / SCULPT_STEP);
+    const ni = Math.max(0, Math.floor(Math.max(...xs) / SCULPT_STEP) - i0 + 1);
+    const nj = Math.max(0, Math.floor(Math.max(...ys) / SCULPT_STEP) - j0 + 1);
+    const values = new Float32Array(ni * nj);
+    const change = { i0, j0, ni, nj, values };
+    if (polygon.length < 3 || !ni || !nj) return change;
+    // Насколько узел внутри (м до края; снаружи — 0).
+    const depth = new Float32Array(ni * nj);
+    for (let b = 0; b < nj; b++) {
+      for (let a = 0; a < ni; a++) {
+        const x = (i0 + a) * SCULPT_STEP;
+        const y = (j0 + b) * SCULPT_STEP;
+        if (!inside(x, y, polygon)) continue;
+        let d = Infinity;
+        for (let k = 0, m = polygon.length - 1; k < polygon.length; m = k++) d = Math.min(d, segDist(x, y, polygon[m]!, polygon[k]!));
+        depth[b * ni + a] = Math.max(d, 1e-3);
+      }
+    }
+    // Высоты — с запасом вокруг (для размытия).
+    const area = Math.abs(polygon.reduce((acc, p, k) => acc + p[0] * polygon[(k + 1) % polygon.length]![1] - polygon[(k + 1) % polygon.length]![0] * p[1], 0)) / 2;
+    const blur = Math.round(Math.min(12, Math.max(2, Math.sqrt(area) / 8)) / SCULPT_STEP);
+    const pad = brush.mode === 'smooth' ? blur * 3 : 0;
+    const gw = ni + 2 * pad;
+    const gh = nj + 2 * pad;
+    const heights = new Float32Array(gw * gh);
+    for (let b = 0; b < gh; b++) {
+      for (let a = 0; a < gw; a++) {
+        const i = i0 + a - pad;
+        const j = j0 + b - pad;
+        heights[b * gw + a] = ground(i * SCULPT_STEP, j * SCULPT_STEP) + this.node(i, j);
+      }
+    }
+    let target: (a: number, b: number) => number;
+    if (brush.mode === 'smooth') {
+      const smooth = Float32Array.from(heights);
+      for (let pass = 0; pass < 3; pass++) {
+        boxBlur(smooth, gw, gh, blur, true);
+        boxBlur(smooth, gw, gh, blur, false);
+      }
+      target = (a, b) => smooth[(b + pad) * gw + a + pad]!;
+    } else {
+      const under: number[] = [];
+      for (let k = 0; k < depth.length; k++) if (depth[k]) under.push(heights[Math.floor(k / ni) * gw + (k % ni)]!);
+      under.sort((p, q) => p - q);
+      const pick = brush.levelBy === 'low' ? under[0] : brush.levelBy === 'high' ? under[under.length - 1] : under[under.length >> 1];
+      const level = brush.level ?? pick ?? 0;
+      target = () => level;
+    }
+    for (let b = 0; b < nj; b++) {
+      for (let a = 0; a < ni; a++) {
+        const d = depth[b * ni + a]!;
+        if (!d) continue;
+        const t = Math.min(1, d / AREA_FEATHER);
+        const w = t * t * (3 - 2 * t);
+        values[b * ni + a] = (target(a, b) - heights[(b + pad) * gw + a + pad]!) * s * w;
+      }
+    }
     this.add(change);
     return change;
   }
@@ -173,6 +260,41 @@ export class SculptField {
 
 const mod = (a: number, n: number) => ((a % n) + n) % n;
 
+function inside(x: number, y: number, ring: readonly Vec2[]): boolean {
+  let c = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!;
+    const [xj, yj] = ring[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+function segDist(x: number, y: number, a: Vec2, b: Vec2): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const t = Math.min(1, Math.max(0, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(x - a[0] - dx * t, y - a[1] - dy * t);
+}
+
+/** Скользящее среднее по строкам (along) или столбцам, окно 2r + 1, края — повтором крайнего узла. */
+function boxBlur(v: Float32Array, w: number, h: number, r: number, along: boolean): void {
+  const n = along ? w : h;
+  const lines = along ? h : w;
+  const stride = along ? 1 : w;
+  const tmp = new Float32Array(n);
+  for (let l = 0; l < lines; l++) {
+    const start = along ? l * w : l;
+    let sum = 0;
+    for (let q = -r; q <= r; q++) sum += v[start + Math.min(n - 1, Math.max(0, q)) * stride]!;
+    for (let q = 0; q < n; q++) {
+      tmp[q] = sum / (2 * r + 1);
+      sum += v[start + Math.min(n - 1, q + r + 1) * stride]! - v[start + Math.max(0, q - r) * stride]!;
+    }
+    for (let q = 0; q < n; q++) v[start + q * stride] = tmp[q]!;
+  }
+}
+
 /** Прибавка изменения в точке (локальные метры), м: билинейно между узлами; вне изменения — 0. */
 export function changeAt(change: SculptChange, x: number, y: number): number {
   const fx = x / SCULPT_STEP - change.i0;
@@ -199,7 +321,10 @@ export function changeRect(change: SculptChange): { x0: number; y0: number; x1: 
 /** Поле поправок по мазкам (по порядку); toLocal — lon/lat → локальные метры. */
 export function replayStrokes(strokes: readonly SculptStroke[], toLocal: (p: [number, number]) => Vec2, ground: GroundHeight): SculptField {
   const field = new SculptField();
-  for (const stroke of strokes) for (const dab of stroke.dabs) field.dab(stroke, toLocal(dab), ground);
+  for (const stroke of strokes) {
+    if (stroke.area) field.area(stroke, stroke.area.map(toLocal), ground);
+    for (const dab of stroke.dabs) field.dab(stroke, toLocal(dab), ground);
+  }
   return field;
 }
 
@@ -214,7 +339,11 @@ export function parseStroke(value: unknown): SculptStroke | undefined {
   const dabs = (Array.isArray(v.dabs) ? v.dabs : []).filter(
     (p): p is [number, number] => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === 'number' && Number.isFinite(n)),
   );
-  if (!dabs.length) return undefined;
+  const area = (Array.isArray(v.area) ? v.area : []).filter(
+    (p): p is [number, number] => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === 'number' && Number.isFinite(n)),
+  );
+  const isArea = area.length >= 3 && AREA_MODES.includes(v.mode);
+  if (!dabs.length && !isArea) return undefined;
   const level = Number(v.level);
   return {
     id: v.id,
@@ -222,6 +351,8 @@ export function parseStroke(value: unknown): SculptStroke | undefined {
     radius: Math.min(Math.max(radius, SCULPT_RADIUS.min), SCULPT_RADIUS.max),
     strength: Math.min(Math.max(strength, SCULPT_STRENGTH.min), SCULPT_STRENGTH.max),
     ...(v.mode === 'flatten' && Number.isFinite(level) ? { level } : {}),
+    ...(v.mode === 'flatten' && (v.levelBy === 'low' || v.levelBy === 'high') ? { levelBy: v.levelBy } : {}),
     dabs,
+    ...(isArea ? { area } : {}),
   };
 }

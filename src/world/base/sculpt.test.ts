@@ -76,12 +76,86 @@ describe('кисть рельефа', () => {
     expect(parseStroke({ id: 'x', mode: 'raise', radius: 500, strength: 3, dabs: [[57, 52]] })).toEqual({
       id: 'x',
       mode: 'raise',
-      radius: 40,
+      radius: 200,
       strength: 1,
       dabs: [[57, 52]],
     });
     expect(parseStroke({ id: 'x', mode: 'dig', radius: 5, strength: 1, dabs: [[57, 52]] })).toBeUndefined();
     expect(parseStroke({ id: 'x', mode: 'raise', radius: 5, strength: 1, dabs: [] })).toBeUndefined();
     expect(parseStroke({ id: 'x', mode: 'flatten', radius: 5, strength: 1, level: 120, dabs: [[57, 52]] })?.level).toBe(120);
+  });
+});
+
+describe('обводка области', () => {
+  // Склон 5 % на восток с буграми по 0,4 м.
+  const ground = (x: number, y: number) => 100 + 0.05 * x + 0.4 * Math.sin(x * 0.9) * Math.cos(y * 0.7);
+  const square: [number, number][] = [
+    [0, 0],
+    [40, 0],
+    [40, 30],
+    [0, 30],
+  ];
+
+  it('«выровнять» — внутри одна высота (медиана), снаружи — без изменений', () => {
+    const field = new SculptField();
+    field.area({ mode: 'flatten', radius: 8, strength: 1 }, square, ground);
+    const h = (x: number, y: number) => ground(x, y) + field.offsetAt(x, y);
+    const inner = [10, 20, 30].flatMap((x) => [10, 15, 20].map((y) => h(x, y)));
+    expect(Math.max(...inner) - Math.min(...inner)).toBeLessThan(0.01);
+    expect(Math.abs(inner[0]! - (100 + 0.05 * 20))).toBeLessThan(0.3);
+    expect(field.offsetAt(-5, 15)).toBe(0);
+    expect(field.offsetAt(45, 15)).toBe(0);
+  });
+
+  it('«выровнять» по нижней и по верхней точке', () => {
+    const low = new SculptField();
+    low.area({ mode: 'flatten', radius: 8, strength: 1, levelBy: 'low' }, square, ground);
+    const high = new SculptField();
+    high.area({ mode: 'flatten', radius: 8, strength: 1, levelBy: 'high' }, square, ground);
+    const inside = [10, 20, 30].map((x) => ground(x, 15));
+    // Середина: ниже всей земли там (срезали) и выше (подсыпали) соответственно.
+    expect(ground(20, 15) + low.offsetAt(20, 15)).toBeLessThan(Math.min(...inside));
+    expect(ground(20, 15) + high.offsetAt(20, 15)).toBeGreaterThan(Math.max(...inside));
+    expect(parseStroke({ id: 'l', mode: 'flatten', radius: 8, strength: 1, dabs: [], area: square, levelBy: 'high' })?.levelBy).toBe('high');
+  });
+
+  it('«сгладить» — бугры уходят, общий уклон остаётся', () => {
+    const field = new SculptField();
+    field.area({ mode: 'smooth', radius: 8, strength: 1 }, square, ground);
+    const h = (x: number, y: number) => ground(x, y) + field.offsetAt(x, y);
+    const bumps = (f: (x: number, y: number) => number) => Math.max(...[12, 16, 20, 24, 28].map((x) => Math.abs(f(x, 15) - (100 + 0.05 * x))));
+    expect(bumps(h)).toBeLessThan(bumps(ground) * 0.5);
+    // Уклон: восточная часть выше западной примерно на 0,05 × 16 м.
+    expect(h(28, 15) - h(12, 15)).toBeGreaterThan(0.5);
+  });
+
+  it('обводка повторяется из правок так же', () => {
+    const toLocal = (p: [number, number]): [number, number] => p;
+    const stroke = {
+      id: 'a1',
+      mode: 'flatten' as const,
+      radius: 8,
+      strength: 0.7,
+      dabs: [],
+      area: square,
+    };
+    const a = replayStrokes([stroke], toLocal, ground);
+    const b = new SculptField();
+    b.area(stroke, square, ground);
+    expect(a.offsetAt(20, 15)).toBeCloseTo(b.offsetAt(20, 15), 6);
+    expect(parseStroke(JSON.parse(JSON.stringify(stroke)))?.area).toHaveLength(4);
+    expect(parseStroke({ ...stroke, mode: 'raise' })).toBeUndefined();
+  });
+
+  it('кисть до 200 м', () => {
+    expect(
+      parseStroke({
+        id: 'b',
+        mode: 'smooth',
+        radius: 180,
+        strength: 0.5,
+        dabs: [[0, 0]],
+      })?.radius,
+    ).toBe(180);
   });
 });

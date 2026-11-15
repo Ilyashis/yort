@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseModelRef } from '../world/edit/edits';
 import type { HouseModelId } from '../world/village/houseModels';
-import type { SculptMode } from '../world/base/sculpt';
+import type { SculptLevelBy, SculptMode } from '../world/base/sculpt';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
 export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'terrain';
@@ -13,6 +13,10 @@ export interface SculptSettings {
   radius: number;
   /** Сила, 0.05…1. */
   strength: number;
+  /** Кистью или обвести область (только «выровнять» и «сгладить»). */
+  shape?: 'brush' | 'area';
+  /** «Выровнять» обводкой: к какой высоте (по умолчанию — средняя). */
+  levelBy?: SculptLevelBy;
 }
 
 export type Selection =

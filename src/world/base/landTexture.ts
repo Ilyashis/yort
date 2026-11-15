@@ -38,6 +38,30 @@ export interface LandInput {
   /** Грунтовые дороги (просёлки), нарисованные в редакторе. */
   dirt?: Ring[][];
   style: LandStyle;
+  /**
+   * Деревня: асфальт без бордюров — с гравийной обочиной и выкрошенным краем, а проезды (footway) — грунтовки
+   * с колеями и травой посередине.
+   */
+  village?: boolean;
+  /** Оси дорог (lon/lat) и ширина, м: по ним — накатанные колеи, заплатки и трещины. */
+  axes?: readonly { coords: readonly [number, number][]; width: number; kind: 'asphalt' | 'track' }[];
+}
+
+/** Деревенские дороги: цвета и размеры деталей. */
+const VILLAGE_ROAD = {
+  asphalt: '#73716c',
+  shoulder: '#9c9483',
+  shoulderM: 1.3,
+  track: '#8f7a5c',
+  rut: '#6f5d45',
+};
+
+interface Axis {
+  pts: [number, number][];
+  width: number;
+  kind: 'asphalt' | 'track';
+  box: [number, number, number, number];
+  seed: number;
 }
 
 type Paint = GroundKind | 'wood' | 'meadow' | 'garden' | 'dirt';
@@ -89,6 +113,7 @@ const M_PER_DEG_LAT = 111_320;
 /** Рисует покрытия района в canvas любого прямоугольника в lon/lat. */
 export class LandTextureRenderer {
   private readonly items: Item[] = [];
+  private readonly axes: Axis[] = [];
   private readonly lon0: number;
   private readonly lat0: number;
   private readonly mPerDegLon: number;
@@ -127,6 +152,20 @@ export class LandTextureRenderer {
         );
       } else add(paint, input.byKind.get(paint) ?? []);
     }
+    (input.axes ?? []).forEach((axis, index) => {
+      const pts = axis.coords.map(([lon, lat]) => this.toLocal(lon, lat));
+      if (pts.length < 2) return;
+      const pad = axis.width;
+      const xs = pts.map(([x]) => x);
+      const ys = pts.map(([, y]) => y);
+      this.axes.push({
+        pts,
+        width: axis.width,
+        kind: axis.kind,
+        box: [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad],
+        seed: Math.floor(random01(index * 97 + 13) * 1e6),
+      });
+    });
   }
 
   /** Рисует прямоугольник мира [west, south, east, north] в canvas width × height. */
@@ -156,9 +195,19 @@ export class LandTextureRenderer {
     // Трава на любом масштабе: пятна сухой/сочной травы, кочки, пучки, отдельные травинки и цветы.
     for (const layer of this.layers.grass) this.overlay(ctx, layer, area, pxPerM);
 
+    const village = !!this.input.village;
+    const axes = this.axes.filter(({ box }) => box[0] <= x1 && box[2] >= x0 && box[1] <= y1 && box[3] >= y0);
     for (const paint of HARD) {
-      for (const item of visible) {
-        if (item.paint !== paint) continue;
+      const ofPaint = visible.filter((item) => item.paint === paint);
+      if (village && paint === 'road') {
+        this.villageAsphalt(ctx, ofPaint, axes, area, pxPerM);
+        continue;
+      }
+      if (village && paint === 'footway') {
+        this.villageTracks(ctx, ofPaint, axes, area, pxPerM);
+        continue;
+      }
+      for (const item of ofPaint) {
         this.fill(ctx, item);
         this.texture(ctx, item, pxPerM);
         for (const edge of EDGES[paint] ?? []) {
@@ -171,6 +220,243 @@ export class LandTextureRenderer {
       }
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  /**
+   * Деревенский асфальт: гравийная обочина, тёплый изношенный асфальт с пятнами (крупными и мелкими),
+   * накатанные колеи по полосам, заплатки, трещины у краёв, выкрошенный край.
+   */
+  private villageAsphalt(ctx: CanvasRenderingContext2D, items: readonly Item[], axes: readonly Axis[], area: [number, number, number, number], pxPerM: number): void {
+    if (!items.length) return;
+    const layers = this.layers!;
+    // Обочина — гравийная полоса шире асфальта, под ним: заливка и поверх — узор гравия.
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = VILLAGE_ROAD.shoulderM * 2;
+    ctx.strokeStyle = VILLAGE_ROAD.shoulder;
+    for (const item of items) {
+      this.trace(ctx, item);
+      ctx.stroke();
+    }
+    const gravel = this.pattern(ctx, layers.gravel, pxPerM);
+    if (gravel) {
+      ctx.save();
+      ctx.globalAlpha = gravel.alpha;
+      ctx.strokeStyle = gravel.pattern;
+      for (const item of items) {
+        this.trace(ctx, item);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Асфальт и всё на нём — внутри контуров дорог.
+    ctx.save();
+    ctx.beginPath();
+    for (const item of items) {
+      for (const ring of item.rings) {
+        ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+      }
+    }
+    ctx.clip('nonzero');
+    ctx.fillStyle = VILLAGE_ROAD.asphalt;
+    ctx.fillRect(...area);
+    // Пятна: крупные (выгоревший и тёмный асфальт), средние, мелкая крошка.
+    for (const layer of layers.asphaltStains) this.overlay(ctx, layer, area, pxPerM);
+    for (const axis of axes) {
+      if (axis.kind !== 'asphalt') continue;
+      // Накатанные колеи: по две на полосу — темнее и глаже; между ними — светлее.
+      // Мягкие (несколько обводок от широкой к узкой — край без резкой границы).
+      const lane = axis.width / 4;
+      for (const off of [-lane * 1.45, -lane * 0.55, lane * 0.55, lane * 1.45]) {
+        for (const k of [1.6, 1.1, 0.6]) this.strokeOffset(ctx, axis.pts, off, Math.min(0.9, axis.width * 0.12) * k, 'rgba(40,40,42,0.045)');
+      }
+      for (const k of [1.6, 1]) this.strokeOffset(ctx, axis.pts, 0, Math.min(1.2, axis.width * 0.15) * k, 'rgba(190,186,176,0.035)');
+      this.patches(ctx, axis, pxPerM);
+      if (pxPerM > 6) this.cracks(ctx, axis);
+    }
+    this.overlay(ctx, layers.asphalt, area, pxPerM);
+    ctx.restore();
+
+    // Выкрошенный край: неровные зубцы гравия по кромке асфальта.
+    ctx.lineCap = 'round';
+    for (const item of items) {
+      ctx.setLineDash([0.35 + random01(item.seed) * 0.4, 0.5 + random01(item.seed + 1) * 0.9, 0.2, 0.7]);
+      ctx.strokeStyle = 'rgba(150,142,124,0.9)';
+      ctx.lineWidth = Math.max(0.28, 0.8 / pxPerM);
+      this.trace(ctx, item);
+      ctx.stroke();
+      ctx.setLineDash([0.15, 1.6, 0.25, 2.3]);
+      ctx.strokeStyle = 'rgba(70,68,64,0.55)';
+      ctx.lineWidth = Math.max(0.12, 0.8 / pxPerM);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  /**
+   * Деревенские проезды — грунтовка: земля, две колеи, полоса травы посередине, мягкий травяной край и лужи
+   * в колеях.
+   */
+  private villageTracks(ctx: CanvasRenderingContext2D, items: readonly Item[], axes: readonly Axis[], area: [number, number, number, number], pxPerM: number): void {
+    if (!items.length) return;
+    const layers = this.layers!;
+    // Мягкий край: полупрозрачная примятая трава за контуром.
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(150,135,95,0.35)';
+    ctx.lineWidth = 1.6;
+    for (const item of items) {
+      this.trace(ctx, item);
+      ctx.stroke();
+    }
+    ctx.save();
+    ctx.beginPath();
+    for (const item of items) {
+      for (const ring of item.rings) {
+        ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+      }
+    }
+    ctx.clip('nonzero');
+    ctx.fillStyle = VILLAGE_ROAD.track;
+    ctx.fillRect(...area);
+    this.overlay(ctx, layers.soil, area, pxPerM);
+    for (const layer of layers.asphaltStains.slice(0, 1)) this.overlay(ctx, layer, area, pxPerM);
+    for (const axis of axes) {
+      if (axis.kind !== 'track') continue;
+      const half = Math.min(0.85, axis.width * 0.3);
+      // Трава между колеями и по краям.
+      for (const k of [1.4, 1, 0.6]) this.strokeOffset(ctx, axis.pts, 0, Math.min(0.7, axis.width * 0.22) * k, 'rgba(120,140,80,0.22)');
+      // Колеи — темнее и влажнее; лужи — в низких местах (по зерну).
+      for (const off of [-half, half]) for (const k of [1.5, 1, 0.55]) this.strokeOffset(ctx, axis.pts, off, 0.45 * k, 'rgba(90,72,50,0.2)');
+      this.puddles(ctx, axis, half);
+    }
+    this.overlay(ctx, layers.grassTufts, area, pxPerM);
+    ctx.restore();
+    // Рваный край: трава заходит на колею неровными языками.
+    ctx.lineCap = 'round';
+    for (const item of items) {
+      ctx.setLineDash([0.5 + random01(item.seed + 3) * 0.6, 0.4, 0.25, 0.8 + random01(item.seed + 4) * 0.8]);
+      ctx.strokeStyle = 'rgba(132,150,92,0.85)';
+      ctx.lineWidth = Math.max(0.45, 0.8 / pxPerM);
+      this.trace(ctx, item);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  /** Ломаная со сдвигом вбок на off м (влево от направления) — одной обводкой. */
+  private strokeOffset(ctx: CanvasRenderingContext2D, pts: readonly [number, number][], off: number, width: number, color: string): void {
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => {
+      const a = pts[Math.max(0, i - 1)]!;
+      const b = pts[Math.min(pts.length - 1, i + 1)]!;
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const nx = -(b[1] - a[1]) / len;
+      const ny = (b[0] - a[0]) / len;
+      if (i === 0) ctx.moveTo(x + nx * off, y + ny * off);
+      else ctx.lineTo(x + nx * off, y + ny * off);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  /** Точка на оси через s м от начала и направление там. */
+  private along(pts: readonly [number, number][], s: number): { p: [number, number]; dir: [number, number] } | undefined {
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (s <= len && len > 0) return { p: [a[0] + ((b[0] - a[0]) * s) / len, a[1] + ((b[1] - a[1]) * s) / len], dir: [(b[0] - a[0]) / len, (b[1] - a[1]) / len] };
+      s -= len;
+    }
+    return undefined;
+  }
+
+  /** Заплатки: прямоугольники свежего (темнее) или старого (светлее) асфальта через 15–45 м. */
+  private patches(ctx: CanvasRenderingContext2D, axis: Axis, pxPerM: number): void {
+    let s = 8 + random01(axis.seed) * 20;
+    for (let k = 0; k < 400; k++) {
+      const at = this.along(axis.pts, s);
+      if (!at) break;
+      const r = (q: number) => random01(axis.seed * 31 + k * 7 + q);
+      const w = 1.2 + r(1) * 3;
+      const h = 0.8 + r(2) * Math.min(2.2, axis.width * 0.4);
+      const side = (r(3) - 0.5) * axis.width * 0.6;
+      ctx.save();
+      ctx.translate(at.p[0] - at.dir[1] * side, at.p[1] + at.dir[0] * side);
+      ctx.rotate(Math.atan2(at.dir[1], at.dir[0]) + (r(4) - 0.5) * 0.12);
+      const fresh = r(5) < 0.65;
+      ctx.fillStyle = fresh ? 'rgba(40,40,42,0.38)' : 'rgba(170,165,152,0.22)';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      if (pxPerM > 4) {
+        ctx.strokeStyle = fresh ? 'rgba(30,30,32,0.5)' : 'rgba(120,115,105,0.35)';
+        ctx.lineWidth = 0.06;
+        ctx.strokeRect(-w / 2, -h / 2, w, h);
+      }
+      ctx.restore();
+      s += 15 + r(6) * 30;
+    }
+  }
+
+  /** Трещины: ломаные вдоль кромок и изредка поперёк, тонкие, вблизи. */
+  private cracks(ctx: CanvasRenderingContext2D, axis: Axis): void {
+    ctx.strokeStyle = 'rgba(28,28,30,0.55)';
+    ctx.lineWidth = 0.035;
+    ctx.lineCap = 'round';
+    let s = random01(axis.seed + 5) * 6;
+    for (let k = 0; k < 600; k++) {
+      const at = this.along(axis.pts, s);
+      if (!at) break;
+      const r = (q: number) => random01(axis.seed * 53 + k * 11 + q);
+      const across = r(0) < 0.25;
+      const side = across ? (r(1) - 0.5) * axis.width * 0.5 : (r(1) < 0.5 ? -1 : 1) * axis.width * (0.33 + r(2) * 0.14);
+      let x = at.p[0] - at.dir[1] * side;
+      let y = at.p[1] + at.dir[0] * side;
+      let angle = Math.atan2(at.dir[1], at.dir[0]) + (across ? Math.PI / 2 : 0);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      const steps = 4 + Math.floor(r(3) * 6);
+      for (let q = 0; q < steps; q++) {
+        angle += (r(10 + q) - 0.5) * 0.9;
+        const step = 0.25 + r(20 + q) * 0.45;
+        x += Math.cos(angle) * step;
+        y += Math.sin(angle) * step;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      s += 3 + r(4) * 9;
+    }
+  }
+
+  /** Лужи в колеях: тёмные вытянутые пятна с бликом неба. */
+  private puddles(ctx: CanvasRenderingContext2D, axis: Axis, half: number): void {
+    let s = random01(axis.seed + 9) * 25;
+    for (let k = 0; k < 300; k++) {
+      const at = this.along(axis.pts, s);
+      if (!at) break;
+      const r = (q: number) => random01(axis.seed * 71 + k * 13 + q);
+      if (r(0) < 0.45) {
+        const off = r(1) < 0.5 ? -half : half;
+        const len = 1 + r(2) * 2.5;
+        ctx.save();
+        ctx.translate(at.p[0] - at.dir[1] * off, at.p[1] + at.dir[0] * off);
+        ctx.rotate(Math.atan2(at.dir[1], at.dir[0]));
+        ctx.beginPath();
+        ctx.ellipse(0, 0, len / 2, 0.32 + r(3) * 0.15, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(80,92,98,0.75)';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(-len * 0.1, 0.05, len / 3.2, 0.12, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(190,205,215,0.45)';
+        ctx.fill();
+        ctx.restore();
+      }
+      s += 12 + r(4) * 30;
+    }
   }
 
   private toLocal(lon: number, lat: number): [number, number] {
@@ -237,6 +523,16 @@ export class LandTextureRenderer {
       this.overlay(ctx, layer, box, pxPerM, unrotated ? 0 : item.angle);
     }
     ctx.restore();
+  }
+
+  /** Узор слоя с привязкой к миру и его прозрачность на этом масштабе (мелкий — не виден, undefined). */
+  private pattern(ctx: CanvasRenderingContext2D, layer: Layer, pxPerM: number): { pattern: CanvasPattern; alpha: number } | undefined {
+    const alpha = layer.alpha * Math.min(Math.max((layer.metres * pxPerM - 0.7) / 0.8, 0), 1);
+    if (alpha <= 0.01) return undefined;
+    const pattern = ctx.createPattern(layer.canvas, 'repeat');
+    if (!pattern) return undefined;
+    pattern.setTransform(new DOMMatrix().scaleSelf(layer.metres, layer.metres));
+    return { pattern, alpha };
   }
 
   /** Заливает прямоугольник (в метрах) узором слоя с привязкой к миру. */
@@ -406,5 +702,14 @@ function buildLayers() {
     paving: { canvas: pavingCanvas(61), metres: 1 / 128, alpha: 0.9 } as Layer,
     ripples: { canvas: noiseCanvas(256, [[24, 0.6], [96, 0.4]], 71, lightDark([200, 225, 240], [40, 80, 120], 0.22)), metres: 0.15, alpha: 1 } as Layer,
     soil: { canvas: noiseCanvas(256, [[128, 0.6], [24, 0.4]], 81, lightDark([170, 135, 95], [70, 50, 32], 0.35)), metres: 0.03, alpha: 1 } as Layer,
+    // Деревенский асфальт: пятна выгоревшего и тёмного (масляного) асфальта — от метров до десятков метров.
+    asphaltStains: [
+      { canvas: noiseCanvas(128, [[6, 0.7], [17, 0.3]], 91, lightDark([168, 164, 154], [44, 44, 46], 0.3)), metres: 1.6, alpha: 1 },
+      { canvas: noiseCanvas(256, [[32, 0.6], [9, 0.4]], 93, lightDark([176, 172, 162], [38, 38, 40], 0.24, 0.52)), metres: 0.12, alpha: 1 },
+    ] as Layer[],
+    // Гравий обочины.
+    gravel: { canvas: noiseCanvas(256, [[128, 0.7], [32, 0.3]], 95, lightDark([200, 192, 172], [96, 88, 74], 0.4)), metres: 0.025, alpha: 1 } as Layer,
+    // Кустики травы на грунтовке.
+    grassTufts: { canvas: noiseCanvas(256, [[48, 0.6], [12, 0.4]], 97, (n) => (n > 0.66 ? [96, 122, 62, Math.round(Math.min((n - 0.66) * 4, 1) * 150)] : [0, 0, 0, 0])), metres: 0.06, alpha: 1 } as Layer,
   };
 }

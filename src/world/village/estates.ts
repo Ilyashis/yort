@@ -33,6 +33,8 @@ export interface EstateInput {
   roads: readonly EstateRoad[];
   /** Просёлки и тропы: участки их не перегораживают. */
   tracks: readonly EstateRoad[];
+  /** Кадастровые участки (ЕГРН): дом на таком участке получает ровно его, соседи туда не заходят. */
+  parcels?: readonly (readonly Vec2[])[];
 }
 
 export type OutbuildingModel = 'shed' | 'banya' | 'outhouse' | 'greenhouse' | 'well';
@@ -138,8 +140,13 @@ const NEAR_ROAD = 3;
 const HOUSE_AREA: [number, number] = [45, 320];
 /** Запас растра вокруг домов, м. */
 const MARGIN = 70;
-/** Упрощение границ: отклонение не больше, м. */
-const SIMPLIFY = 0.8;
+/** Кадастровый участок больше этого (м²) — не двор: поле, выгон, общая земля. */
+const MAX_PARCEL_AREA = 6000;
+/** Допуск спрямления границы без кадастра, м: лесенка растра уходит, контур участка остаётся. */
+const STRAIGHT = 1.0;
+/** Притяжение точки границы к углу и к стороне кадастрового участка, м. */
+const SNAP_CORNER = 1.6;
+const SNAP_EDGE = 1.3;
 
 const BLOCK = 1;
 const ROADSIDE = 2;
@@ -225,11 +232,39 @@ export function planEstates(input: EstateInput): EstatePlan {
   // Оси каждого дома: ближайшая улица, уличный забор, глубина.
   const sites = houses.map((house, index) => siteOf(house, index, segments));
 
+  // Кадастровые участки: какой клетке какой участок, и на каком участке стоит каждый дом. Огромные участки
+  // (поля, общая земля) не берём — двор по ним был бы на гектары.
+  const parcelCell = new Int32Array(grid.w * grid.h).fill(-1);
+  (input.parcels ?? []).forEach((ring, k) => {
+    const open = openRing(ring);
+    if (open.length < 3 || Math.abs(signedArea(open)) > MAX_PARCEL_AREA) return;
+    grid.polygon([open], 0, (i) => (parcelCell[i] = k));
+  });
+  const siteParcel = sites.map((site) => {
+    const i = grid.at(...orientedBox(site.house.ring).center);
+    return i >= 0 ? parcelCell[i]! : -1;
+  });
+  const housed = new Set(siteParcel.filter((p) => p >= 0));
+
   // Кому достаётся клетка.
   const owner = new Int32Array(grid.w * grid.h).fill(-1);
   const cost = new Float32Array(grid.w * grid.h).fill(Infinity);
   for (const site of sites) {
     const { origin, t, n, ac, hl, back, sideCap, depth } = site;
+    const parcel = siteParcel[site.index]!;
+    if (parcel >= 0) {
+      // Дом на кадастровом участке — весь участок его (несколько домов на одном — делят как обычно).
+      grid.polygon([openRing(input.parcels![parcel]!)], 0, (i) => {
+        if (parcelCell[i] !== parcel || grid.flags[i]! & BLOCK) return;
+        const rel = sub(grid.center(i), origin);
+        const c = Math.abs(dot(rel, t) - ac) + Math.abs(dot(rel, n)) * 0.01 - 1e4;
+        if (c < cost[i]!) {
+          cost[i] = c;
+          owner[i] = site.index;
+        }
+      });
+      continue;
+    }
     const reach = hl + sideCap;
     const corners = [
       add(add(origin, t, ac - reach), n, -1),
@@ -239,6 +274,8 @@ export function planEstates(input: EstateInput): EstatePlan {
     ];
     grid.box(corners, (i, p) => {
       if (grid.flags[i]! & BLOCK) return;
+      // Чужой кадастровый участок с домом — не наш.
+      if (parcelCell[i]! >= 0 && housed.has(parcelCell[i]!)) return;
       const rel = sub(p, origin);
       const d = dot(rel, n);
       if (d < 0 || d > depth) return;
@@ -262,7 +299,7 @@ export function planEstates(input: EstateInput): EstatePlan {
   keepConnected(grid, owner, sites);
 
   // Границы клеток → цепочки → заборы.
-  const chains = traceBoundaries(grid, owner, sites.length);
+  const chains = traceBoundaries(grid, owner, sites.length, straightener(input.parcels ?? []));
   const plots: Plot[] = [];
   const plotChains = new Map<number, Chain[]>();
   for (const chain of chains) {
@@ -618,7 +655,7 @@ interface Chain {
  * Границы между клетками разных хозяев — цепочки с одной и той же парой хозяев, упрощённые до прямых.
  * Ничья земля у дороги и в стороне — разные «хозяева»: там уличный забор, тут — задний.
  */
-function traceBoundaries(grid: Grid, owner: Int32Array, count: number): Chain[] {
+function traceBoundaries(grid: Grid, owner: Int32Array, count: number, straighten: (raw: Vec2[]) => Vec2[]): Chain[] {
   const K = count + 2;
   const STREET = K - 1;
   const OPEN = K - 2;
@@ -688,7 +725,7 @@ function traceBoundaries(grid: Grid, owner: Int32Array, count: number): Chain[] 
     const hi = label % K;
     const plots = hi === STREET || hi === OPEN ? [lo] : [lo, hi];
     const kind: FenceKind = hi === STREET ? 'street' : hi === OPEN ? 'back' : 'side';
-    chains.push({ plots, kind, points: simplify(verts.map(point), SIMPLIFY) });
+    chains.push({ plots, kind, points: straighten(verts.map(point)) });
   };
   for (const [v, list] of incident) {
     if (!isNode(v)) continue;
@@ -697,6 +734,96 @@ function traceBoundaries(grid: Grid, owner: Int32Array, count: number): Chain[] 
   // Замкнутые границы без узлов (участок со всех сторон в ничьей земле).
   for (let e = 0; e < edgeA.length; e++) if (!used[e]) walk(e, edgeA[e]!);
   return chains;
+}
+
+/**
+ * Прямые заборы вместо лесенки растра: точки границы (углы клеток 1 м) притягиваются к кадастровым границам —
+ * к углу участка, если он ближе SNAP_CORNER, иначе к ближайшей стороне ближе SNAP_EDGE, — и ломаная
+ * упрощается до опорных точек. Где кадастра нет — лесенка спрямляется с допуском STRAIGHT: прямые, но по
+ * контуру участка.
+ */
+function straightener(parcels: readonly (readonly Vec2[])[]): (raw: Vec2[]) => Vec2[] {
+  const CELL_SIZE = 10;
+  const segs: [Vec2, Vec2][] = [];
+  const corners: Vec2[] = [];
+  const segCells = new Map<string, number[]>();
+  const cornerCells = new Map<string, number[]>();
+  const key = (x: number, y: number) => `${Math.floor(x / CELL_SIZE)}:${Math.floor(y / CELL_SIZE)}`;
+  const put = (map: Map<string, number[]>, k: string, v: number) => {
+    const list = map.get(k);
+    if (list) list.push(v);
+    else map.set(k, [v]);
+  };
+  for (const parcel of parcels) {
+    const ring = openRing(parcel);
+    if (ring.length < 3 || Math.abs(signedArea(ring)) > MAX_PARCEL_AREA) continue;
+    ring.forEach((a, k) => {
+      const b = ring[(k + 1) % ring.length]!;
+      corners.push(a);
+      put(cornerCells, key(a[0], a[1]), corners.length - 1);
+      const n = segs.push([a, b]) - 1;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (CELL_SIZE / 2)));
+      const seen = new Set<string>();
+      for (let t = 0; t <= steps; t++) {
+        const k2 = key(a[0] + ((b[0] - a[0]) * t) / steps, a[1] + ((b[1] - a[1]) * t) / steps);
+        if (!seen.has(k2)) {
+          seen.add(k2);
+          put(segCells, k2, n);
+        }
+      }
+    });
+  }
+  const near = (map: Map<string, number[]>, p: Vec2) => {
+    const out: number[] = [];
+    const ci = Math.floor(p[0] / CELL_SIZE);
+    const cj = Math.floor(p[1] / CELL_SIZE);
+    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) out.push(...(map.get(`${i}:${j}`) ?? []));
+    return out;
+  };
+  const snap = (p: Vec2): Vec2 | undefined => {
+    let best: Vec2 | undefined;
+    let bestD = SNAP_CORNER;
+    for (const c of near(cornerCells, p)) {
+      const q = corners[c]!;
+      const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    if (best) return best;
+    bestD = SNAP_EDGE;
+    for (const n of new Set(near(segCells, p))) {
+      const [a, b] = segs[n]!;
+      const dx = b[0] - a[0];
+      const dy = b[1] - a[1];
+      const t = Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      const q: Vec2 = [a[0] + dx * t, a[1] + dy * t];
+      const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    return best;
+  };
+  return (raw) => {
+    if (!segs.length) return simplify(raw, STRAIGHT);
+    let snapped = 0;
+    const pts: Vec2[] = [];
+    for (const p of raw) {
+      const q = snap(p);
+      if (q) snapped++;
+      const v = q ?? p;
+      // Несколько точек притянулись к одному углу — одна точка.
+      const prev = pts[pts.length - 1];
+      if (!prev || Math.hypot(prev[0] - v[0], prev[1] - v[1]) > 1e-6) pts.push(v);
+    }
+    // Концы цепочки — общие с соседними цепочками: оставляем их, даже если совпали с соседней точкой.
+    if (pts.length < 2) return [raw[0]!, raw[raw.length - 1]!].map((p) => snap(p) ?? p);
+    // По кадастру — почти без допуска (точки уже на прямых), иначе — спрямляем лесенку.
+    return simplify(pts, snapped >= raw.length * 0.6 ? 0.5 : STRAIGHT);
+  };
 }
 
 /** Ломаная без лишних точек (Дуглас — Пекер); замкнутую делим на две половины. */
@@ -714,6 +841,8 @@ export function simplify(points: readonly Vec2[], tolerance: number): Vec2[] {
         far = i;
       }
     });
+    // Все точки в одной (петля нулевого размера) — одна точка.
+    if (best <= 1e-9 || far === 0 || far === points.length - 1) return [first, last];
     const a = simplify(points.slice(0, far + 1), tolerance);
     const b = simplify(points.slice(far), tolerance);
     return [...a, ...b.slice(1)];

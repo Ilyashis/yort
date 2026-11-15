@@ -28,6 +28,7 @@ export class GroundLayer {
   private lampSpots: readonly Vec2[] = [];
   private lampFocus: Vec2 = [Number.NaN, Number.NaN];
   private readonly removeAnimator: () => void;
+  private readonly village: boolean;
 
   constructor(
     private readonly city: CityScene,
@@ -43,7 +44,10 @@ export class GroundLayer {
     detailRegion?: DetailRegion,
     /** Утоптанная земля дворов (подъезды от ворот) — уходит вместе с огородом двора. */
     private readonly yardDirt: readonly { ring: Ring; houseId?: string }[] = [],
+    /** Оси дорог (lon/lat): по ним в деревне рисуются колеи, заплатки, трещины, лужи на грунтовках. */
+    private readonly roadAxes: readonly { coords: readonly [number, number][]; width: number; kind: 'asphalt' | 'track' }[] = [],
   ) {
+    this.village = !isCity;
     this.model = new GroundModel(features, isCity);
     this.texture = new GroundTexture(this.renderer(), frame, area, city.renderer.capabilities.getMaxAnisotropy());
     hookMaterial(this.texture.material, 'ground', this.texture.hook, csm);
@@ -138,7 +142,15 @@ export class GroundLayer {
     const yardDirt = this.yardDirt.filter((d) => !d.houseId || !this.edits.hiddenGardens.has(d.houseId)).map((d) => [d.ring]);
     const bounds = groundBounds(this.model.features) ?? this.areaBounds();
     return new LandTextureRenderer(
-      { byKind, covers, gardens, dirt: [...(dirt ?? []), ...yardDirt], style: { bare: this.bareColor, colors: GROUND_COLORS, wood: WOOD_COLOR, meadow: MEADOW_COLOR } },
+      {
+        byKind,
+        covers,
+        gardens,
+        dirt: [...(dirt ?? []), ...yardDirt],
+        style: { bare: this.bareColor, colors: GROUND_COLORS, wood: WOOD_COLOR, meadow: MEADOW_COLOR },
+        village: this.village,
+        axes: this.roadAxes,
+      },
       bounds,
     );
   }

@@ -13,6 +13,7 @@ import { CityScene } from '../three/CityScene';
 import { DetailsLayer } from '../three/DetailsLayer';
 import { FurnitureLayer } from '../three/FurnitureLayer';
 import { TIME_FLOW_HOURS_PER_SECOND } from '../three/dayNight';
+import { AddressPlatesLayer, type AddressPlate } from '../three/AddressPlatesLayer';
 import { GrassLayer } from '../three/GrassLayer';
 import { GroundLayer } from '../three/GroundLayer';
 import { LandmarksLayer } from '../three/LandmarksLayer';
@@ -37,6 +38,7 @@ import { decodeDetailFile, DetailHeights, type DetailTerrainFile } from '../worl
 import { openRing, signedArea } from '../world/base/roofGeometry';
 import { applySurvey, type SurveyFile } from '../world/base/survey';
 import { computeStats, loadBaseBuildings, loadBuildingParts } from '../world/base/loadBaseBuildings';
+import { addressLabel, loadParcels, ParcelIndex, type Parcel } from '../world/base/parcels';
 import { assignParts } from '../world/base/parts';
 import { landmarkClearance, landmarkObstacle } from '../world/base/pedestal';
 import { orientBenches, placeLamps, roadMarkings } from '../world/base/streetFurniture';
@@ -119,7 +121,7 @@ const SHED_AREA = 45;
 const HOUSE_AREA = 320;
 
 /** Что знает планировщик посёлка: дома, хозпостройки, ничья земля, улицы и просёлки (локальные метры). */
-function estateInput(features: readonly BaseBuildingFeature[], environment: Environment, frame: LocalFrame): EstateInput {
+function estateInput(features: readonly BaseBuildingFeature[], environment: Environment, frame: LocalFrame, parcels?: readonly Parcel[]): EstateInput {
   const input: EstateInput & {
     houses: EstateInput['houses'][number][];
     sheds: EstateInput['sheds'][number][];
@@ -136,6 +138,7 @@ function estateInput(features: readonly BaseBuildingFeature[], environment: Envi
       coords: p.coords.map(frame.toLocal),
       width: p.width,
     })),
+    ...(parcels?.length ? { parcels: parcels.map((p) => p.ring.map(frame.toLocal)) } : {}),
   };
   for (const f of features) {
     const polygons = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
@@ -277,16 +280,30 @@ export function CityViewer({ territory }: { territory: Territory }) {
       else setIntroView(c, territory, frame, localHeight);
       store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5));
 
-      const [osmCollection, buildingParts, environment, surveyFile] = await Promise.all([
+      const [osmCollection, buildingParts, environment, surveyFile, parcelsFile] = await Promise.all([
         loadBaseBuildings(territory),
         loadBuildingParts(territory),
         loadEnvironment(territory),
         loadSurvey(territory),
+        loadParcels(territory),
       ]);
       if (disposed) return;
       // Находки по съёмке с дрона: цвета домов и постройки, которых нет в OSM.
       const surveyApplied = surveyOn && surveyFile ? applySurvey(osmCollection, surveyFile) : undefined;
       const collection = surveyApplied?.collection ?? osmCollection;
+      // Адреса из кадастра (НСПД): дому — адрес участка, на котором он стоит (в карточке здания и на табличке).
+      const parcelIndex = parcelsFile ? new ParcelIndex(parcelsFile.parcels) : undefined;
+      if (parcelsFile) setCredit([heights.credit, `участки и адреса ${parcelsFile.metadata.credit}`].filter(Boolean).join(' · '));
+      if (parcelIndex) {
+        for (const f of collection.features) {
+          if (f.properties.address) continue;
+          const ring = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0];
+          if (!ring?.length) continue;
+          const at: [number, number] = [ring.reduce((s, p) => s + p[0], 0) / ring.length, ring.reduce((s, p) => s + p[1], 0) / ring.length];
+          const label = addressLabel(parcelIndex.at(at));
+          if (label) f.properties.address = label;
+        }
+      }
       // Есть ли у района съёмка (даже если она сейчас выключена — чтобы её можно было включить).
       const hasSurvey = !!surveyFile || !!heights.detail || (!surveyOn && (await dataExists(territory, 'terrain-detail.json')));
       if (disposed) return;
@@ -303,7 +320,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const markings = roadMarkings(environment.streets, frame, roadSurfaces);
       const bareGround = village ? VILLAGE_GROUND_COLOR : BARE_GROUND_COLOR;
       // «Моя версия» посёлка: земля нарезана на участки вплотную — заборы, ворота, постройки, сады.
-      const estates = village && useAppStore.getState().villagePlan ? planEstates(estateInput(collection.features, environment, frame)) : undefined;
+      const estates = village && useAppStore.getState().villagePlan ? planEstates(estateInput(collection.features, environment, frame, parcelsFile?.parcels)) : undefined;
       if (import.meta.env.DEV) Object.assign(window, { __estates: estates });
       // Деревня: дворы у домов — забор с воротами и огород за домом (в OSM участков нет).
       const yards: Yard[] = estates
@@ -400,7 +417,12 @@ export function CityViewer({ territory }: { territory: Territory }) {
       sculpt.strokes = useEditStore.getState().edits.terrain;
       if (sculpt.strokes.length) sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
       const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
-      const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion, yardDirt);
+      // Оси дорог: асфальт — улицы, грунтовки — проезды (track); по ним — колеи, заплатки, лужи.
+      const roadAxes = [
+        ...environment.streets.roads.map((r) => ({ coords: r.coords, width: r.width, kind: 'asphalt' as const })),
+        ...environment.streets.paths.filter((p) => p.highway === 'track').map((p) => ({ coords: p.coords, width: p.width, kind: 'track' as const })),
+      ];
+      const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion, yardDirt, roadAxes);
       owned.push(ground);
       if (import.meta.env.DEV) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
 
@@ -442,6 +464,16 @@ export function CityViewer({ territory }: { territory: Territory }) {
       if (import.meta.env.DEV) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates });
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
       if (villageModels) owned.push(villageModels);
+      // Таблички с адресом — на домах-моделях, у которых участок с улицей и номером.
+      const plates = parcelIndex
+        ? villageHouses.flatMap((h): AddressPlate[] => {
+            const center = frame.toLonLat([h.rect.reduce((s, p) => s + p[0], 0) / h.rect.length, h.rect.reduce((s, p) => s + p[1], 0) / h.rect.length]);
+            const parcel = parcelIndex.at(center);
+            return h.model !== 'banya' && parcel?.street && parcel.number ? [{ houseId: h.id, rect: h.rect, model: h.model, street: parcel.street, number: parcel.number }] : [];
+          })
+        : [];
+      const addressPlates = plates.length ? new AddressPlatesLayer(c, plates, localHeight, c.csm) : undefined;
+      if (addressPlates) owned.push(addressPlates);
       const modelIds = new Set(villageHouses.map((h) => h.id));
       const featureById = new Map(collection.features.map((f) => [f.properties.id, f]));
       /** Прямоугольники домов-моделей с запасом 1,5 м: деревья и фонари с них убираем. */
@@ -474,6 +506,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         if (!villageModels) return;
         const on = villageModelsOn();
         villageModels.setVisible(on && !useUnderlayStore.getState().hideCity);
+        addressPlates?.setVisible(on && !useUnderlayStore.getState().hideCity);
         buildings.setReplaced(on ? modelIds : new Set());
         details.setReplaced(on ? modelIds : new Set());
       };
@@ -708,7 +741,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(editor);
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
-      const groundFollowers = [buildings, details, villageModels, estateModels, estateLayer, frontGardens, trees, furniture, grass];
+      const groundFollowers = [buildings, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
         ground.refreshTerrain(changed);
@@ -722,6 +755,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         heightAt: localHeight,
         toLonLat: frame.toLonLat,
         onDab: (b, center) => followGround(sculpt.field.dab(b, center, ground0)),
+        onArea: (b, polygon) => followGround(sculpt.field.area(b, polygon, ground0)),
         onStroke: (stroke) => {
           const { edits, commit } = useEditStore.getState();
           const next = addStroke(edits, stroke);
@@ -755,6 +789,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         details.setHidden(removed, new Set(edits.removedYards), deleted);
         frontGardens?.setHidden(new Set(edits.removedYards), deleted);
         villageModels?.setHidden(replacedOsmIds(edits));
+        addressPlates?.setHidden(replacedOsmIds(edits));
         const yardOwner = (houseId: string) => houseId.slice(0, houseId.lastIndexOf(':'));
         const hiddenYards = new Set([...edits.removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]);
         ground.setEdits({

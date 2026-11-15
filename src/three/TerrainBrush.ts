@@ -9,7 +9,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
-import { SCULPT_RADIUS, type SculptBrush, type SculptMode, type SculptStroke } from '../world/base/sculpt';
+import { AREA_MODES, SCULPT_RADIUS, type SculptBrush, type SculptLevelBy, type SculptMode, type SculptStroke } from '../world/base/sculpt';
 import type { Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 
@@ -22,6 +22,8 @@ export interface TerrainBrushContext {
   toLonLat: (point: Vec2) => [number, number];
   /** Касание кисти: поменять землю и всё, что на ней. */
   onDab: (brush: SculptBrush, center: Vec2) => void;
+  /** Обведённая область (локальные метры): выровнять или сгладить её разом. */
+  onArea: (brush: SculptBrush, polygon: Vec2[]) => void;
   /** Мазок закончен — в правки. */
   onStroke: (stroke: SculptStroke) => void;
 }
@@ -43,6 +45,8 @@ export class TerrainBrush {
   private hover?: Vec2;
   private hold?: number;
   private pointerId?: number;
+  /** Обводка: точки контура (локальные метры), пока ведём. */
+  private lasso?: Vec2[];
   private readonly unsubscribe: () => void;
 
   constructor(private readonly ctx: TerrainBrushContext) {
@@ -99,21 +103,23 @@ export class TerrainBrush {
     const point = this.pick(event);
     if (!point) return;
     const { sculpt } = useEditStore.getState();
+    if (sculpt.shape === 'area' && AREA_MODES.includes(sculpt.mode)) {
+      this.lasso = [point];
+      this.ctx.controls.setEnabled(false);
+      this.capture(event.pointerId);
+      this.drawRing();
+      return;
+    }
     this.stroke = {
       id: strokeId(),
       mode: sculpt.mode,
       radius: sculpt.radius,
       strength: sculpt.strength,
-      ...(sculpt.mode === 'flatten' ? { level: this.ctx.heightAt(point[0], point[1]) } : {}),
+      ...(sculpt.mode === 'flatten' ? { level: this.startLevel(point, sculpt.radius, sculpt.levelBy) } : {}),
       dabs: [],
     };
     this.ctx.controls.setEnabled(false);
-    try {
-      this.ctx.city.canvas.setPointerCapture(event.pointerId);
-      this.pointerId = event.pointerId;
-    } catch {
-      // Указатель уже отпущен.
-    }
+    this.capture(event.pointerId);
     this.dab(point);
     this.hold = window.setInterval(() => this.last && this.dab(this.last), HOLD_MS);
   };
@@ -123,6 +129,12 @@ export class TerrainBrush {
     const point = this.pick(event);
     if (!point) return;
     this.hover = point;
+    if (this.lasso) {
+      const last = this.lasso[this.lasso.length - 1]!;
+      if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= 1) this.lasso.push(point);
+      this.drawRing();
+      return;
+    }
     const stroke = this.stroke;
     if (stroke && this.last) {
       // Вдоль пути — касания через четверть радиуса (быстрое движение не оставляет пропусков).
@@ -138,8 +150,49 @@ export class TerrainBrush {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (event.pointerId === this.pointerId || this.stroke) this.end();
+    if (this.lasso) this.finishLasso();
+    else if (event.pointerId === this.pointerId || this.stroke) this.end();
   };
+
+  private capture(pointerId: number): void {
+    try {
+      this.ctx.city.canvas.setPointerCapture(pointerId);
+      this.pointerId = pointerId;
+    } catch {
+      // Указатель уже отпущен.
+    }
+  }
+
+  private releaseCapture(): void {
+    if (this.pointerId === undefined) return;
+    const canvas = this.ctx.city.canvas;
+    if (canvas.hasPointerCapture(this.pointerId)) canvas.releasePointerCapture(this.pointerId);
+    this.pointerId = undefined;
+  }
+
+  /** Обводка закончена: область меньше 4 м² или из двух точек — не считается. */
+  private finishLasso(): void {
+    const polygon = this.lasso!;
+    this.lasso = undefined;
+    this.releaseCapture();
+    this.ctx.controls.setEnabled(true);
+    const area = Math.abs(polygon.reduce((s, p, k) => s + p[0] * polygon[(k + 1) % polygon.length]![1] - polygon[(k + 1) % polygon.length]![0] * p[1], 0)) / 2;
+    if (polygon.length >= 3 && area >= 4) {
+      const { sculpt } = useEditStore.getState();
+      const stroke: SculptStroke = {
+        id: strokeId(),
+        mode: sculpt.mode,
+        radius: sculpt.radius,
+        strength: sculpt.strength,
+        ...(sculpt.mode === 'flatten' && sculpt.levelBy && sculpt.levelBy !== 'median' ? { levelBy: sculpt.levelBy } : {}),
+        dabs: [],
+        area: polygon.map(this.ctx.toLonLat),
+      };
+      this.ctx.onArea(stroke, polygon);
+      this.ctx.onStroke(stroke);
+    }
+    this.drawRing();
+  }
 
   private readonly onPointerLeave = () => {
     if (this.stroke) return;
@@ -155,6 +208,25 @@ export class TerrainBrush {
     if (event.code === 'BracketLeft') setSculpt({ radius: Math.max(SCULPT_RADIUS.min, Math.round(sculpt.radius / 1.25)) });
     else if (event.code === 'BracketRight') setSculpt({ radius: Math.min(SCULPT_RADIUS.max, Math.round(sculpt.radius * 1.25)) });
   };
+
+  /**
+   * Уровень «выровнять» кистью: высота точки, где начали (по умолчанию), или самая низкая / высокая точка
+   * земли под кругом кисти в момент нажатия (через метр, не больше ~2500 точек).
+   */
+  private startLevel(point: Vec2, radius: number, by: SculptLevelBy | undefined): number {
+    const here = this.ctx.heightAt(point[0], point[1]);
+    if (by !== 'low' && by !== 'high') return here;
+    const step = Math.max(1, radius / 25);
+    let best = here;
+    for (let dy = -radius; dy <= radius; dy += step) {
+      for (let dx = -radius; dx <= radius; dx += step) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const h = this.ctx.heightAt(point[0] + dx, point[1] + dy);
+        best = by === 'low' ? Math.min(best, h) : Math.max(best, h);
+      }
+    }
+    return best;
+  }
 
   private restartHold(): void {
     if (this.hold === undefined) return;
@@ -174,11 +246,12 @@ export class TerrainBrush {
   private end(): void {
     if (this.hold !== undefined) window.clearInterval(this.hold);
     this.hold = undefined;
-    if (this.pointerId !== undefined) {
-      const canvas = this.ctx.city.canvas;
-      if (canvas.hasPointerCapture(this.pointerId)) canvas.releasePointerCapture(this.pointerId);
-      this.pointerId = undefined;
+    if (this.lasso) {
+      // Сменили инструмент посреди обводки — обводка не считается.
+      this.lasso = undefined;
+      this.ctx.controls.setEnabled(true);
     }
+    this.releaseCapture();
     const stroke = this.stroke;
     this.stroke = undefined;
     this.last = undefined;
@@ -187,8 +260,21 @@ export class TerrainBrush {
     if (stroke.dabs.length) this.ctx.onStroke(stroke);
   }
 
-  /** Круг кисти по земле под мышью (или там, где рисуем). */
+  /** Круг кисти по земле под мышью (или там, где рисуем); при обводке — контур области. */
   private drawRing(): void {
+    if (this.lasso) {
+      const { sculpt } = useEditStore.getState();
+      this.material.color.setHex(COLORS[sculpt.mode]);
+      // Контур с замыканием к началу: видно, какая область получится.
+      const pts = [...this.lasso, this.lasso[0]!];
+      const positions = pts.flatMap(([x, y]) => [x, this.ctx.heightAt(x, y) + RING_LIFT, -y]);
+      const old = this.ring.geometry;
+      this.ring.geometry = new LineGeometry().setPositions(positions);
+      old.dispose();
+      this.ring.visible = true;
+      this.ctx.city.requestRender();
+      return;
+    }
     const center = this.last ?? this.hover;
     const show = this.active() && !!center;
     if (this.ring.visible !== show) {
@@ -201,8 +287,10 @@ export class TerrainBrush {
     const positions: number[] = [];
     for (let k = 0; k <= RING_SEGMENTS; k++) {
       const a = (k / RING_SEGMENTS) * Math.PI * 2;
-      const x = center[0] + Math.cos(a) * sculpt.radius;
-      const y = center[1] + Math.sin(a) * sculpt.radius;
+      // В режиме обводки под мышью — маленький круг-курсор, а не круг кисти.
+      const radius = sculpt.shape === 'area' && AREA_MODES.includes(sculpt.mode) ? 1.5 : sculpt.radius;
+      const x = center[0] + Math.cos(a) * radius;
+      const y = center[1] + Math.sin(a) * radius;
       positions.push(x, this.ctx.heightAt(x, y) + RING_LIFT, -y);
     }
     // Новая геометрия на каждый сдвиг: у LineGeometry буферы по числу точек, точек всегда столько же.
