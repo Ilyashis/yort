@@ -6,6 +6,7 @@ import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
+import { CAN_EDIT } from './config/mode';
 import { MapTreesPanel } from './components/MapTreesPanel';
 
 import { PlotPanel } from './components/PlotPanel';
@@ -51,18 +52,19 @@ export function App() {
           <div className="sidebar">
             <InfoPanel />
             {SHOW_MAP_TREES_PANEL && <MapTreesPanel />}
-            {building ? (
+            {/* На сайте — только просмотр: прогулка, поездка, общий вид. Участок и конструктор — у редактора. */}
+            {building && CAN_EDIT ? (
               <BuilderPanel />
             ) : (
               <>
                 <WalkPanel />
-                <PlotPanel />
+                {CAN_EDIT && <PlotPanel />}
               </>
             )}
           </div>
           <BuildingCard />
-          <EditPanel />
-          <EditorToolbar />
+          {CAN_EDIT && <EditPanel />}
+          {CAN_EDIT && <EditorToolbar />}
         </>
       )}
       <HelpPanel />

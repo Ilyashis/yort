@@ -1440,3 +1440,14 @@ kbd {
   display: block;
   font-size: 11px;
 }
+
+/* «Опубликовать»: есть неопубликованные правки — кнопка подсвечена. */
+.editor-publish.pending {
+  color: #1d1400;
+  background: var(--accent);
+  font-weight: 600;
+}
+.editor-publish:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

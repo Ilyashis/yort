@@ -6,7 +6,8 @@ import { SoundZones } from '../audio/soundZones';
 import { LANDMARKS } from '../config/landmarks';
 import { territoryDataUrl, type Territory } from '../config/territory';
 import { isOnStreet, useAppStore } from '../store/useAppStore';
-import { useEditStore } from '../store/useEditStore';
+import { CAN_EDIT, PUBLISH_URL, PUBLISHED_EDITS, PUBLISHED_MAP_TREES } from '../config/mode';
+import { fetchPublishedEdits, useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
 import { BuildingsLayer } from '../three/BuildingsLayer';
 import { CityScene } from '../three/CityScene';
@@ -28,7 +29,7 @@ import { TreesLayer } from '../three/TreesLayer';
 import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
-import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
+import { flyToArea, flyToTerritory, focusOf, setIntroView } from '../three/views';
 import { addStroke, centroidOf, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
 import { findHouseModel } from '../world/village/houseModels';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
@@ -422,7 +423,10 @@ export function CityViewer({ territory }: { territory: Territory }) {
         detailRegion = { rect: { x0: dx0, y0: dy0, x1: dx1, y1: dy1 }, subdivide: (dx1 - dx0) * (dy1 - dy0) <= 2e6 ? 3 : 2 };
       }
       // Правки места (и мазки кисти рельефа) — до постройки слоёв: всё встаёт на уже поправленную землю.
-      useEditStore.getState().load(territory.id);
+      // Опубликованные правки (одни для всех) и у редактора — его черновик поверх них.
+      const publishedEdits = await fetchPublishedEdits(territoryDataUrl(territory, PUBLISHED_EDITS));
+      if (disposed) return;
+      useEditStore.getState().load(territory.id, publishedEdits);
       sculpt.strokes = useEditStore.getState().edits.terrain;
       if (sculpt.strokes.length) sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
       const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
@@ -569,6 +573,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         }
         return out;
       };
+      const round7 = (v: number) => Math.round(v * 1e7) / 1e7;
       /** Палисадник двора с учётом передвинутого дома (перед — до уличного забора, если он рядом). */
       const palisadeOf = (houseId: string, palisade: NonNullable<Yard['palisade']>, moved: ReturnType<typeof movedHouses>, streets: readonly (readonly Vec2[])[]) => {
         const m = moved.get(houseId.slice(0, houseId.lastIndexOf(':')));
@@ -642,7 +647,21 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
       const trees = new TreesLayer(c, [...parkTrees, ...forestTrees], parkTrees.length, frame, localHeight, c.csm);
       // Деревья по карте (снимку с дрона) — своим слоем: режим пышности меняют на временной панели, чтобы сравнить.
-      const mapTrees: { layer?: TreesLayer; mode?: MapTreesMode; pixels?: Promise<{ rgba: Uint8ClampedArray; w: number; h: number; meta: { west: number; south: number; east: number; north: number } } | undefined>; blocked?: (x: number, y: number) => boolean } = {};
+      const mapTrees: { layer?: TreesLayer; mode?: MapTreesMode; published?: { detailed: number; trees: TreePoint[] }; pixels?: Promise<{ rgba: Uint8ClampedArray; w: number; h: number; meta: { west: number; south: number; east: number; north: number } } | undefined>; blocked?: (x: number, y: number) => boolean } = {};
+      /** Опубликованные деревья по карте: { detailed, trees: [lon, lat, высота][] }. */
+      const fetchMapTrees = async (): Promise<{ detailed: number; trees: TreePoint[] } | undefined> => {
+        try {
+          const response = await fetch(territoryDataUrl(territory, PUBLISHED_MAP_TREES), { cache: 'no-cache' });
+          if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
+          const data = (await response.json()) as { detailed?: number; trees?: unknown };
+          const trees = (Array.isArray(data.trees) ? data.trees : []).filter(
+            (t): t is TreePoint => Array.isArray(t) && t.length === 3 && t.every((n) => typeof n === 'number' && Number.isFinite(n)),
+          );
+          return { detailed: Math.min(trees.length, Math.max(0, Number(data.detailed) || 0)), trees };
+        } catch {
+          return undefined;
+        }
+      };
       const loadMapPixels = () =>
         (mapTrees.pixels ??= (async () => {
           try {
@@ -703,6 +722,17 @@ export function CityViewer({ territory }: { territory: Territory }) {
           return;
         }
         store.setMapTreesCount(undefined);
+        // Зритель: деревья — из опубликованного файла (снимка с дрона на сайте нет).
+        if (!CAN_EDIT) {
+          const published = await fetchMapTrees();
+          if (disposed || mapTrees.mode !== mode) return;
+          if (!published) return store.setMapTreesCount(0);
+          mapTrees.layer = new TreesLayer(c, published.trees, published.detailed, frame, localHeight, c.csm);
+          store.setMapTreesCount(published.trees.length);
+          refreshObstacles();
+          c.requestRender();
+          return;
+        }
         const map = await loadMapPixels();
         if (disposed || mapTrees.mode !== mode) return;
         if (!map) return store.setMapTreesCount(0);
@@ -725,6 +755,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const detailed = spots.filter(([x, y]) => near?.has(x, y)).length;
         const points: TreePoint[] = ordered.map(([x, y, height]) => [...frame.toLonLat([x, y]), height]);
         mapTrees.layer = new TreesLayer(c, points, detailed, frame, localHeight, c.csm);
+        // Для «Опубликовать»: эти же деревья — в файл, зритель возьмёт их оттуда.
+        mapTrees.published = { detailed, trees: points.map(([lon, lat, height]): TreePoint => [round7(lon), round7(lat), Math.round(height * 10) / 10]) };
         store.setMapTreesCount(points.length);
         refreshObstacles();
         c.requestRender();
@@ -982,6 +1014,19 @@ export function CityViewer({ territory }: { territory: Territory }) {
         setGate: (id, patch) => editor.setGateOption(id, patch),
       });
       editStore.setPropTools({ info: (key) => editor.propInfo(key), rotate: (key, delta) => editor.rotateProp(key, delta) });
+      // «Опубликовать»: правки и деревья по карте — в файлы данных района (пишет локальный сервер разработки).
+      if (CAN_EDIT)
+        editStore.setPublisher(async () => {
+          const response = await fetch(PUBLISH_URL, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ territory: territory.id, edits: useEditStore.getState().edits, mapTrees: mapTrees.published }),
+          });
+          const result = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; files?: string[] };
+          if (!response.ok || !result.ok) throw new Error(result.error ?? `сервер ответил ${response.status}`);
+          useEditStore.getState().markPublished();
+          return result.files ?? [];
+        });
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
       const groundFollowers: ({ shiftGround: (delta: GroundDelta, area: GroundArea) => void } | undefined)[] = [
@@ -1123,6 +1168,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           s.setModelApplier(undefined);
           s.setFenceTools(undefined);
           s.setPropTools(undefined);
+          s.setPublisher(undefined);
           s.setTool(undefined);
           s.select(undefined);
         },
@@ -1253,8 +1299,10 @@ export function CityViewer({ territory }: { territory: Territory }) {
       c.setQuality(useAppStore.getState().graphicsQuality);
 
       store.setStatus('ready');
-      // Всё загружено — плавный пролёт к району.
-      if (!kept) flyToTerritory(c, territory, frame, localHeight, 3.2);
+      // Всё загружено — плавный пролёт к району (у деревни — к домам).
+      const focus = village ? focusOf(villageHouses.map((h) => h.rect[0]!)) : undefined;
+      store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5, focus));
+      if (!kept) flyToTerritory(c, territory, frame, localHeight, 3.2, focus);
     }
 
     init().catch((error: unknown) => {

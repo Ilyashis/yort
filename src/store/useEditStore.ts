@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type FenceLook, type HouseModelRef } from '../world/edit/edits';
+import { CAN_EDIT } from '../config/mode';
+import { EMPTY_EDITS, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type FenceLook, type HouseModelRef } from '../world/edit/edits';
 import type { FenceStyle } from '../world/village/estates';
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptLevelBy, SculptMode } from '../world/base/sculpt';
@@ -45,27 +46,46 @@ export type Selection =
 const HISTORY_LIMIT = 100;
 const storageKey = (territoryId: string) => `citia:edits:${territoryId}`;
 
-function loadEdits(territoryId: string): Edits {
+/** Черновик редактора в браузере (неопубликованные правки); у зрителя черновиков нет. */
+function loadDraft(territoryId: string): Edits | undefined {
+  if (!CAN_EDIT) return undefined;
   try {
     const raw = window.localStorage.getItem(storageKey(territoryId));
-    return (raw && parseEdits(JSON.parse(raw))) || EMPTY_EDITS;
+    return (raw && parseEdits(JSON.parse(raw))) || undefined;
   } catch {
-    return EMPTY_EDITS;
+    return undefined;
   }
 }
 
-function saveEdits(territoryId: string, edits: Edits): void {
+/** Черновик в браузер; совпадает с опубликованным — черновика нет. */
+function saveEdits(territoryId: string, edits: Edits, published: Edits): void {
+  if (!CAN_EDIT) return;
   try {
-    if (isEmpty(edits)) window.localStorage.removeItem(storageKey(territoryId));
+    if (sameEdits(edits, published)) window.localStorage.removeItem(storageKey(territoryId));
     else window.localStorage.setItem(storageKey(territoryId), JSON.stringify(edits));
   } catch {
     // Хранилище недоступно — правки живут до перезагрузки вкладки.
   }
 }
 
+export const sameEdits = (a: Edits, b: Edits) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/** Опубликованные правки района (файл данных); нет файла — правок нет. */
+export async function fetchPublishedEdits(url: string): Promise<Edits> {
+  try {
+    const response = await fetch(url, { cache: 'no-cache' });
+    if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return EMPTY_EDITS;
+    return parseEdits(await response.json()) ?? EMPTY_EDITS;
+  } catch {
+    return EMPTY_EDITS;
+  }
+}
+
 interface EditState {
   territoryId?: string;
   edits: Edits;
+  /** Опубликованные правки (из файла данных): то, что видят все. edits — они же плюс черновик редактора. */
+  published: Edits;
   past: Edits[];
   future: Edits[];
   tool?: EditTool;
@@ -88,6 +108,8 @@ interface EditState {
   };
   /** Мелочь дворов: что это и поворот (регистрирует сцена). */
   propTools?: { info: (key: string) => { kind: string; angle: number } | undefined; rotate: (key: string, delta: number) => void };
+  /** Опубликовать правки и деревья по карте в файлы данных (только у редактора; регистрирует сцена). */
+  publisher?: () => Promise<string[]>;
   /** Дорога: как рисовать и ширина (нет — по типу дороги). */
   roadDraw: RoadDraw;
   roadWidth?: number;
@@ -98,8 +120,10 @@ interface EditState {
   /** Поставить модель на место дома (фасадом к улице) или снять её (регистрирует сцена — знает улицы). */
   applyModel?: (building: EditedBuilding, model: HouseModelRef | undefined) => EditedBuilding;
 
-  /** Загрузить правки населённого пункта (из браузера). */
-  load: (territoryId: string) => void;
+  /** Загрузить правки населённого пункта: опубликованные и (у редактора) черновик поверх них. */
+  load: (territoryId: string, published: Edits) => void;
+  /** Опубликовано: черновика больше нет. */
+  markPublished: () => void;
   setTool: (tool: EditTool | undefined) => void;
   select: (selection: Selection | undefined) => void;
   setRoadKind: (kind: EditRoadKind) => void;
@@ -110,6 +134,7 @@ interface EditState {
   setRoadWidth: (width: number | undefined) => void;
   setFenceTools: (tools: EditState['fenceTools']) => void;
   setPropTools: (tools: EditState['propTools']) => void;
+  setPublisher: (publisher: EditState['publisher']) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -123,6 +148,7 @@ interface EditState {
 
 export const useEditStore = create<EditState>()((set, get) => ({
   edits: EMPTY_EDITS,
+  published: EMPTY_EDITS,
   past: [],
   future: [],
   roadKind: 'lane',
@@ -130,8 +156,13 @@ export const useEditStore = create<EditState>()((set, get) => ({
   fenceDraw: 'points',
   roadDraw: 'points',
 
-  load: (territoryId) =>
-    set({ territoryId, edits: loadEdits(territoryId), past: [], future: [], selection: undefined, tool: undefined }),
+  load: (territoryId, published) =>
+    set({ territoryId, published, edits: loadDraft(territoryId) ?? published, past: [], future: [], selection: undefined, tool: undefined }),
+  markPublished: () => {
+    const { edits, territoryId } = get();
+    set({ published: edits });
+    if (territoryId) saveEdits(territoryId, edits, edits);
+  },
   setTool: (tool) => set({ tool, selection: tool === 'select' ? get().selection : undefined }),
   select: (selection) => set({ selection }),
   // Другой тип дороги — его обычной ширины.
@@ -143,25 +174,26 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setRoadWidth: (roadWidth) => set({ roadWidth }),
   setFenceTools: (fenceTools) => set({ fenceTools }),
   setPropTools: (propTools) => set({ propTools }),
+  setPublisher: (publisher) => set({ publisher }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();
     if (next === edits) return;
-    if (territoryId) saveEdits(territoryId, next);
+    if (territoryId) saveEdits(territoryId, next, get().published);
     set({ edits: next, past: [...past, edits].slice(-HISTORY_LIMIT), future: [] });
   },
   undo: () => {
     const { edits, past, future, territoryId } = get();
     const previous = past[past.length - 1];
     if (!previous) return;
-    if (territoryId) saveEdits(territoryId, previous);
+    if (territoryId) saveEdits(territoryId, previous, get().published);
     set({ edits: previous, past: past.slice(0, -1), future: [edits, ...future], selection: undefined });
   },
   redo: () => {
     const { edits, past, future, territoryId } = get();
     const next = future[0];
     if (!next) return;
-    if (territoryId) saveEdits(territoryId, next);
+    if (territoryId) saveEdits(territoryId, next, get().published);
     set({ edits: next, past: [...past, edits], future: future.slice(1), selection: undefined });
   },
   replace: (next) => get().commit(next),

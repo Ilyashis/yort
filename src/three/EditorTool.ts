@@ -12,6 +12,7 @@
 //   destroy().
 
 import { booleanIntersects, polygon } from '@turf/turf';
+import { CAN_EDIT } from '../config/mode';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore, type EditTool, type FenceInfo } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
@@ -161,6 +162,8 @@ export class EditorTool {
   private activeVertex?: { fence: string; point: Vec2 };
   /** Какие постройки дворов были спрятаны до перетаскивания (вернуть при отмене). */
   private yardHidden?: Set<string>;
+  /** Просмотр (сайт): мышь и клавиши редактору не нужны. */
+  private readonly readOnly: boolean;
   /** Постройки, которых перетаскиваемый дом касался на своём месте (не мешают ему). */
   private touching = new Set<string>();
   /** Alt зажат — магнит выключен. */
@@ -173,6 +176,12 @@ export class EditorTool {
 
   constructor(private readonly ctx: EditorContext) {
     const canvas = ctx.city.canvas;
+    this.runKeys = ctx.estate?.base.runs.map(runKey) ?? [];
+    this.plotIndex = new Map(ctx.estate?.base.plots.map((p, i) => [p.id, i]) ?? []);
+    this.obstacleShapes = [];
+    // Просмотр (сайт): редактор не слушает ни мышь, ни клавиши — только показывает правки.
+    this.readOnly = !CAN_EDIT;
+    if (this.readOnly) return;
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
@@ -180,8 +189,6 @@ export class EditorTool {
     window.addEventListener('keydown', this.onKey);
     // capture: двойной клик, завершающий забор, не должен долететь до камеры (подлёт к точке).
     canvas.addEventListener('dblclick', this.onDoubleClick, { capture: true });
-    this.runKeys = ctx.estate?.base.runs.map(runKey) ?? [];
-    this.plotIndex = new Map(ctx.estate?.base.plots.map((p, i) => [p.id, i]) ?? []);
     this.obstacleShapes = ctx.osmBuildings.flatMap((f) =>
       (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates).map((rings) => {
         const xs = (rings[0] ?? []).map(([x]) => x);

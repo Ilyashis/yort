@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { CAN_EDIT } from '../config/mode';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { MOD } from './EditorToolbar';
@@ -129,6 +130,8 @@ export function HelpPanel() {
             <Key>F</Key>
           </dt>
           <dd>ближе / дальше</dd>
+          {CAN_EDIT && (
+            <>
           <dt className="help-section">Редактор</dt>
           <dt>
             <Key>V</Key>
@@ -176,6 +179,8 @@ export function HelpPanel() {
             <Key>Backspace</Key>
           </dt>
           <dd>совмещение подложки: шаг назад</dd>
+            </>
+          )}
         </dl>
       )}
     </aside>

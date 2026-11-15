@@ -22,10 +22,32 @@ export function setIntroView(city: CityScene, territory: Territory, frame: Local
   city.setView(city.orbitPosition(center, 25, 38, 14_000), center);
 }
 
-/** Наклонный вид на район с юго-запада. */
-export function flyToTerritory(city: CityScene, territory: Territory, frame: LocalFrame, heightAt: HeightAt, duration = 1.5): void {
+/** Где жильё в районе: середина и радиус, м (локальные). Для деревни вид — на неё, а не на весь прямоугольник данных. */
+export interface Focus {
+  center: [number, number];
+  radius: number;
+}
+
+/** Наклонный вид на район с юго-запада (у деревни — на сами дома: иначе с 4 км видна только дымка). */
+export function flyToTerritory(city: CityScene, territory: Territory, frame: LocalFrame, heightAt: HeightAt, duration = 1.5, focus?: Focus): void {
+  if (focus) {
+    const [x, y] = focus.center;
+    const center = new Vector3(x, heightAt(x, y), -y);
+    // Не дальше 900 м: дальше деревню съедает дымка.
+    city.flyTo(city.orbitPosition(center, 25, 42, Math.min(900, Math.max(350, focus.radius * 0.9))), center, duration);
+    return;
+  }
   const { center, radius } = territorySphere(territory, frame, heightAt);
   city.flyTo(city.orbitPosition(center, 25, 35, radius * 1.9), center, duration);
+}
+
+/** Где дома (середина и радиус, отбросив 5% самых дальних). */
+export function focusOf(points: readonly (readonly [number, number])[]): Focus | undefined {
+  if (!points.length) return undefined;
+  const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
+  const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
+  const d = points.map(([x, y]) => Math.hypot(x - cx, y - cy)).sort((a, b) => a - b);
+  return { center: [cx, cy], radius: d[Math.floor(d.length * 0.95)] ?? 0 };
 }
 
 /**

@@ -9,6 +9,8 @@ import { DEFAULT_TIME } from '../three/dayNight';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../world/base/heightGrid';
 import { readPref, writePref } from '../utils/prefs';
+import { CAN_EDIT } from '../config/mode';
+// У зрителя (сайт) слои деревни — всегда одни и те же: сохранённые в браузере настройки слоёв не читаем.
 
 /** Варианты усиления рельефа в панели. */
 export const RELIEF_SCALES = [1, 1.2, 1.5, 2, 3] as const;
@@ -260,15 +262,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
   timeOfDay: readTime(),
   timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
-  villageModels: readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
-  villagePlan: readPref('village-plan', ['on', 'off'] as const, 'on') === 'on',
+  villageModels: !CAN_EDIT || readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
+  villagePlan: !CAN_EDIT || readPref('village-plan', ['on', 'off'] as const, 'on') === 'on',
   haze: readPref('haze', ['on', 'off'] as const, 'on') === 'on',
   blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
-  surveyOn: readPref('survey', ['on', 'off'] as const, 'on') === 'on',
-  reliefScale: Number(readPref('relief', RELIEF_SCALES.map(String), '1')),
-  grassOn: readPref('grass', ['on', 'off'] as const, 'on') === 'on',
-  mapOverlay: readPref('map-overlay', ['on', 'off'] as const, 'off') === 'on',
+  surveyOn: !CAN_EDIT || readPref('survey', ['on', 'off'] as const, 'on') === 'on',
+  reliefScale: CAN_EDIT ? Number(readPref('relief', RELIEF_SCALES.map(String), '1')) : 1,
+  grassOn: !CAN_EDIT || readPref('grass', ['on', 'off'] as const, 'on') === 'on',
+  mapOverlay: CAN_EDIT && readPref('map-overlay', ['on', 'off'] as const, 'off') === 'on',
   // Деревья по карте — «Средне» (выбрано сравнением). Панель выбора скрыта, поэтому сохранённый в браузере
   // режим не читаем: у всех одинаково. Вернуть выбор — MapTreesPanel в App.tsx и readPref('map-trees', …).
   mapTrees: 'normal' as MapTreesMode,

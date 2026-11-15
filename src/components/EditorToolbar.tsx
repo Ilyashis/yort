@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { useEditStore, type EditTool } from '../store/useEditStore';
+import { sameEdits, useEditStore, type EditTool } from '../store/useEditStore';
 import { alignHint, useUnderlayStore } from '../store/useUnderlayStore';
 import { MOVE_HINT, UnderlayPanel } from './UnderlayPanel';
 import { useDismiss } from './useDismiss';
@@ -91,6 +91,11 @@ export function EditorToolbar() {
   const undo = useEditStore((s) => s.undo);
   const redo = useEditStore((s) => s.redo);
   const edits = useEditStore((s) => s.edits);
+  const published = useEditStore((s) => s.published);
+  const publisher = useEditStore((s) => s.publisher);
+  /** Есть неопубликованные правки (черновик отличается от того, что на сайте). */
+  const draft = !sameEdits(edits, published);
+  const [publishing, setPublishing] = useState(false);
   const notice = useEditStore((s) => s.notice);
   const [menu, setMenu] = useState(false);
   const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
@@ -147,6 +152,24 @@ export function EditorToolbar() {
       useEditStore.getState().notify('Правки загружены');
     } catch {
       useEditStore.getState().notify('Это не файл правок Citia');
+    }
+  };
+  const publish = async () => {
+    if (!publisher || publishing) return;
+    setPublishing(true);
+    try {
+      await publisher();
+      useEditStore.getState().notify('Опубликовано: правки и деревья — в файлах данных. Закоммитьте и отправьте на сайт — их увидят все.');
+    } catch (error) {
+      useEditStore.getState().notify(`Не опубликовано: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPublishing(false);
+    }
+  };
+  const revertToPublished = () => {
+    setMenu(false);
+    if (window.confirm('Вернуть деревню как опубликовано? Неопубликованные правки уйдут (отменить можно кнопкой «Отменить», пока страница открыта).')) {
+      useEditStore.getState().replace(useEditStore.getState().published);
     }
   };
   const resetEdits = () => {
@@ -411,6 +434,19 @@ export function EditorToolbar() {
           <span>Карта</span>
         </button>
         <span className="editor-divider" />
+        <button
+          type="button"
+          className={`editor-tool editor-publish ${draft ? 'pending' : ''}`}
+          disabled={!draft || publishing || !publisher}
+          onClick={() => void publish()}
+          title={draft ? 'Записать правки в файлы данных — после коммита их увидят все на сайте' : 'Всё опубликовано'}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 14V3M6 7l4-4 4 4M4 13v4h12v-4" />
+          </svg>
+          <span>{publishing ? 'Публикую…' : draft ? 'Опубликовать' : 'Опубликовано'}</span>
+        </button>
+        <span className="editor-divider" />
         <button type="button" className="editor-icon" title={`Отменить (${MOD}+Z)`} aria-label="Отменить" disabled={!canUndo} onClick={undo}>
           ↶
         </button>
@@ -432,13 +468,16 @@ export function EditorToolbar() {
           </button>
           {menu && <EditsMenu onClose={() => setMenu(false)}>
               <p className="muted">
-                Правок: {count}. Хранятся в этом браузере, отдельно для каждого места; данные OSM не меняются.
+                Правок: {count}. Черновик хранится в этом браузере; «Опубликовать» записывает правки в файлы проекта — после коммита их увидят все на сайте. Данные OSM не меняются.
               </p>
               <button type="button" className="button" disabled={isEmpty(edits)} onClick={exportEdits}>
                 Сохранить в файл
               </button>
               <button type="button" className="button" onClick={() => fileInput.current?.click()}>
                 Загрузить из файла
+              </button>
+              <button type="button" className="button" disabled={!draft} onClick={revertToPublished}>
+                Вернуть как опубликовано
               </button>
               <button type="button" className="button" disabled={isEmpty(edits)} onClick={resetEdits}>
                 Убрать все правки

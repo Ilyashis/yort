@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CAN_EDIT } from '../config/mode';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import { RELIEF_SCALES, useAppStore } from '../store/useAppStore';
 import { readPref, writePref } from '../utils/prefs';
@@ -78,6 +79,9 @@ export function InfoPanel() {
           {status === 'error' && <p className="status status-error">{error}</p>}
 
 
+          {/* Слои и перепады — только у редактора: на сайте у всех одна и та же деревня. */}
+          {CAN_EDIT && (
+            <>
           <div className="relief-scale" title="Усилить перепады высот, чтобы сравнить. Сцена пересоберётся, камера останется на месте">
             <span>Перепады</span>
             {RELIEF_SCALES.map((k) => (
@@ -134,6 +138,8 @@ export function InfoPanel() {
             <input type="checkbox" checked={colorMode === 'data'} onChange={(event) => setColorMode(event.target.checked ? 'data' : 'city')} />
             Раскрасить по качеству данных о высоте
           </label>
+            </>
+          )}
           {colorMode === 'data' && (
             <ul className="legend">
               <li>

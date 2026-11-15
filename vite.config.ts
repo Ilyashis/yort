@@ -1,8 +1,9 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { publishEdits } from './scripts/vite-publish.mjs';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), publishEdits()],
   server: {
     port: 5173,
   },
