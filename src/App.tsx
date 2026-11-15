@@ -15,6 +15,7 @@ import { DriveHud } from './components/DriveHud';
 import { Minimap } from './components/Minimap';
 import { WalkHud } from './components/WalkHud';
 import { WalkPanel } from './components/WalkPanel';
+import { MobileUi, useIsMobile } from './components/MobileUi';
 import { defaultTerritory, findTerritory, territoryDataUrl } from './config/territory';
 import { isOnStreet, useAppStore } from './store/useAppStore';
 
@@ -31,6 +32,7 @@ export function App() {
   // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
   const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
   const reliefScale = useAppStore((s) => s.reliefScale);
+  const mobile = useIsMobile();
   // Зритель: сначала — опубликованный вид (перепады и слои, как у редактора), потом сцена.
   const [viewFor, setViewFor] = useState<string | undefined>(CAN_EDIT ? territory.id : undefined);
   useEffect(() => {
@@ -63,7 +65,12 @@ export function App() {
           <span>Загружаем: {territory.shortName}…</span>
         </div>
       </div>
-      {isOnStreet(mode) ? (
+      {mobile ? (
+        <>
+          {!isOnStreet(mode) && <BuildingCard />}
+          <MobileUi />
+        </>
+      ) : isOnStreet(mode) ? (
         <>
           {mode === 'drive' ? <DriveHud /> : <WalkHud />}
           <Minimap />
@@ -88,8 +95,8 @@ export function App() {
           {CAN_EDIT && <EditorToolbar />}
         </>
       )}
-      <HelpPanel />
-      <CornerControls />
+      {!mobile && <HelpPanel />}
+      {!mobile && <CornerControls />}
     </main>
   );
 }

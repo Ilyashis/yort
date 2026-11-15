@@ -43,6 +43,14 @@ import { hookMaterial } from './shaderHooks';
 
 export type DriveView = 'chase' | 'cabin';
 
+/** Обзор до поездки — к нему вернёмся при выходе. */
+export interface DriveSavedView {
+  position: Vector3;
+  target: Vector3;
+  near: number;
+  fov: number;
+}
+
 export interface DriveHudState {
   /** Скорость, км/ч. */
   speed: number;
@@ -106,7 +114,10 @@ export class DriveController {
   private lastHud = 0;
   private street: string | undefined;
   private bumpCooldown = 0;
-  private saved?: { position: Vector3; target: Vector3; near: number; fov: number };
+  private saved?: DriveSavedView;
+  /** Кнопки на экране: газ (−1 — тормоз и назад) и руль. */
+  private touch = { throttle: 0, steer: 0 };
+  private lookPointer?: number;
   private removeAnimator?: () => void;
 
   private readonly car = new Group();
@@ -217,10 +228,10 @@ export class DriveController {
   }
 
   /** Сесть в машину в точке start (локальные метры) — машина встаёт на ближайшую дорогу. */
-  enter(start: Vec2, headingRad: number): void {
+  enter(start: Vec2, headingRad: number, saved?: { position: Vector3; target: Vector3; near: number }): void {
     if (this.driving) return;
     const camera = this.city.camera;
-    this.saved = { position: camera.position.clone(), target: this.city.target.clone(), near: camera.near, fov: camera.fov };
+    this.saved = saved ? { ...saved, fov: camera.fov } : { position: camera.position.clone(), target: this.city.target.clone(), near: camera.near, fov: camera.fov };
     this.city.cancelFlight();
     camera.near = 0.2;
     camera.updateProjectionMatrix();
@@ -236,6 +247,7 @@ export class DriveController {
     this.lastStreetCheck = 0;
     this.lastSurfaceCheck = 0;
     this.lastHud = 0;
+    this.touch = { throttle: 0, steer: 0 };
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -272,6 +284,29 @@ export class DriveController {
     this.callbacks.onExit();
   }
 
+  /** Выйти без пролёта — пересаживаемся в пешехода; вернуть обзор, с которого пришли. */
+  leave(): DriveSavedView | undefined {
+    if (!this.driving) return undefined;
+    this.driving = false;
+    this.detach();
+    this.car.visible = false;
+    if (this.glassMesh) this.glassMesh.visible = true;
+    this.beam.intensity = 0;
+    this.callbacks.onSound?.(undefined);
+    if (this.saved) {
+      this.city.camera.near = this.saved.near;
+      this.city.camera.fov = this.saved.fov;
+      this.city.camera.updateProjectionMatrix();
+    }
+    this.callbacks.onStreet(undefined);
+    return this.saved;
+  }
+
+  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо. */
+  setTouch(throttle: number, steer: number): void {
+    this.touch = { throttle, steer };
+  }
+
   /** Сзади или из кабины. */
   toggleView(): void {
     this.view = this.view === 'chase' ? 'cabin' : 'chase';
@@ -306,6 +341,8 @@ export class DriveController {
     this.removeAnimator = undefined;
     this.pressed.clear();
     this.dragging = false;
+    this.lookPointer = undefined;
+    this.touch = { throttle: 0, steer: 0 };
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
@@ -319,8 +356,8 @@ export class DriveController {
   private input(): CarInput {
     const has = (codes: readonly string[]) => codes.some((c) => this.pressed.has(c));
     return {
-      throttle: (has(KEYS.forward) ? 1 : 0) - (has(KEYS.back) ? 1 : 0),
-      steer: (has(KEYS.right) ? 1 : 0) - (has(KEYS.left) ? 1 : 0),
+      throttle: MathUtils.clamp((has(KEYS.forward) ? 1 : 0) - (has(KEYS.back) ? 1 : 0) + this.touch.throttle, -1, 1),
+      steer: MathUtils.clamp((has(KEYS.right) ? 1 : 0) - (has(KEYS.left) ? 1 : 0) + this.touch.steer, -1, 1),
       handbrake: this.pressed.has('Space'),
       fast: this.pressed.has('ShiftLeft') || this.pressed.has('ShiftRight'),
     };
@@ -524,6 +561,8 @@ export class DriveController {
 
   private readonly onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0 && event.button !== 2) return;
+    if (this.dragging && event.pointerId !== this.lookPointer) return;
+    this.lookPointer = event.pointerId;
     this.dragging = true;
     this.lookIdle = 0;
     this.lastPointer = [event.clientX, event.clientY];
@@ -531,7 +570,7 @@ export class DriveController {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    if (!this.dragging) return;
+    if (!this.dragging || event.pointerId !== this.lookPointer) return;
     const [x, y] = this.lastPointer;
     this.lastPointer = [event.clientX, event.clientY];
     this.lookYaw += (event.clientX - x) * LOOK_SENSITIVITY;
@@ -539,9 +578,10 @@ export class DriveController {
     this.lookIdle = 0;
   };
 
-  private readonly onPointerUp = () => {
-    if (!this.dragging) return;
+  private readonly onPointerUp = (event: PointerEvent) => {
+    if (!this.dragging || event.pointerId !== this.lookPointer) return;
     this.dragging = false;
+    this.lookPointer = undefined;
     this.city.canvas.style.cursor = 'grab';
   };
 

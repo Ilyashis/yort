@@ -4,6 +4,7 @@
 //  - W/S — вперёд/назад, A/D — шаг вбок, Q/E или ←/→ — поворот (удобно с тачпадом), Shift — бег;
 //  - плавный разгон и торможение; сквозь дома не пройти; глаза — на 1,7 м над землёй.
 // Если браузер не даёт захватить курсор — обзор перетаскиванием.
+// На телефоне: стик (setStick) — идти, перетаскивание пальцем — осматриваться, касание земли — дойти туда.
 
 import { MathUtils, Vector3 } from 'three';
 import { approach, axesFrom, isShift, WALK_KEYS } from '../world/walk/controlsMath';
@@ -24,6 +25,20 @@ const LOOK_SENSITIVITY_DRAG = 0.004;
 const MAX_PITCH = MathUtils.degToRad(80);
 const STREET_UPDATE_MS = 300;
 const ESC_AFTER_UNLOCK_MS = 400;
+/** Стик до упора — быстрый шаг, м/с. */
+const STICK_SPEED = 6;
+/** Касание, а не перетаскивание: короче и ближе, мс и пиксели. */
+const TAP_MS = 300;
+const TAP_PX = 10;
+/** Дошли до точки касания, м. */
+const GOAL_REACHED = 0.8;
+
+/** Обзор до прогулки — к нему вернёмся при выходе (переданный при пересадке из машины в пешехода). */
+export interface SavedView {
+  position: Vector3;
+  target: Vector3;
+  near: number;
+}
 
 export interface WalkCallbacks {
   onExit: () => void;
@@ -46,7 +61,14 @@ export class WalkController {
   private lastPointer: [number, number] = [0, 0];
   private lastStreetCheck = 0;
   private street: string | undefined;
-  private saved?: { position: Vector3; target: Vector3; near: number };
+  private saved?: SavedView;
+  /** Стик на экране: вперёд и вправо, −1…1. */
+  private stick: Vec2 = [0, 0];
+  /** Точка, к которой идём после касания земли. */
+  private goal?: Vec2;
+  /** Палец, которым осматриваемся (второй палец на стике не мешает), и где и когда он коснулся. */
+  private lookPointer?: number;
+  private downAt?: { x: number; y: number; time: number; touch: boolean };
   private removeAnimator?: () => void;
 
   constructor(
@@ -74,10 +96,10 @@ export class WalkController {
   }
 
   /** Начать прогулку в точке start (lon/lat), курс — в градусах от севера. */
-  enter(start: LonLat, headingDeg: number): void {
+  enter(start: LonLat, headingDeg: number, saved?: SavedView): void {
     if (this.walking) return;
     const camera = this.city.camera;
-    this.saved = { position: camera.position.clone(), target: this.city.target.clone(), near: camera.near };
+    this.saved = saved ?? { position: camera.position.clone(), target: this.city.target.clone(), near: camera.near };
     this.city.cancelFlight();
     camera.near = 0.15;
     camera.updateProjectionMatrix();
@@ -88,6 +110,8 @@ export class WalkController {
     this.pitch = MathUtils.degToRad(-3);
     this.street = undefined;
     this.lastStreetCheck = 0;
+    this.stick = [0, 0];
+    this.goal = undefined;
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -119,6 +143,25 @@ export class WalkController {
     this.callbacks.onExit();
   }
 
+  /** Выйти без пролёта — пересаживаемся в машину; вернуть обзор, с которого пришли. */
+  leave(): SavedView | undefined {
+    if (!this.walking) return undefined;
+    this.walking = false;
+    this.detach();
+    if (this.saved) {
+      this.city.camera.near = this.saved.near;
+      this.city.camera.updateProjectionMatrix();
+    }
+    this.callbacks.onStreet(undefined);
+    return this.saved;
+  }
+
+  /** Стик на экране: вперёд и вправо, −1…1 (длина — скорость). */
+  setStick(forward: number, right: number): void {
+    this.stick = [forward, right];
+    if (forward || right) this.goal = undefined;
+  }
+
   destroy(): void {
     if (this.walking) {
       this.walking = false;
@@ -131,6 +174,9 @@ export class WalkController {
     this.removeAnimator = undefined;
     this.pressed.clear();
     this.dragging = false;
+    this.lookPointer = undefined;
+    this.stick = [0, 0];
+    this.goal = undefined;
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
@@ -148,12 +194,34 @@ export class WalkController {
     const axes = axesFrom(this.pressed, WALK_KEYS);
     const run = isShift(this.pressed);
     if (axes.turn) this.heading += axes.turn * TURN_SPEED * dt;
+    if (axes.forward || axes.right || axes.turn) this.goal = undefined;
 
-    const length = Math.hypot(axes.forward, axes.right);
-    const speed = length > 0 ? (run ? RUN_SPEED : WALK_SPEED) / length : 0;
+    // Клавиши — полный шаг; стик — скорость по отклонению; касание земли — идём к точке, поворачиваясь к ней.
+    let forward = axes.forward;
+    let right = axes.right;
+    let speed = 0;
+    if (forward || right) {
+      speed = (run ? RUN_SPEED : WALK_SPEED) / Math.hypot(forward, right);
+    } else if (this.stick[0] || this.stick[1]) {
+      [forward, right] = this.stick;
+      const push = Math.min(1, Math.hypot(forward, right));
+      speed = (STICK_SPEED * push) / Math.hypot(forward, right);
+    } else if (this.goal) {
+      const dx = this.goal[0] - this.position[0];
+      const dy = this.goal[1] - this.position[1];
+      const distance = Math.hypot(dx, dy);
+      if (distance < GOAL_REACHED) {
+        this.goal = undefined;
+      } else {
+        const turn = Math.atan2(Math.sin(Math.atan2(dx, dy) - this.heading), Math.cos(Math.atan2(dx, dy) - this.heading));
+        this.heading += turn * Math.min(1, dt * 5);
+        forward = Math.max(0, Math.cos(turn));
+        speed = WALK_SPEED * Math.min(1, distance / 2);
+      }
+    }
     const sin = Math.sin(this.heading);
     const cos = Math.cos(this.heading);
-    const target: Vec2 = [(axes.forward * sin + axes.right * cos) * speed, (axes.forward * cos - axes.right * sin) * speed];
+    const target: Vec2 = [(forward * sin + right * cos) * speed, (forward * cos - right * sin) * speed];
     this.velocity = [approach(this.velocity[0], target[0], dt, ACCELERATION), approach(this.velocity[1], target[1], dt, ACCELERATION)];
     if (Math.hypot(...this.velocity) < 0.02) this.velocity = [0, 0];
 
@@ -161,7 +229,10 @@ export class WalkController {
       const before = this.position;
       this.position = this.collider.move(this.position, [this.velocity[0] * dt, this.velocity[1] * dt]);
       const moved = Math.hypot(this.position[0] - before[0], this.position[1] - before[1]);
-      if (moved < Math.hypot(...this.velocity) * dt * 0.2) this.velocity = [0, 0];
+      if (moved < Math.hypot(...this.velocity) * dt * 0.2) {
+        this.velocity = [0, 0];
+        this.goal = undefined;
+      }
       if (moved > 0) this.callbacks.onMove?.(moved, run, this.position);
     }
 
@@ -226,6 +297,16 @@ export class WalkController {
 
   private readonly onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0 || this.isLocked()) return;
+    const touch = event.pointerType !== 'mouse';
+    this.downAt = { x: event.clientX, y: event.clientY, time: performance.now(), touch };
+    if (touch) {
+      // Пальцем: осматриваемся перетаскиванием, курсор не захватываем.
+      if (this.lookPointer !== undefined) return;
+      this.lookPointer = event.pointerId;
+      this.dragging = true;
+      this.lastPointer = [event.clientX, event.clientY];
+      return;
+    }
     try {
       const request = this.city.canvas.requestPointerLock() as unknown as Promise<void> | undefined;
       request?.catch?.(() => undefined);
@@ -233,18 +314,27 @@ export class WalkController {
       // захват курсора не поддерживается — обзор перетаскиванием
     }
     this.dragging = true;
+    this.lookPointer = event.pointerId;
     this.lastPointer = [event.clientX, event.clientY];
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    if (!this.dragging || this.isLocked()) return;
+    if (!this.dragging || this.isLocked() || event.pointerId !== this.lookPointer) return;
     const [x, y] = this.lastPointer;
     this.lastPointer = [event.clientX, event.clientY];
     this.look(event.clientX - x, event.clientY - y, LOOK_SENSITIVITY_DRAG);
   };
 
-  private readonly onPointerUp = () => {
+  private readonly onPointerUp = (event: PointerEvent) => {
+    if (event.pointerId !== this.lookPointer) return;
     this.dragging = false;
+    this.lookPointer = undefined;
+    // Касание земли пальцем — дойти туда.
+    const down = this.downAt;
+    this.downAt = undefined;
+    if (!down?.touch || performance.now() - down.time > TAP_MS || Math.hypot(event.clientX - down.x, event.clientY - down.y) > TAP_PX) return;
+    const point = this.city.pickGround(event.clientX, event.clientY);
+    if (point) this.goal = [point.x, -point.z];
   };
 
   private readonly onMouseMove = (event: MouseEvent) => {

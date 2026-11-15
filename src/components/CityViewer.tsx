@@ -987,8 +987,12 @@ export function CityViewer({ territory }: { territory: Territory }) {
       });
       drive.setColor(useAppStore.getState().carColor);
       owned.push(drive);
-      if (DEBUG) Object.assign(window, { __drive: drive, __roads: roadsForCar, __frame: frame });
-      store.setDriveControls({ toggleView: () => drive.toggleView(), backToRoad: () => drive.backToRoad() });
+      if (DEBUG) Object.assign(window, { __drive: drive, __walk: walk, __roads: roadsForCar, __frame: frame });
+      store.setDriveControls({
+        toggleView: () => drive.toggleView(),
+        backToRoad: () => drive.backToRoad(),
+        setTouch: (throttle, steer) => drive.setTouch(throttle, steer),
+      });
       owned.push({ destroy: () => store.setDriveControls(undefined) });
 
       // Мини-карта: план района, повёрнутый по курсу пешехода или машины.
@@ -1288,9 +1292,16 @@ export function CityViewer({ territory }: { territory: Territory }) {
             lastView = view;
             store.setViewMode(view);
           }
+          // Компас: курс обзора, с точностью до градуса.
+          if (!walk.isWalking && !drive.isDriving) store.setCameraHeading(Math.round(c.heading()) % 360);
           return false;
         }),
       });
+      store.setFaceNorth(() => {
+        const distance = c.camera.position.distanceTo(c.target);
+        c.flyTo(c.orbitPosition(c.target, 0, c.pitch(), distance), c.target, 0.8);
+      });
+      owned.push({ destroy: () => store.setFaceNorth(undefined) });
 
       store.setWalkControls({
         pickStart: (kind = 'walk') => {
@@ -1306,6 +1317,22 @@ export function CityViewer({ territory }: { territory: Territory }) {
           walk.exit();
           drive.exit();
         },
+        switchTo: (kind) => {
+          if (kind === 'drive' && walk.isWalking) {
+            const { position, heading } = walk.pose();
+            const saved = walk.leave();
+            store.setMode('drive');
+            drive.enter(position, heading, saved);
+          } else if (kind === 'walk' && drive.isDriving) {
+            const { position, heading } = drive.pose();
+            const saved = drive.leave();
+            store.setMode('walk');
+            // Выходим сбоку от машины, слева по ходу.
+            const side: [number, number] = [position[0] - Math.cos(heading) * 2.2, position[1] + Math.sin(heading) * 2.2];
+            walk.enter(frame.toLonLat(side), (heading * 180) / Math.PI, saved);
+          }
+        },
+        setStick: (forward, right) => walk.setStick(forward, right),
       });
 
       // Клик (не перетаскивание): старт прогулки или выбор здания.

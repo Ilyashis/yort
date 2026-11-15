@@ -89,12 +89,18 @@ export interface WalkControls {
   pickStart: (kind?: 'walk' | 'drive') => void;
   cancelPick: () => void;
   exit: () => void;
+  /** Пересесть: из пешехода в машину или обратно — на том же месте. */
+  switchTo: (kind: 'walk' | 'drive') => void;
+  /** Стик на экране: вперёд и вправо, −1…1. */
+  setStick: (forward: number, right: number) => void;
 }
 
 /** Команды машины; регистрирует сцена, вызывает UI. */
 export interface DriveControls {
   toggleView: () => void;
   backToRoad: () => void;
+  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо. */
+  setTouch: (throttle: number, steer: number) => void;
 }
 
 /** Громкость по группам из браузера (если сохранена и в порядке). */
@@ -242,6 +248,12 @@ interface AppState {
   /** Регистрирует сцена: перелёт к виду сверху или под углом. */
   changeView?: (mode: 'top' | 'tilt') => void;
   setChangeView: (change: ((mode: 'top' | 'tilt') => void) | undefined) => void;
+  /** Курс камеры в обзоре, градусы от севера (для компаса). */
+  cameraHeading: number;
+  setCameraHeading: (heading: number) => void;
+  /** Повернуть обзор на север. */
+  faceNorth?: () => void;
+  setFaceNorth: (face: (() => void) | undefined) => void;
   setGraphicsQuality: (quality: GraphicsQuality) => void;
   setTimeOfDay: (hours: number) => void;
   setSeason: (season: Season) => void;
@@ -361,6 +373,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (viewMode !== get().viewMode) set({ viewMode });
   },
   setChangeView: (changeView) => set({ changeView }),
+  cameraHeading: 0,
+  setCameraHeading: (cameraHeading) => {
+    if (cameraHeading !== get().cameraHeading) set({ cameraHeading });
+  },
+  setFaceNorth: (faceNorth) => set({ faceNorth }),
   setGraphicsQuality: (graphicsQuality) => {
     writePref('graphics', graphicsQuality);
     set({ graphicsQuality });
