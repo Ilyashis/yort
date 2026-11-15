@@ -342,10 +342,10 @@ export class EditLayer {
     // Пол — по верхней точке склона; цоколь, крыльцо и ступени уходят вниз до нижней.
     const site = siteOnSlope(local, this.heightAt);
     const foundation = Math.round((site.floor - site.low + FOOTING_DEPTH) * 10) / 10;
-    const key = `${ref.id}:${ref.seed}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
+    const key = `${ref.id}:${ref.seed}:${ref.floors ?? ''}:${place.width.toFixed(2)}:${place.depth.toFixed(2)}:${foundation}`;
     let mesh = this.modelCache.get(key);
     if (!mesh) {
-      mesh = buildHouseMesh(model.plan({ seed: ref.seed, width: place.width, depth: place.depth, foundation }), this.houseMaterials);
+      mesh = buildHouseMesh(model.plan({ seed: ref.seed, floors: ref.floors, width: place.width, depth: place.depth, foundation }), this.houseMaterials);
       this.modelCache.set(key, mesh);
     }
     keys.add(key);

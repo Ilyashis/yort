@@ -105,12 +105,22 @@ describe('модели башкирских домов', () => {
     }
   });
 
-  it('у домов и общественных зданий есть окна, у юрты, остановки, туалета, колодца, сарая и теплицы — нет', () => {
+  it('у домов и общественных зданий есть окна, у юрты, остановки, туалета, колодца, сарая, гаража и теплицы — нет', () => {
     for (const model of HOUSE_MODELS) {
       const glass = model.plan().parts.filter((p) => p.type === 'glass').length;
-      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'greenhouse'].includes(model.id)) expect(glass).toBe(0);
+      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'garage', 'greenhouse'].includes(model.id)) expect(glass).toBe(0);
       else expect(glass).toBeGreaterThan(model.id === 'banya' ? 0 : model.id === 'shop' ? 2 : 4);
     }
+  });
+
+  it('больница — в один или два этажа: двухэтажная выше и с окнами в два ряда', () => {
+    const hospital = HOUSE_MODELS.find((m) => m.id === 'hospital')!;
+    const one = hospital.plan({ floors: 1 });
+    const two = hospital.plan({ floors: 2 });
+    const glass = (p: typeof one) => p.parts.filter((q) => q.type === 'glass').length;
+    expect(two.height).toBeGreaterThan(one.height + 2.5);
+    expect(glass(two)).toBeGreaterThan(glass(one) * 1.6);
+    expect(hospital.plan({ floors: 5 }).height).toBeCloseTo(two.height, 5);
   });
 
   it('на общественных зданиях — вывески, у школы и конторы — флаги', () => {

@@ -24,6 +24,8 @@ const STREET_WIDTH = 6;
 interface Slot {
   model: HouseModel;
   seed: number;
+  /** Этажей (у моделей с выбором этажности). */
+  floors?: number;
   /** Зерно палисадника (у жилых домов). */
   gardenSeed: number;
   width: number;
@@ -140,7 +142,7 @@ function rebuild(slot: Slot): void {
     city.scene.remove(slot.mesh.group);
     slot.mesh.dispose();
   }
-  slot.plan = slot.model.plan({ seed: slot.seed, width: slot.width, depth: slot.depth });
+  slot.plan = slot.model.plan({ seed: slot.seed, floors: slot.floors, width: slot.width, depth: slot.depth });
   const shown = withGarden(slot, slot.plan);
   [slot.minX, slot.maxX] = extentX(shown);
   slot.mesh = buildHouseMesh(shown, materials);
@@ -183,7 +185,7 @@ panel.className = 'panel houses-panel';
 panel.innerHTML = `
   <div class="houses-brand">AI UFA · мастерская</div>
   <h1>Башкирская деревня</h1>
-  <p class="muted">Модели для деревни: жилые дома, школа, музей, клуб, контора, пожарная часть, больница, магазины, остановка, колодец.
+  <p class="muted">Модели для деревни: жилые дома, школа, музей, клуб, контора, пожарная часть, больница, магазины, остановка, колодец, гараж.
   Мышь — вращать, колесо — ближе, ← → — соседнее здание. В редакторе их ставят вместо домов OSM или новыми.</p>
   <div class="houses-groups"></div>
   <div class="houses-detail">
@@ -192,6 +194,7 @@ panel.innerHTML = `
     <p class="muted houses-numbers"></p>
     <label class="field"><span>Ширина по улице <b class="houses-width-value"></b></span><input class="houses-width" type="range" step="0.1" /></label>
     <label class="field"><span>Глубина во двор <b class="houses-depth-value"></b></span><input class="houses-depth" type="range" step="0.1" /></label>
+    <label class="field houses-floors-field"><span>Этажей <b class="houses-floors-value"></b></span><input class="houses-floors" type="range" step="1" /></label>
     <div class="button-row">
       <button type="button" class="button houses-variant">Другая окраска</button>
       <button type="button" class="button houses-variant-all">Перекрасить все</button>
@@ -235,6 +238,7 @@ for (const { group, label } of MODEL_GROUPS) {
 
 const widthInput = $<HTMLInputElement>('.houses-width');
 const depthInput = $<HTMLInputElement>('.houses-depth');
+const floorsInput = $<HTMLInputElement>('.houses-floors');
 
 function showDetail(): void {
   const slot = slots[selected]!;
@@ -254,6 +258,15 @@ function showDetail(): void {
   }
   $('.houses-width-value').textContent = `${fmt(slot.plan.width)} м`;
   $('.houses-depth-value').textContent = `${fmt(slot.plan.depth)} м`;
+  // Этажность — только у моделей с выбором.
+  const floors = slot.model.floors;
+  $('.houses-floors-field').toggleAttribute('hidden', !floors);
+  if (floors) {
+    floorsInput.min = String(floors.min);
+    floorsInput.max = String(floors.max);
+    floorsInput.value = String(slot.floors ?? floors.value);
+    $('.houses-floors-value').textContent = String(slot.floors ?? floors.value);
+  }
   // У юрты один размер — диаметр.
   const round = slot.model.id === 'yurt';
   depthInput.closest('label')!.toggleAttribute('hidden', round);
@@ -310,6 +323,13 @@ const resize = () => {
   showDetail();
 };
 widthInput.addEventListener('input', resize);
+floorsInput.addEventListener('input', () => {
+  const slot = slots[selected]!;
+  slot.floors = Number(floorsInput.value);
+  rebuild(slot);
+  layout();
+  showDetail();
+});
 depthInput.addEventListener('input', resize);
 
 // Время суток: по умолчанию — светлый день; запоминается.

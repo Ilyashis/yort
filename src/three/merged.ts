@@ -105,14 +105,14 @@ export class MergedMesh {
   setHidden(hide: (owner: string) => boolean): boolean {
     const attribute = this.mesh.geometry.getAttribute('position') as BufferAttribute;
     const array = attribute.array as Float32Array;
-    let changed = false;
+    const touched: [number, number][] = [];
     for (const [owner, ranges] of this.ranges) {
       const want = hide(owner);
       if (want === this.hidden.has(owner)) continue;
-      changed = true;
       if (want) this.hidden.add(owner);
       else this.hidden.delete(owner);
       for (const [start, count] of ranges) {
+        touched.push([start, count]);
         for (let v = start; v < start + count; v++) {
           const src = want ? start : v;
           array[v * 3] = this.original[src * 3]!;
@@ -121,8 +121,9 @@ export class MergedMesh {
         }
       }
     }
-    if (changed) attribute.needsUpdate = true;
-    return changed;
+    if (!touched.length) return false;
+    markRanges(attribute, touched);
+    return true;
   }
 
   /**
@@ -133,7 +134,11 @@ export class MergedMesh {
     const boxes = (this.boxes ??= ownerBoxes(this.ranges, this.original));
     const attribute = this.mesh.geometry.getAttribute('position') as BufferAttribute;
     const changed = shiftOwners(this.ranges, boxes, this.original, attribute.array as Float32Array, (owner) => this.hidden.has(owner), delta, area);
-    if (changed) attribute.needsUpdate = true;
+    if (changed) {
+      // Целиком (и без частичных диапазонов, иначе ушли бы только они).
+      attribute.clearUpdateRanges();
+      attribute.needsUpdate = true;
+    }
     return changed;
   }
 
@@ -143,6 +148,27 @@ export class MergedMesh {
     this.mesh.geometry.dispose();
     (this.mesh.material as MeshStandardMaterial).dispose();
   }
+}
+
+/**
+ * Отправить в видеокарту только изменённые вершины (диапазоны [начало, число] в вершинах), а не весь буфер:
+ * у дальней сетки заборов деревни — мегабайты, а меняется кусок. Соседние диапазоны склеиваются; если
+ * меняется больше половины — весь буфер целиком.
+ */
+export function markRanges(attribute: BufferAttribute, touched: [number, number][]): void {
+  const size = attribute.itemSize;
+  touched.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [start, count] of touched) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[0] + last[1] + 256) last[1] = Math.max(last[1], start + count - last[0]);
+    else merged.push([start, count]);
+  }
+  const total = merged.reduce((s, [, c]) => s + c, 0);
+  // Диапазоны, уже ждущие отправки (несколько правок до кадра), не теряем.
+  if (total * 2 > attribute.count || merged.length > 64) attribute.clearUpdateRanges();
+  else for (const [start, count] of merged) attribute.addUpdateRange(start * size, count * size);
+  attribute.needsUpdate = true;
 }
 
 /** Прибавка к высоте земли в точке (локальные метры: x — восток, y — север), м. */

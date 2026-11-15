@@ -392,8 +392,9 @@ function planFireStation(o: HouseOptions): HousePlan {
   const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, side: 0.5, front: 0.6, back: 0.5, color: roofColor, surface: 'metal' });
   parts.push(...roof.parts);
   const gable = { top, ridge: roof.ridge, side: 0.5, eave: roof.eave, color: wall, surface, trim: '#f2f0ea', towel: false };
-  parts.push(...gableEnd(walls.left, { ...gable, out: t / 2, overhang: 0.5 }));
-  parts.push(...gableEnd(walls.right, { ...gable, out: t / 2, overhang: 0.5 }));
+  // Конёк — от улицы назад: фронтоны — над воротами и сзади.
+  parts.push(...gableEnd(walls.front, { ...gable, out: t / 2, overhang: 0.6 }));
+  parts.push(...gableEnd(walls.back, { ...gable, out: t / 2, overhang: 0.5 }));
 
   // Каланча (рукавосушильная башня) — в заднем правом углу, выше крыши.
   const S = 3.0;
@@ -415,7 +416,7 @@ function planFireStation(o: HouseOptions): HousePlan {
 }
 
 /**
- * Сельская больница (врачебная амбулатория, ФАП): длинный одноэтажный дом, светлая штукатурка с цветным
+ * Сельская больница (врачебная амбулатория, ФАП; двухэтажная — участковая больница): длинный дом в один-два этажа, светлая штукатурка с цветным
  * поясом, ряд окон, крыльцо под козырьком с пандусом, вывеска и красный крест у входа.
  */
 function planHospital(o: HouseOptions): HousePlan {
@@ -425,15 +426,17 @@ function planHospital(o: HouseOptions): HousePlan {
   const wall = dice.pick(['#f3f1ea', '#eef0ec', '#f2ebdc', '#e9eef0']);
   const band = dice.pick(['#4f8fbf', '#3f8f7a', '#6aa0c8']);
   const roofColor = dice.pick(['#3f6b4f', '#3a5f86', '#2f6f6a', '#8a8f94']);
+  const floors = clamp(Math.round(o.floors ?? 1), 1, 2);
   const hp = 0.7;
   const t = 0.42;
-  const wallH = 3.3;
+  const fh = 3.2;
+  const wallH = floors * fh + 0.1;
   const top = hp + wallH;
   const walls = rectWalls(W, D);
   const parts: HousePart[] = [plinth(W + t + 0.1, D + t + 0.1, hp, '#a8a397')];
   const openings = emptyOpenings();
   const style: WindowStyle = { trim: '#ffffff', accent: band, frame: '#f7f7f4', top: 'none', apron: false, sash: 'modern' };
-  const rows = { floors: 1, base: hp, floorHeight: 3, sill: 0.85, w: 1.4, h: 1.5, t, style, dice };
+  const rows = { floors, base: hp, floorHeight: fh, sill: 0.85, w: 1.4, h: 1.5, t, style, dice };
   const entry = W / 2;
   doorIn(parts, openings.front, walls.front, entry, hp + 0.05, 1.6, 2.3, t / 2, dice.pick(['#f2f2ef', '#d8dde2']), '#f2f0ea');
   const lines: Record<WallKey, number[]> = {
@@ -443,11 +446,14 @@ function planHospital(o: HouseOptions): HousePlan {
     right: fitWindows(D, rows.w, false, 5, 1.0),
   };
   for (const key of Object.keys(walls) as WallKey[]) {
-    const skip = key === 'front' ? (u: number) => Math.abs(u - entry) < 2.2 : undefined;
+    // Над входом на втором этаже — окно лестницы (оставляем), на первом — место крыльца.
+    const skip = key === 'front' ? (u: number, floor: number) => floor === 0 && Math.abs(u - entry) < 2.2 : undefined;
     windowRows(parts, openings[key], walls[key], lines[key], rows, skip);
     parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, 'plaster'));
-    // Цветной пояс под окнами.
-    parts.push(wallBox(walls[key], walls[key].length / 2, t / 2 + 0.02, hp + 0.55, [walls[key].length + t, 0.04, 0.22], band, 'plaster'));
+    // Цветной пояс под окнами каждого этажа.
+    for (let floor = 0; floor < floors; floor++) {
+      parts.push(wallBox(walls[key], walls[key].length / 2, t / 2 + 0.02, hp + floor * fh + 0.55, [walls[key].length + t, 0.04, 0.22], band, 'plaster'));
+    }
   }
   cornice(parts, walls, t, top - 0.12, '#ffffff', 'plaster', 0.24);
   parts.push(
@@ -475,7 +481,9 @@ function planHospital(o: HouseOptions): HousePlan {
   }
   parts.push({ type: 'cylinder', from: at(rf, r0, t / 2 + 1.5, hp + 0.95), to: at(rf, r0 + rampL, t / 2 + 1.5, 0.92), radius: 0.03, segments: 6, color: '#c9ccd0' });
   // Вывеска и красный крест у входа.
-  parts.push(...wallSign(walls.front, entry, t / 2, top - 0.45, Math.min(5.2, W * 0.4), 0.5, W >= 16 ? 'ВРАЧЕБНАЯ АМБУЛАТОРИЯ' : 'ФАП', '#ffffff', '#1f4f8a'));
+  // Вывеска — над крыльцом (у двухэтажной — между этажами), у большой — «Больница», у маленькой — «ФАП».
+  const signText = floors === 2 ? 'УЧАСТКОВАЯ БОЛЬНИЦА' : W >= 16 ? 'ВРАЧЕБНАЯ АМБУЛАТОРИЯ' : 'ФАП';
+  parts.push(...wallSign(walls.front, entry, t / 2, floors === 2 ? hp + fh - 0.05 : top - 0.45, Math.min(5.2, W * 0.4), 0.5, signText, '#ffffff', '#1f4f8a'));
   const cu = entry + Math.min(3.4, W / 2 - 1);
   const cz = hp + 2.3;
   parts.push(wallBox(walls.front, cu, t / 2 + 0.02, cz, [1.0, 0.04, 1.0], '#ffffff', 'plaster'));
@@ -703,6 +711,84 @@ function planWell(o: HouseOptions): HousePlan {
   return finish('well', parts, S, S, rect(1.2, 1.2));
 }
 
+
+/**
+ * Гараж во дворе: на одну машину (широкий — на две), стены кирпичные, из шлакоблока под штукатуркой или
+ * дощатые; распашные металлические (у дощатого — деревянные) ворота на улицу, кровля односкатная назад
+ * или двускатная, профлист или шифер.
+ */
+function planGarage(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 17000);
+  const W = clamp(o.width ?? 4, 3.2, 8);
+  const D = clamp(o.depth ?? 6.2, 5, 9);
+  const kind = dice.pick(['brick', 'block', 'block', 'boards'] as const);
+  const wall = kind === 'brick' ? dice.pick([...BRICK_RED, ...BRICK_WHITE]) : kind === 'block' ? dice.pick(['#c9c3b6', '#bdb7aa', '#d6cfc0', '#b9bcb6']) : dice.pick(['#8a7a64', '#7d6f5c', '#6f6252', '#857565']);
+  const surface: Surface = kind === 'brick' ? 'brick' : kind === 'block' ? 'plaster' : 'boards';
+  const gateColor = kind === 'boards' ? shade(wall, 0.8) : dice.pick(['#3f5f7f', '#5f6a4a', '#7a3a2e', '#4a4f55', '#2f6f6a']);
+  const slate = dice.chance(0.35);
+  const roofColor = slate ? dice.pick(SLATE) : dice.pick(METAL_ROOFS);
+  const roofSurface: Surface = slate ? 'slate' : 'metal';
+  const t = kind === 'boards' ? 0.1 : 0.3;
+  const base = 0.15;
+  const wallH = 2.5 + dice.next() * 0.3;
+  const top = base + wallH;
+  const walls = rectWalls(W, D);
+  const parts: HousePart[] = [{ type: 'box', center: [0, 0, base / 2], size: [W + t + 0.1, D + t + 0.1, base], color: '#9b958b', surface: 'plaster' }];
+  // Ворота: по 2,6 м на машину, две створки; у двух машин — двое ворот.
+  const cars = W >= 6.2 ? 2 : 1;
+  const gateW = Math.min(2.6, (W - 0.6 * (cars + 1)) / cars);
+  const gateH = 2.15;
+  const openings = emptyOpenings();
+  for (let c = 0; c < cars; c++) {
+    const u = (W * (c + 1)) / (cars + 1);
+    openings.front.push({ u0: u - gateW / 2, u1: u + gateW / 2, z0: base, z1: base + gateH });
+    const out = t / 2 - 0.02;
+    for (const side of [-1, 1]) {
+      const cu = u + (side * gateW) / 4;
+      parts.push(wallBox(walls.front, cu, out, base + gateH / 2, [gateW / 2 - 0.03, 0.05, gateH], gateColor, kind === 'boards' ? 'boards' : undefined));
+      // Рёбра жёсткости и ручки.
+      if (kind !== 'boards') parts.push(wallBox(walls.front, cu, out + 0.03, base + gateH * 0.55, [gateW / 2 - 0.2, 0.02, 0.05], shade(gateColor, 0.8)));
+      parts.push(wallBox(walls.front, u + side * 0.12, out + 0.05, base + 1.05, [0.04, 0.05, 0.22], '#2b2b2b'));
+    }
+    // Калитка в левой створке у широких ворот.
+    if (gateW > 2.3) parts.push(wallBox(walls.front, u - gateW / 4, out + 0.035, base + 0.95, [0.75, 0.01, 1.8], shade(gateColor, 0.88)));
+  }
+  const lean = dice.chance(0.6);
+  const back = lean ? top - Math.min(0.6, D * 0.08) : top;
+  if (lean) {
+    // Стены: спереди выше, сзади ниже; боковые — трапеции.
+    parts.push(...solidWall(walls.front, base, wallH, t, openings.front, wall, surface));
+    parts.push(...solidWall(walls.back, base, back - base, t, [], wall, surface));
+    for (const [f, a, b] of [
+      [walls.right, top, back],
+      [walls.left, back, top],
+    ] as const) {
+      parts.push(wallSlab(f, -t / 2 + 0.01, [[0, base], [D, base], [D, b], [0, a]], t, wall, surface));
+    }
+    parts.push(
+      leanToRoof(
+        [-W / 2 - 0.25, -D / 2 - 0.3, top + 0.06],
+        [W / 2 + 0.25, -D / 2 - 0.3, top + 0.06],
+        [W / 2 + 0.25, D / 2 + 0.3, back + 0.02],
+        [-W / 2 - 0.25, D / 2 + 0.3, back + 0.02],
+        roofColor,
+        roofSurface,
+      ),
+    );
+    // Козырёк-отлив над воротами.
+    parts.push(wallBox(walls.front, W / 2, t / 2 + 0.1, top - 0.08, [W + 0.4, 0.2, 0.08], shade(wall, 0.85), surface === 'boards' ? 'boards' : 'plaster'));
+  } else {
+    for (const key of Object.keys(walls) as WallKey[]) parts.push(...solidWall(walls[key], base, wallH, t, openings[key], wall, surface));
+    const pitch = 22;
+    const roof = gableRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, side: 0.3, front: 0.35, back: 0.3, color: roofColor, surface: roofSurface });
+    parts.push(...roof.parts);
+    const gable = { top, ridge: roof.ridge, side: 0.3, eave: roof.eave, color: kind === 'boards' ? wall : shade(wall, 0.95), surface: kind === 'boards' ? ('boards' as Surface) : surface, trim: '#e8e4da', towel: false };
+    // Конёк — от ворот назад: фронтоны — над воротами и сзади.
+    parts.push(...gableEnd(walls.front, { ...gable, out: t / 2, overhang: 0.35 }));
+    parts.push(...gableEnd(walls.back, { ...gable, out: t / 2, overhang: 0.3 }));
+  }
+  return finish('garage', parts, W, D, rect(W + t, D + t));
+}
 /**
  * Сарай: дощатый, на низком цоколе, широкая двустворчатая дверь на фасаде; крыша — двускатная (фронтон
  * над дверью, иногда с дверцей сеновала) или односкатная назад. Шифер или профлист.
@@ -993,10 +1079,11 @@ export const PUBLIC_MODELS: HouseModel[] = [
     group: 'public',
     name: 'Больница (амбулатория, ФАП)',
     short: 'Больница',
-    summary: 'штукатурка · 1 этаж',
-    description: 'Сельская врачебная амбулатория (маленькая — ФАП): длинный одноэтажный дом, светлая штукатурка с цветным поясом, крыльцо под козырьком с пандусом, вывеска и красный крест у входа.',
+    summary: 'штукатурка · 1–2 этажа',
+    description: 'Сельская больница: одноэтажная врачебная амбулатория (маленькая — ФАП) или двухэтажная участковая больница; светлая штукатурка с цветными поясами, крыльцо под козырьком с пандусом, вывеска и красный крест у входа.',
     width: { min: 10, value: 20, max: 34 },
     depth: { min: 8, value: 11, max: 16 },
+    floors: { min: 1, value: 1, max: 2 },
     plan: withGround(planHospital),
   },
   {
@@ -1031,6 +1118,17 @@ export const PUBLIC_MODELS: HouseModel[] = [
     width: { min: 3, value: 4.5, max: 7 },
     depth: { min: 1.4, value: 1.8, max: 2.6 },
     plan: withGround(planBusStop),
+  },
+  {
+    id: 'garage',
+    group: 'small',
+    name: 'Гараж',
+    short: 'Гараж',
+    summary: 'кирпич, блок или доски',
+    description: 'Гараж во дворе: на одну машину (широкий — на две), кирпич, шлакоблок под штукатуркой или доски; распашные ворота на улицу с калиткой, кровля односкатная назад или двускатная.',
+    width: { min: 3.2, value: 4, max: 8 },
+    depth: { min: 5, value: 6.2, max: 9 },
+    plan: withGround(planGarage),
   },
   {
     id: 'shed',

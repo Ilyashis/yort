@@ -80,6 +80,7 @@ export type HouseModelId =
   | 'outhouse'
   | 'well'
   | 'shed'
+  | 'garage'
   | 'greenhouse';
 
 /** Разделы каталога: жилые дома, общественные здания, мелкие постройки (двор, улица). */
@@ -97,6 +98,8 @@ export interface HouseOptions {
   depth?: number;
   /** Зерно варианта: окраска, ставни, кровля. */
   seed?: number;
+  /** Этажей — у моделей, где их можно выбрать (HouseModel.floors). */
+  floors?: number;
   /** Для дальнего плана: срубы — плоскостями с рисунком брёвен, без поленниц и торцов брёвен. */
   far?: boolean;
   /**
@@ -128,6 +131,8 @@ export interface HouseModel {
   summary: string;
   width: { min: number; value: number; max: number };
   depth: { min: number; value: number; max: number };
+  /** Этажность на выбор (по умолчанию value); нет — этажность у модели своя. */
+  floors?: { min: number; value: number; max: number };
   plan: (options?: HouseOptions) => HousePlan;
 }
 

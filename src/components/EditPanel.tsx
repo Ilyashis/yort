@@ -84,7 +84,7 @@ export function EditPanel() {
     let sizeNote = '';
     if (model && building.footprint.length === 4) {
       const [w, d] = sidesOf(building.footprint);
-      const plan = model.plan({ seed: building.model!.seed, width: w, depth: d });
+      const plan = model.plan({ seed: building.model!.seed, floors: building.model!.floors, width: w, depth: d });
       sizeNote =
         Math.abs(plan.width - w) > 0.3 || Math.abs(plan.depth - d) > 0.3
           ? `Модель ${fmt(plan.width)} × ${fmt(plan.depth)} м, контур ${fmt(w)} × ${fmt(d)} м — у этой модели другие пределы размеров.`
@@ -123,6 +123,23 @@ export function EditPanel() {
         {model ? (
           <>
             <p className="muted model-note">{sizeNote}</p>
+            {model.floors && (
+              <div className="field">
+                <span>Этажей</span>
+                <div className="segmented segmented-small" role="group" aria-label="Этажей">
+                  {Array.from({ length: model.floors.max - model.floors.min + 1 }, (_, k) => model.floors!.min + k).map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      className={(building.model!.floors ?? model.floors!.value) === n ? 'active' : ''}
+                      onClick={() => commit(upsertBuilding(useEditStore.getState().edits, withModel(building, { ...building.model!, floors: n })))}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="button-row">
               <button
                 type="button"

@@ -20,6 +20,8 @@ export type EditRoadKind = 'street' | 'lane' | 'track' | 'path';
 export interface HouseModelRef {
   id: HouseModelId;
   seed: number;
+  /** Этажей (у моделей с выбором этажности). */
+  floors?: number;
 }
 
 export interface EditedBuilding {
@@ -198,9 +200,11 @@ export const clampFloors = (floors: number) => Math.min(Math.max(Math.round(floo
 
 function parseModel(value: unknown, corners: number): HouseModelRef | undefined {
   if (!value || typeof value !== 'object' || corners !== 4) return undefined;
-  const { id, seed } = value as Partial<HouseModelRef>;
+  const { id, seed, floors } = value as Partial<HouseModelRef>;
   if (typeof id !== 'string' || !findHouseModel(id) || typeof seed !== 'number' || !Number.isFinite(seed)) return undefined;
-  return { id: id as HouseModelId, seed: Math.round(seed) };
+  const range = findHouseModel(id)!.floors;
+  const f = range && typeof floors === 'number' && Number.isFinite(floors) ? Math.min(range.max, Math.max(range.min, Math.round(floors))) : undefined;
+  return { id: id as HouseModelId, seed: Math.round(seed), ...(f !== undefined ? { floors: f } : {}) };
 }
 
 // --- дома-модели ---------------------------------------------------------------------------

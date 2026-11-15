@@ -1,6 +1,7 @@
 // Много мелких деталей из частей (палисадники, заборы, ворота, поленницы) одной сеткой на кусок земли.
 // Вдали — одна лёгкая сетка на всё (без мелких планок). Вблизи — подробные куски по CHUNK м: кусок
-// собирается, когда камера впервые подходит к нему ближе NEAR, и показывается вместо своей части дальней
+// собирается заранее (в свободное время браузера, ближние — первыми) или, если не успел, — когда камера
+// подходит к нему ближе NEAR (по одному куску за кадр), и показывается вместо своей части дальней
 // сетки. Каждая деталь встаёт на землю: группа с anchor — вся на землю в этой точке, без — каждая часть
 // на землю под собой (забор на склоне — ступеньками).
 
@@ -29,8 +30,11 @@ export interface PartsSite {
   plan: (far: boolean) => PartGroup[];
 }
 
-const CHUNK = 150;
+/** Сторона куска, м: меньше кусок — короче рывок, когда он собирается. */
+const CHUNK = 80;
 const NEAR = 170;
+/** Заранее (в свободное время браузера) собираем куски ближе этого, м. */
+const PREBUILD = NEAR * 2.2;
 const HYSTERESIS = 15;
 const RECHECK = 6;
 
@@ -39,6 +43,8 @@ interface Chunk {
   center: Vector3;
   radius: number;
   near: boolean;
+  /** Подробная сетка уже собиралась (может и не быть — нечего рисовать). */
+  built?: boolean;
   mesh?: MergedMesh;
 }
 
@@ -50,6 +56,7 @@ export class PartsLayer {
   private hide: (owner: string) => boolean = () => false;
   private readonly lastCheck = new Vector3(Infinity, 0, 0);
   private readonly removeAnimator: () => void;
+  private idle?: number;
 
   constructor(
     private readonly city: CityScene,
@@ -62,7 +69,54 @@ export class PartsLayer {
     city.scene.add(this.group);
     this.removeAnimator = city.addAnimator(() => {
       this.updateLod();
-      return false;
+      // Ближний кусок, которого ещё нет, — собрать (не больше одного за кадр: без долгих рывков).
+      return this.buildNext(NEAR + HYSTERESIS, true);
+    });
+  }
+
+  /**
+   * Собрать один ещё не собранный кусок ближе reach к камере (самый близкий). onlyNear — только те, что уже
+   * должны быть подробными. true — собрали (нужен кадр).
+   */
+  private buildNext(reach: number, onlyNear: boolean): boolean {
+    const camera = this.city.camera.position;
+    let best: Chunk | undefined;
+    let bestD = reach;
+    for (const chunk of this.chunks) {
+      if (chunk.built || (onlyNear && !chunk.near)) continue;
+      const d = Math.max(0, camera.distanceTo(chunk.center) - chunk.radius);
+      if (d < bestD) {
+        bestD = d;
+        best = chunk;
+      }
+    }
+    if (!best) return false;
+    best.built = true;
+    best.mesh = this.merge(
+      best.sites.map((s) => ({ owner: s.owner, geometry: this.geometry(s, false) })),
+      `${this.name}-near`,
+    );
+    if (best.mesh) {
+      this.group.add(best.mesh.mesh);
+      best.mesh.setHidden(this.hide);
+      best.mesh.mesh.visible = best.near;
+    }
+    if (best.near) {
+      this.applyFarHidden();
+      this.city.requestRender();
+    }
+    return best.near;
+  }
+
+  /** В свободное время браузера — собрать куски вокруг камеры заранее, по одному. */
+  private scheduleIdle(): void {
+    const ric = (window as unknown as { requestIdleCallback?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    if (!ric || this.idle !== undefined) return;
+    this.idle = ric((deadline) => {
+      this.idle = undefined;
+      if (!this.chunks.length) return;
+      if (deadline.timeRemaining() > 6) this.buildNext(PREBUILD, false);
+      if (this.chunks.some((c) => !c.built)) this.scheduleIdle();
     });
   }
 
@@ -109,6 +163,7 @@ export class PartsLayer {
     this.lastCheck.set(Infinity, 0, 0);
     this.applyHidden();
     this.city.requestRender();
+    this.scheduleIdle();
   }
 
   /** Спрятать детали владельцев, для которых hide — true (остальные показать). */
@@ -140,6 +195,8 @@ export class PartsLayer {
 
   destroy(): void {
     this.removeAnimator();
+    const cic = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+    if (this.idle !== undefined) cic?.(this.idle);
     this.clear();
     this.city.scene.remove(this.group);
     this.materials.dispose();
@@ -171,21 +228,10 @@ export class PartsLayer {
       if (near === chunk.near) continue;
       chunk.near = near;
       changed = true;
-      if (near && !chunk.mesh) {
-        chunk.mesh = this.merge(
-          chunk.sites.map((s) => ({
-            owner: s.owner,
-            geometry: this.geometry(s, false),
-          })),
-          `${this.name}-near`,
-        );
-        if (chunk.mesh) {
-          this.group.add(chunk.mesh.mesh);
-          chunk.mesh.setHidden(this.hide);
-        }
-      }
+      // Ещё не собранный кусок соберёт buildNext (по одному за кадр), пока — дальняя сетка.
       if (chunk.mesh) chunk.mesh.mesh.visible = near;
     }
+    if (changed) this.scheduleIdle();
     if (changed) {
       this.applyFarHidden();
       this.city.requestRender();
@@ -198,7 +244,8 @@ export class PartsLayer {
   }
 
   private applyFarHidden(): void {
-    const near = new Set(this.chunks.filter((c) => c.near).flatMap((c) => c.sites.map((s) => s.owner)));
+    // Дальнюю сетку прячем только там, где подробная уже собрана.
+    const near = new Set(this.chunks.filter((c) => c.near && c.built).flatMap((c) => c.sites.map((s) => s.owner)));
     this.far?.setHidden((owner) => this.hide(owner) || near.has(owner));
   }
 

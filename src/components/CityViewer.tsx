@@ -15,6 +15,7 @@ import { FurnitureLayer } from '../three/FurnitureLayer';
 import { TIME_FLOW_HOURS_PER_SECOND } from '../three/dayNight';
 import { AddressPlatesLayer, type AddressPlate } from '../three/AddressPlatesLayer';
 import { GrassLayer } from '../three/GrassLayer';
+import { PublicDetailsLayer, type PublicBuilding } from '../three/PublicDetailsLayer';
 import { GroundLayer } from '../three/GroundLayer';
 import { LandmarksLayer } from '../three/LandmarksLayer';
 import { EditLayer } from '../three/EditLayer';
@@ -28,7 +29,7 @@ import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
-import { ROAD_KINDS, addStroke, replacedOsmIds, toFeature } from '../world/edit/edits';
+import { ROAD_KINDS, addStroke, replacedOsmIds, toFeature, wallHeightOf } from '../world/edit/edits';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import { loadEnvironment, polygonsOfGround, type Environment, type TreePoint } from '../world/base/environment';
 import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
@@ -121,6 +122,9 @@ const SHED_AREA = 45;
 const HOUSE_AREA = 320;
 
 /** Что знает планировщик посёлка: дома, хозпостройки, ничья земля, улицы и просёлки (локальные метры). */
+/** Общественные здания из OSM, которым — вход, вывеска и флаги (форма — как в данных). */
+const PUBLIC_DETAIL_TYPES = new Set(['school', 'kindergarten', 'college']);
+
 function estateInput(features: readonly BaseBuildingFeature[], environment: Environment, frame: LocalFrame, parcels?: readonly Parcel[]): EstateInput {
   const input: EstateInput & {
     houses: EstateInput['houses'][number][];
@@ -452,6 +456,24 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
       const buildings = new BuildingsLayer(c, collection, parts, frame, localHeight, village, streetFront, c.csm);
       owned.push(buildings);
+      // Школа и лицей из OSM — в своей форме, а на стене к улице — вход с крыльцом, вывеска и флаги.
+      const publicTitles = new Map<string, string>();
+      const publicDetails = new PublicDetailsLayer(
+        c,
+        collection.features.flatMap((f): PublicBuilding[] => {
+          const { building, name, height, roofHeight } = f.properties;
+          if (!PUBLIC_DETAIL_TYPES.has(building)) return [];
+          const ring = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0];
+          if (!ring || ring.length < 4) return [];
+          const title = (name ?? (building === 'kindergarten' ? 'Детский сад' : 'Школа')).toUpperCase();
+          publicTitles.set(f.properties.id, title);
+          return [{ id: f.properties.id, ring: openRing(ring.map(frame.toLocal)), wallTop: height - (roofHeight ?? 0), title }];
+        }),
+        environment.streets.roads.map((r) => r.coords.map(frame.toLocal)),
+        localHeight,
+        c.csm,
+      );
+      owned.push(publicDetails);
       const details = new DetailsLayer(
         c,
         buildings.shapes(),
@@ -709,6 +731,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // При обводке дома и деревья OSM можно спрятать — снимок под ними станет виден.
       const showCity = (show: boolean) => {
         buildings.setVisible(show);
+        publicDetails.setVisible(show);
         details.setVisible(show);
         frontGardens?.setVisible(show);
         estateLayer?.setVisible(show);
@@ -741,7 +764,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(editor);
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
-      const groundFollowers = [buildings, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
+      const groundFollowers = [buildings, publicDetails, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
         ground.refreshTerrain(changed);
@@ -786,6 +809,14 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const replaced = new Set(edits.buildings.map((b) => b.source).filter((s): s is string => !!s));
         const deleted = new Set([...removed].filter((id) => !replaced.has(id)));
         buildings.setHidden(removed);
+        publicDetails.setHidden(removed);
+        // Изменённая копия школы (своя форма, без модели дома) — детали по её контуру.
+        publicDetails.setEdited(
+          edits.buildings.flatMap((b): PublicBuilding[] => {
+            const title = b.source && !b.model ? publicTitles.get(b.source) : undefined;
+            return title ? [{ id: b.id, ring: openRing(b.footprint.map(frame.toLocal)), wallTop: wallHeightOf(b, village), title }] : [];
+          }),
+        );
         details.setHidden(removed, new Set(edits.removedYards), deleted);
         frontGardens?.setHidden(new Set(edits.removedYards), deleted);
         villageModels?.setHidden(replacedOsmIds(edits));

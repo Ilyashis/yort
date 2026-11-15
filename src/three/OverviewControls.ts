@@ -9,10 +9,16 @@ import type { CityScene } from './CityScene';
 
 const TURN_SPEED = 1.4;
 const ZOOM_SPEED = 1.6;
+/** Вид сверху — карта: двигаемся быстрее (до TOP_BOOST раз при взгляде почти вниз). */
+const TOP_BOOST = 1.7;
+/** Разгон и торможение клавишами, 1/с: камера не дёргается при нажатии и отпускании. */
+const ACCEL = 9;
 
 export class OverviewControls {
   readonly controls: MapControls;
   private readonly pressed = new Set<string>();
+  /** Текущая скорость сдвига клавишами (вперёд, вправо), доля от полной. */
+  private vel = { forward: 0, right: 0 };
   private readonly removeAnimator: () => void;
 
   constructor(
@@ -30,6 +36,7 @@ export class OverviewControls {
     controls.minDistance = 15;
     controls.maxDistance = 9000;
     controls.zoomToCursor = true;
+    controls.zoomSpeed = 1.3;
     controls.addEventListener('change', () => city.requestRender());
     this.controls = controls;
 
@@ -61,13 +68,20 @@ export class OverviewControls {
     let moved = false;
 
     const axes = axesFrom(this.pressed, OVERVIEW_KEYS);
-    if (axes.forward || axes.right || axes.turn || axes.zoom) {
+    // Плавный разгон к нажатому и торможение после отпускания.
+    const k = 1 - Math.exp(-ACCEL * dt);
+    this.vel.forward += (axes.forward - this.vel.forward) * k;
+    this.vel.right += (axes.right - this.vel.right) * k;
+    if (Math.abs(this.vel.forward) < 0.002 && !axes.forward) this.vel.forward = 0;
+    if (Math.abs(this.vel.right) < 0.002 && !axes.right) this.vel.right = 0;
+    if (this.vel.forward || this.vel.right || axes.turn || axes.zoom) {
       const height = camera.position.y - this.groundAt(camera.position.x, camera.position.z);
-      const speed = panSpeed(height, isShift(this.pressed)) * dt;
+      const top = MathUtils.smoothstep(this.city.pitch(), 45, 85);
+      const speed = panSpeed(height, isShift(this.pressed)) * (1 + (TOP_BOOST - 1) * top) * dt;
       const h = MathUtils.degToRad(this.city.heading());
       const forward = new Vector3(Math.sin(h), 0, -Math.cos(h));
       const right = new Vector3(Math.cos(h), 0, Math.sin(h));
-      const shift = forward.multiplyScalar(axes.forward * speed).add(right.multiplyScalar(axes.right * speed));
+      const shift = forward.multiplyScalar(this.vel.forward * speed).add(right.multiplyScalar(this.vel.right * speed));
       camera.position.add(shift);
       target.add(shift);
       if (axes.turn) {
@@ -98,7 +112,7 @@ export class OverviewControls {
       moved = true;
     }
     if (moved) this.city.requestRender();
-    return moved || changed || this.pressed.size > 0;
+    return moved || changed || this.pressed.size > 0 || !!this.vel.forward || !!this.vel.right;
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
@@ -113,7 +127,10 @@ export class OverviewControls {
     this.pressed.delete(event.code);
   };
 
-  private readonly onBlur = () => this.pressed.clear();
+  private readonly onBlur = () => {
+    this.pressed.clear();
+    this.vel = { forward: 0, right: 0 };
+  };
 
   /** Двойной клик — подлететь к точке, сохранив курс и наклон. */
   private readonly onDoubleClick = (event: MouseEvent) => {

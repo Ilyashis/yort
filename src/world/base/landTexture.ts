@@ -62,6 +62,11 @@ interface Axis {
   kind: 'asphalt' | 'track';
   box: [number, number, number, number];
   seed: number;
+  /** Длина оси от начала до каждой точки, м (поиск точки по длине — делением пополам). */
+  cum: number[];
+  /** Посчитанные один раз (не на каждую перерисовку тайла): заплатки и трещины. */
+  patchList?: { x: number; y: number; angle: number; w: number; h: number; fresh: boolean }[];
+  crackPath?: Path2D;
 }
 
 type Paint = GroundKind | 'wood' | 'meadow' | 'garden' | 'dirt';
@@ -158,12 +163,15 @@ export class LandTextureRenderer {
       const pad = axis.width;
       const xs = pts.map(([x]) => x);
       const ys = pts.map(([, y]) => y);
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1]! + Math.hypot(pts[i]![0] - pts[i - 1]![0], pts[i]![1] - pts[i - 1]![1]));
       this.axes.push({
         pts,
         width: axis.width,
         kind: axis.kind,
         box: [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad],
         seed: Math.floor(random01(index * 97 + 13) * 1e6),
+        cum,
       });
     });
   }
@@ -364,32 +372,49 @@ export class LandTextureRenderer {
     ctx.stroke();
   }
 
-  /** Точка на оси через s м от начала и направление там. */
-  private along(pts: readonly [number, number][], s: number): { p: [number, number]; dir: [number, number] } | undefined {
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1]!;
-      const b = pts[i]!;
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      if (s <= len && len > 0) return { p: [a[0] + ((b[0] - a[0]) * s) / len, a[1] + ((b[1] - a[1]) * s) / len], dir: [(b[0] - a[0]) / len, (b[1] - a[1]) / len] };
-      s -= len;
+  /** Точка на оси через s м от начала и направление там (отрезок — делением пополам по длинам). */
+  private along(axis: Axis, s: number): { p: [number, number]; dir: [number, number] } | undefined {
+    const { pts, cum } = axis;
+    if (s < 0 || s > cum[cum.length - 1]!) return undefined;
+    let lo = 1;
+    let hi = cum.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cum[mid]! < s) lo = mid + 1;
+      else hi = mid;
     }
-    return undefined;
+    const a = pts[lo - 1]!;
+    const b = pts[lo]!;
+    const len = cum[lo]! - cum[lo - 1]! || 1;
+    const t = (s - cum[lo - 1]!) / len;
+    return { p: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], dir: [(b[0] - a[0]) / len, (b[1] - a[1]) / len] };
   }
 
   /** Заплатки: прямоугольники свежего (темнее) или старого (светлее) асфальта через 15–45 м. */
   private patches(ctx: CanvasRenderingContext2D, axis: Axis, pxPerM: number): void {
-    let s = 8 + random01(axis.seed) * 20;
-    for (let k = 0; k < 400; k++) {
-      const at = this.along(axis.pts, s);
-      if (!at) break;
-      const r = (q: number) => random01(axis.seed * 31 + k * 7 + q);
-      const w = 1.2 + r(1) * 3;
-      const h = 0.8 + r(2) * Math.min(2.2, axis.width * 0.4);
-      const side = (r(3) - 0.5) * axis.width * 0.6;
+    if (!axis.patchList) {
+      axis.patchList = [];
+      let s = 8 + random01(axis.seed) * 20;
+      for (let k = 0; k < 400; k++) {
+        const at = this.along(axis, s);
+        if (!at) break;
+        const r = (q: number) => random01(axis.seed * 31 + k * 7 + q);
+        const side = (r(3) - 0.5) * axis.width * 0.6;
+        axis.patchList.push({
+          x: at.p[0] - at.dir[1] * side,
+          y: at.p[1] + at.dir[0] * side,
+          angle: Math.atan2(at.dir[1], at.dir[0]) + (r(4) - 0.5) * 0.12,
+          w: 1.2 + r(1) * 3,
+          h: 0.8 + r(2) * Math.min(2.2, axis.width * 0.4),
+          fresh: r(5) < 0.65,
+        });
+        s += 15 + r(6) * 30;
+      }
+    }
+    for (const { x, y, angle, w, h, fresh } of axis.patchList) {
       ctx.save();
-      ctx.translate(at.p[0] - at.dir[1] * side, at.p[1] + at.dir[0] * side);
-      ctx.rotate(Math.atan2(at.dir[1], at.dir[0]) + (r(4) - 0.5) * 0.12);
-      const fresh = r(5) < 0.65;
+      ctx.translate(x, y);
+      ctx.rotate(angle);
       ctx.fillStyle = fresh ? 'rgba(40,40,42,0.38)' : 'rgba(170,165,152,0.22)';
       ctx.fillRect(-w / 2, -h / 2, w, h);
       if (pxPerM > 4) {
@@ -398,7 +423,6 @@ export class LandTextureRenderer {
         ctx.strokeRect(-w / 2, -h / 2, w, h);
       }
       ctx.restore();
-      s += 15 + r(6) * 30;
     }
   }
 
@@ -407,9 +431,16 @@ export class LandTextureRenderer {
     ctx.strokeStyle = 'rgba(28,28,30,0.55)';
     ctx.lineWidth = 0.035;
     ctx.lineCap = 'round';
+    if (!axis.crackPath) axis.crackPath = this.crackPath(axis);
+    ctx.stroke(axis.crackPath);
+  }
+
+  /** Все трещины оси одной фигурой (считается один раз). */
+  private crackPath(axis: Axis): Path2D {
+    const path = new Path2D();
     let s = random01(axis.seed + 5) * 6;
     for (let k = 0; k < 600; k++) {
-      const at = this.along(axis.pts, s);
+      const at = this.along(axis, s);
       if (!at) break;
       const r = (q: number) => random01(axis.seed * 53 + k * 11 + q);
       const across = r(0) < 0.25;
@@ -417,26 +448,25 @@ export class LandTextureRenderer {
       let x = at.p[0] - at.dir[1] * side;
       let y = at.p[1] + at.dir[0] * side;
       let angle = Math.atan2(at.dir[1], at.dir[0]) + (across ? Math.PI / 2 : 0);
-      ctx.beginPath();
-      ctx.moveTo(x, y);
+      path.moveTo(x, y);
       const steps = 4 + Math.floor(r(3) * 6);
       for (let q = 0; q < steps; q++) {
         angle += (r(10 + q) - 0.5) * 0.9;
         const step = 0.25 + r(20 + q) * 0.45;
         x += Math.cos(angle) * step;
         y += Math.sin(angle) * step;
-        ctx.lineTo(x, y);
+        path.lineTo(x, y);
       }
-      ctx.stroke();
       s += 3 + r(4) * 9;
     }
+    return path;
   }
 
   /** Лужи в колеях: тёмные вытянутые пятна с бликом неба. */
   private puddles(ctx: CanvasRenderingContext2D, axis: Axis, half: number): void {
     let s = random01(axis.seed + 9) * 25;
     for (let k = 0; k < 300; k++) {
-      const at = this.along(axis.pts, s);
+      const at = this.along(axis, s);
       if (!at) break;
       const r = (q: number) => random01(axis.seed * 71 + k * 13 + q);
       if (r(0) < 0.45) {
