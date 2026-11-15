@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { BuilderPanel } from './components/BuilderPanel';
 import { BuildingCard } from './components/BuildingCard';
 import { CityViewer } from './components/CityViewer';
-import { CornerControls } from './components/CornerControls';
 import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
@@ -11,11 +10,8 @@ import { CAN_EDIT, PUBLISHED_VIEW } from './config/mode';
 import { MapTreesPanel } from './components/MapTreesPanel';
 
 import { PlotPanel } from './components/PlotPanel';
-import { DriveHud } from './components/DriveHud';
-import { Minimap } from './components/Minimap';
-import { WalkHud } from './components/WalkHud';
-import { WalkPanel } from './components/WalkPanel';
-import { MobileUi, useIsMobile } from './components/MobileUi';
+import { DesktopUi } from './components/DesktopUi';
+import { MobileUi, useDevice } from './components/MobileUi';
 import { defaultTerritory, findTerritory, territoryDataUrl } from './config/territory';
 import { isOnStreet, useAppStore } from './store/useAppStore';
 
@@ -32,7 +28,9 @@ export function App() {
   // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
   const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
   const reliefScale = useAppStore((s) => s.reliefScale);
-  const mobile = useIsMobile();
+  const device = useDevice();
+  const mobile = device !== 'desktop';
+  const hudHidden = useAppStore((s) => s.hudHidden);
   // Зритель: сначала — опубликованный вид (перепады и слои, как у редактора), потом сцена.
   const [viewFor, setViewFor] = useState<string | undefined>(CAN_EDIT ? territory.id : undefined);
   useEffect(() => {
@@ -68,35 +66,27 @@ export function App() {
       {mobile ? (
         <>
           {!isOnStreet(mode) && <BuildingCard />}
-          <MobileUi />
-        </>
-      ) : isOnStreet(mode) ? (
-        <>
-          {mode === 'drive' ? <DriveHud /> : <WalkHud />}
-          <Minimap />
+          <MobileUi tablet={device === 'tablet'} />
         </>
       ) : (
         <>
-          <div className="sidebar">
-            <InfoPanel />
-            {SHOW_MAP_TREES_PANEL && <MapTreesPanel />}
-            {/* На сайте — только просмотр: прогулка, поездка, общий вид. Участок и конструктор — у редактора. */}
-            {building && CAN_EDIT ? (
-              <BuilderPanel />
-            ) : (
-              <>
-                <WalkPanel />
-                {CAN_EDIT && <PlotPanel />}
-              </>
-            )}
-          </div>
-          <BuildingCard />
-          {CAN_EDIT && <EditPanel />}
-          {CAN_EDIT && <EditorToolbar />}
+          {/* Редактор (только локально) — поверх общего каркаса: панель слева, инструменты внизу. */}
+          {CAN_EDIT && !isOnStreet(mode) && !hudHidden && (
+            <>
+              <div className="sidebar">
+                <InfoPanel />
+                {SHOW_MAP_TREES_PANEL && <MapTreesPanel />}
+                {building ? <BuilderPanel /> : <PlotPanel />}
+              </div>
+              <EditPanel />
+              <EditorToolbar />
+              <HelpPanel />
+            </>
+          )}
+          {!isOnStreet(mode) && !hudHidden && <BuildingCard />}
+          <DesktopUi />
         </>
       )}
-      {!mobile && <HelpPanel />}
-      {!mobile && <CornerControls />}
     </main>
   );
 }

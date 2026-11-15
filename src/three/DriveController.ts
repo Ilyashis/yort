@@ -116,7 +116,7 @@ export class DriveController {
   private bumpCooldown = 0;
   private saved?: DriveSavedView;
   /** Кнопки на экране: газ (−1 — тормоз и назад) и руль. */
-  private touch = { throttle: 0, steer: 0 };
+  private touch = { throttle: 0, steer: 0, handbrake: false };
   private lookPointer?: number;
   private removeAnimator?: () => void;
 
@@ -247,7 +247,7 @@ export class DriveController {
     this.lastStreetCheck = 0;
     this.lastSurfaceCheck = 0;
     this.lastHud = 0;
-    this.touch = { throttle: 0, steer: 0 };
+    this.touch = { throttle: 0, steer: 0, handbrake: false };
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -302,9 +302,9 @@ export class DriveController {
     return this.saved;
   }
 
-  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо. */
-  setTouch(throttle: number, steer: number): void {
-    this.touch = { throttle, steer };
+  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо; ручник. */
+  setTouch(throttle: number, steer: number, handbrake = false): void {
+    this.touch = { throttle, steer, handbrake };
   }
 
   /** Сзади или из кабины. */
@@ -342,7 +342,7 @@ export class DriveController {
     this.pressed.clear();
     this.dragging = false;
     this.lookPointer = undefined;
-    this.touch = { throttle: 0, steer: 0 };
+    this.touch = { throttle: 0, steer: 0, handbrake: false };
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
@@ -358,7 +358,7 @@ export class DriveController {
     return {
       throttle: MathUtils.clamp((has(KEYS.forward) ? 1 : 0) - (has(KEYS.back) ? 1 : 0) + this.touch.throttle, -1, 1),
       steer: MathUtils.clamp((has(KEYS.right) ? 1 : 0) - (has(KEYS.left) ? 1 : 0) + this.touch.steer, -1, 1),
-      handbrake: this.pressed.has('Space'),
+      handbrake: this.pressed.has('Space') || this.touch.handbrake,
       fast: this.pressed.has('ShiftLeft') || this.pressed.has('ShiftRight'),
     };
   }

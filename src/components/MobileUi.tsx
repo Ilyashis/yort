@@ -12,20 +12,35 @@ import { useDismiss } from './useDismiss';
 
 // --- когда показывать -----------------------------------------------------------------------------
 
-/** Телефон или планшет (палец), или узкое окно; ?mobile — принудительно (проверить на компьютере). */
+/** Телефон или планшет (палец), или узкое окно; ?mobile и ?tablet — принудительно (проверить на компьютере). */
 const MOBILE_QUERY = '(pointer: coarse), (max-width: 760px)';
-const FORCED = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('mobile');
+const PARAMS = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+const FORCED = PARAMS.has('tablet') ? 'tablet' : PARAMS.has('mobile') ? 'phone' : undefined;
+/** Планшет: палец и короткая сторона экрана не меньше этого, px. */
+const TABLET_MIN_SIDE = 600;
 
-export function useIsMobile(): boolean {
-  const [mobile, setMobile] = useState(() => FORCED || window.matchMedia(MOBILE_QUERY).matches);
+export type Device = 'phone' | 'tablet' | 'desktop';
+
+function detect(): Device {
+  if (FORCED) return FORCED;
+  if (!window.matchMedia(MOBILE_QUERY).matches) return 'desktop';
+  return Math.min(window.innerWidth, window.innerHeight) >= TABLET_MIN_SIDE && window.matchMedia('(pointer: coarse)').matches ? 'tablet' : 'phone';
+}
+
+export function useDevice(): Device {
+  const [device, setDevice] = useState(detect);
   useEffect(() => {
     if (FORCED) return;
+    const update = () => setDevice(detect());
     const query = window.matchMedia(MOBILE_QUERY);
-    const update = () => setMobile(query.matches);
     query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
+    window.addEventListener('resize', update);
+    return () => {
+      query.removeEventListener('change', update);
+      window.removeEventListener('resize', update);
+    };
   }, []);
-  return mobile;
+  return device;
 }
 
 /** Подсказка показывается один раз: после первого действия запоминаем. */
@@ -67,76 +82,76 @@ function useDismissOnTouch(show: boolean, done: () => void, timeout = 0) {
 
 // --- значки ---------------------------------------------------------------------------------------
 
-const Icon = ({ children, size = 24 }: { children: ReactNode; size?: number }) => (
+export const Icon = ({ children, size = 24 }: { children: ReactNode; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     {children}
   </svg>
 );
-const OverviewIcon = () => (
+export const OverviewIcon = () => (
   <Icon>
     <path d="M3 18l5-7 4 5 3-4 6 6z" />
     <circle cx="17" cy="6" r="2" />
   </Icon>
 );
-const WalkIcon = () => (
+export const WalkIcon = () => (
   <Icon>
     <circle cx="13" cy="4.5" r="2" />
     <path d="M10 21l2-6 3 3v3M9 11l3-3 3 3 3 1M12 8l-1 6" />
   </Icon>
 );
-const CarIcon = () => (
+export const CarIcon = () => (
   <Icon>
     <path d="M4 16v-4l2-5h12l2 5v4z" />
     <circle cx="7.5" cy="16.5" r="1.8" />
     <circle cx="16.5" cy="16.5" r="1.8" />
   </Icon>
 );
-const SunIcon = () => (
+export const SunIcon = () => (
   <Icon>
     <circle cx="12" cy="12" r="4.2" fill="currentColor" stroke="none" />
     <path d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" />
   </Icon>
 );
-const MoonIcon = () => (
+export const MoonIcon = () => (
   <Icon>
     <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="currentColor" stroke="none" />
   </Icon>
 );
-const SnowIcon = () => (
+export const SnowIcon = () => (
   <Icon>
     <path d="M12 2.5v19M3.8 7.2l16.4 9.6M20.2 7.2L3.8 16.8M9 3.8l3 2 3-2M9 20.2l3-2 3 2" />
   </Icon>
 );
-const SoundOnIcon = () => (
+export const SoundOnIcon = () => (
   <Icon>
     <path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" />
     <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
   </Icon>
 );
-const SoundOffIcon = () => (
+export const SoundOffIcon = () => (
   <Icon>
     <path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" />
     <path d="M16.5 9.5l5 5m0-5l-5 5" />
   </Icon>
 );
-const MoreIcon = () => (
+export const MoreIcon = () => (
   <Icon>
     <circle cx="6" cy="12" r="1.4" fill="currentColor" />
     <circle cx="12" cy="12" r="1.4" fill="currentColor" />
     <circle cx="18" cy="12" r="1.4" fill="currentColor" />
   </Icon>
 );
-const BackIcon = () => (
+export const BackIcon = () => (
   <Icon>
     <path d="M15 5l-7 7 7 7" />
   </Icon>
 );
-const ChevronDown = () => (
+export const ChevronDown = () => (
   <Icon size={18}>
     <path d="M6 9l6 6 6-6" />
   </Icon>
 );
-const CameraIcon = () => (
+export const CameraIcon = () => (
   <Icon>
     <path d="M4 8h3l2-2.5h6L17 8h3v11H4z" />
     <circle cx="12" cy="13" r="3.4" />
@@ -172,7 +187,7 @@ function BottomSheet({ title, extra, onClose, children }: { title: string; extra
   );
 }
 
-function useTerritoryLatLon() {
+export function useTerritoryLatLon() {
   const territoryId = useAppStore((s) => s.territoryId);
   return useMemo(() => {
     const bbox = findTerritory(territoryId)?.bbox;
@@ -189,7 +204,7 @@ function skyGradient(lat: number, lon: number): string {
   return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
 
-const nowHours = () => {
+export const nowHours = () => {
   const d = new Date();
   return d.getHours() + d.getMinutes() / 60;
 };
@@ -205,6 +220,16 @@ const TIME_CHIPS: { label: string; hours?: number }[] = [
 /** Атмосфера: время суток и время года. */
 function AtmosphereSheet({ onClose }: { onClose: () => void }) {
   const hours = useAppStore((s) => s.timeOfDay);
+  return (
+    <BottomSheet title="Атмосфера" extra={<b className="m-sheet-time">{formatTime(hours)}</b>} onClose={onClose}>
+      <AtmosphereControls />
+    </BottomSheet>
+  );
+}
+
+/** Время суток (кнопки и шкала), время года, «время идёт» — в листе на телефоне и в настройках на компьютере. */
+export function AtmosphereControls() {
+  const hours = useAppStore((s) => s.timeOfDay);
   const setTime = useAppStore((s) => s.setTimeOfDay);
   const flowing = useAppStore((s) => s.timeFlowing);
   const setFlowing = useAppStore((s) => s.setTimeFlowing);
@@ -215,7 +240,7 @@ function AtmosphereSheet({ onClose }: { onClose: () => void }) {
   const near = (a: number, b: number) => Math.abs(((a - b + 36) % 24) - 12) < 0.05;
 
   return (
-    <BottomSheet title="Атмосфера" extra={<b className="m-sheet-time">{formatTime(hours)}</b>} onClose={onClose}>
+    <>
       <div className="m-chips">
         {TIME_CHIPS.map((chip) => (
           <button
@@ -272,7 +297,7 @@ function AtmosphereSheet({ onClose }: { onClose: () => void }) {
       <p className="m-note">
         {season === 'winter' ? 'Конец декабря: солнце низко, ночью горят окна, фонари и гирлянды.' : 'Середина июня: ночью горят окна и фонари.'}
       </p>
-    </BottomSheet>
+    </>
   );
 }
 
@@ -402,7 +427,7 @@ function Sheets({ sheet, setSheet }: { sheet: Sheet | undefined; setSheet: (shee
   return null;
 }
 
-function AtmosphereIcon() {
+export function AtmosphereIcon() {
   const hours = useAppStore((s) => s.timeOfDay);
   const season = useAppStore((s) => s.season);
   const { lat, lon } = useTerritoryLatLon();
@@ -440,7 +465,7 @@ function ModeSwitch() {
   );
 }
 
-function Compass() {
+export function Compass() {
   const heading = useAppStore((s) => s.cameraHeading);
   const faceNorth = useAppStore((s) => s.faceNorth);
   return (
@@ -634,7 +659,33 @@ function Walk({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
 
 // --- на машине -----------------------------------------------------------------------------------
 
-type Pedal = 'gas' | 'brake' | 'left' | 'right';
+type Pedal = 'gas' | 'brake' | 'left' | 'right' | 'handbrake';
+
+/** Педаль газа: узкая, высокая, в рифлении. */
+export const GasPedalIcon = () => (
+  <svg viewBox="0 0 32 40" width="30" height="38" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <rect x="8" y="3" width="16" height="34" rx="5" transform="skewX(-8) translate(3 0)" />
+    <path d="M13 10h9M12.5 15h9M12 20h9M11.5 25h9M11 30h9" />
+  </svg>
+);
+
+/** Педаль тормоза: шире и ниже, в рифлении. */
+export const BrakePedalIcon = () => (
+  <svg viewBox="0 0 40 32" width="36" height="29" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <rect x="4" y="6" width="32" height="22" rx="6" />
+    <path d="M10 12v10M15 12v10M20 12v10M25 12v10M30 12v10" />
+    <path d="M17 6V2h6v4" />
+  </svg>
+);
+
+/** Ручник: «P» в круге со скобками, как на приборной панели. */
+export const HandbrakeIcon = () => (
+  <svg viewBox="0 0 32 24" width="30" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <circle cx="16" cy="12" r="8" />
+    <path d="M13.5 16.5v-9h3.2a2.6 2.6 0 0 1 0 5.2h-3.2" />
+    <path d="M5 5a10 10 0 0 0 0 14M27 5a10 10 0 0 1 0 14" />
+  </svg>
+);
 
 /** Кнопка, которую держат: нажата — пока палец на ней. */
 function HoldButton({ pedal, onChange, className, label, children }: { pedal: Pedal; onChange: (pedal: Pedal, on: boolean) => void; className: string; label: string; children: ReactNode }) {
@@ -666,13 +717,13 @@ function Drive({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
   const controls = useAppStore((s) => s.walkControls);
   const drive = useAppStore((s) => s.driveControls);
   const hud = useAppStore((s) => s.driveHud);
-  const pedals = useRef<Record<Pedal, boolean>>({ gas: false, brake: false, left: false, right: false });
+  const pedals = useRef<Record<Pedal, boolean>>({ gas: false, brake: false, left: false, right: false, handbrake: false });
   const onPedal = useCallback((pedal: Pedal, on: boolean) => {
     pedals.current[pedal] = on;
     const p = pedals.current;
-    useAppStore.getState().driveControls?.setTouch((p.gas ? 1 : 0) - (p.brake ? 1 : 0), (p.right ? 1 : 0) - (p.left ? 1 : 0));
+    useAppStore.getState().driveControls?.setTouch((p.gas ? 1 : 0) - (p.brake ? 1 : 0), (p.right ? 1 : 0) - (p.left ? 1 : 0), p.handbrake);
   }, []);
-  useEffect(() => () => useAppStore.getState().driveControls?.setTouch(0, 0), []);
+  useEffect(() => () => useAppStore.getState().driveControls?.setTouch(0, 0, false), []);
   const [hint, hintDone] = useOnce('drive', true);
   useDismissOnTouch(hint, hintDone, 9000);
   const [portrait, setPortrait] = useState(() => window.matchMedia('(orientation: portrait)').matches);
@@ -705,13 +756,13 @@ function Drive({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
       {portrait && hint && <div className="m-glass m-pill m-rotate-hint">Поверните телефон — так удобнее</div>}
       <div className="m-steer">
         <HoldButton pedal="left" onChange={onPedal} className="m-steer-button" label="Руль влево">
-          <Icon size={30}>
-            <path d="M15 5l-7 7 7 7" />
+          <Icon size={34}>
+            <path d="M14.5 5.5L8 12l6.5 6.5" />
           </Icon>
         </HoldButton>
         <HoldButton pedal="right" onChange={onPedal} className="m-steer-button" label="Руль вправо">
-          <Icon size={30}>
-            <path d="M9 5l7 7-7 7" />
+          <Icon size={34}>
+            <path d="M9.5 5.5L16 12l-6.5 6.5" />
           </Icon>
         </HoldButton>
       </div>
@@ -720,15 +771,16 @@ function Drive({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
         <span>км/ч · {hud.gear}</span>
       </div>
       <div className="m-pedals">
-        <HoldButton pedal="brake" onChange={onPedal} className="m-brake" label="Тормоз и назад">
-          Тормоз
-          <small>и назад</small>
-        </HoldButton>
+        <div className="m-pedal-column">
+          <HoldButton pedal="handbrake" onChange={onPedal} className="m-handbrake" label="Ручник">
+            <HandbrakeIcon />
+          </HoldButton>
+          <HoldButton pedal="brake" onChange={onPedal} className="m-brake" label="Тормоз и назад">
+            <BrakePedalIcon />
+          </HoldButton>
+        </div>
         <HoldButton pedal="gas" onChange={onPedal} className="m-gas" label="Газ">
-          <Icon size={30}>
-            <path d="M12 19V5M6 11l6-6 6 6" />
-          </Icon>
-          Газ
+          <GasPedalIcon />
         </HoldButton>
       </div>
       {hint && (
@@ -737,7 +789,7 @@ function Drive({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
             <div className="m-hint-text">рулите</div>
           </div>
           <div className="m-hint m-hint-pedals" aria-hidden="true">
-            <div className="m-hint-text">держите «Газ» — едем</div>
+            <div className="m-hint-text">газ · тормоз и назад</div>
           </div>
         </>
       )}
@@ -747,13 +799,13 @@ function Drive({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }) {
 
 // --- всё вместе ----------------------------------------------------------------------------------
 
-export function MobileUi() {
+export function MobileUi({ tablet = false }: { tablet?: boolean }) {
   const mode = useAppStore((s) => s.mode);
   const [sheet, setSheet] = useState<Sheet | undefined>();
   // Сменили режим — лист закрываем.
   useEffect(() => setSheet(undefined), [mode]);
   return (
-    <div className={`m-ui m-ui-${mode} ${sheet ? 'm-ui-sheet' : ''}`}>
+    <div className={`m-ui m-ui-${mode} ${sheet ? 'm-ui-sheet' : ''} ${tablet ? 'm-ui-tablet' : ''}`}>
       {mode === 'walk' ? <Walk setSheet={setSheet} /> : mode === 'drive' ? <Drive setSheet={setSheet} /> : <Overview setSheet={setSheet} />}
       <Sheets sheet={sheet} setSheet={setSheet} />
     </div>

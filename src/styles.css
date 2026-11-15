@@ -2246,8 +2246,7 @@ input[type='checkbox'] {
   font-weight: 700;
 }
 
-.m-accent,
-.m-gas {
+.m-accent {
   background: linear-gradient(180deg, #ffc560, var(--accent));
   border-color: rgba(255, 220, 160, 0.7);
   color: #1d1400;
@@ -2261,10 +2260,13 @@ input[type='checkbox'] {
   position: absolute;
   right: var(--m-right);
   bottom: calc(var(--m-bottom) + 24px);
-  width: 76px;
-  height: 76px;
-  padding: 4px;
-  line-height: 1.1;
+  width: 84px;
+  height: 84px;
+  padding: 6px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 220, 160, 0.8);
+  font-size: 10.5px;
+  line-height: 1.05;
 }
 
 .m-hint-walk-stick {
@@ -2312,8 +2314,9 @@ input[type='checkbox'] {
 }
 
 .m-steer-button {
-  width: 84px;
-  height: 84px;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
 }
 
 .m-pedals {
@@ -2325,20 +2328,50 @@ input[type='checkbox'] {
   gap: 12px;
 }
 
-.m-brake {
-  width: 72px;
-  height: 72px;
+.m-pedal-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
-.m-brake small {
-  font-size: 10px;
-  font-weight: 600;
-  opacity: 0.8;
+/* Круглые кнопки за рулём: полупрозрачные, светлая кромка — как в автосимуляторах. */
+.m-steer-button,
+.m-brake,
+.m-gas,
+.m-handbrake {
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.32);
+}
+
+.m-handbrake {
+  width: 52px;
+  height: 52px;
+}
+
+.m-brake {
+  width: 76px;
+  height: 76px;
 }
 
 .m-gas {
-  width: 84px;
-  height: 108px;
+  width: 96px;
+  height: 96px;
+  margin-bottom: 18px;
+  border-color: rgba(var(--accent-rgb), 0.85);
+  color: #ffc560;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.28),
+    0 0 16px rgba(var(--accent-rgb), 0.35);
+}
+
+.m-gas.pressed {
+  background: rgba(var(--accent-rgb), 0.45);
+  color: #fff;
+}
+
+.m-hold.pressed {
+  border-color: rgba(255, 255, 255, 0.75);
 }
 
 .m-speed {
@@ -2392,8 +2425,16 @@ input[type='checkbox'] {
     bottom: calc(var(--m-bottom) + 124px);
   }
   .m-steer-button {
-    width: 72px;
-    height: 72px;
+    width: 70px;
+    height: 70px;
+  }
+  .m-gas {
+    width: 84px;
+    height: 84px;
+  }
+  .m-brake {
+    width: 68px;
+    height: 68px;
   }
   .m-ui-drive .m-top-left .m-pill {
     padding: 0 12px;
@@ -2432,4 +2473,642 @@ input[type='checkbox'] {
 .m-ui-sheet .m-speed,
 .m-ui-sheet .m-board {
   visibility: hidden;
+}
+
+/* ==========================================================================================
+   Компьютер: тот же стеклянный каркас, что на телефоне, — под мышь и клавиатуру. Место и компас
+   сверху, кнопки справа с подсказками при наведении, режимы с клавишами внизу по центру,
+   шпаргалка клавиш слева внизу (бледнеет), настройки — одной панелью справа.
+   ========================================================================================== */
+
+.d-ui {
+  --m-top: 20px;
+  --m-bottom: 20px;
+  --m-left: 20px;
+  --m-right: 20px;
+}
+
+.d-ui kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0 5px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font: 700 11px/1 inherit;
+  text-shadow: none;
+}
+
+.d-ui button {
+  cursor: pointer;
+}
+
+.d-top-left {
+  position: absolute;
+  top: var(--m-top);
+  left: var(--m-left);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Выбор места: настоящий select поверх «таблетки» — открывается системным списком. */
+.d-place {
+  position: relative;
+  cursor: pointer;
+}
+
+.d-place select {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.d-brand {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.d-top-right {
+  position: absolute;
+  top: var(--m-top);
+  right: var(--m-right);
+  display: flex;
+  gap: 10px;
+}
+
+.d-side {
+  position: absolute;
+  right: var(--m-right);
+  top: 50%;
+  translate: 0 -50%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.m-round.d-round {
+  width: 52px;
+  height: 52px;
+}
+
+.d-round:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  filter: brightness(1.15);
+}
+
+/* Подсказка при наведении: слева от кнопки, с клавишей. */
+.d-tip-wrap {
+  position: relative;
+}
+
+.d-tip {
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  translate: 0 -50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease 0.25s;
+}
+
+.d-tip-wrap:hover .d-tip {
+  opacity: 1;
+}
+
+.d-row-buttons .d-tip {
+  right: auto;
+  left: 50%;
+  top: calc(100% + 8px);
+  translate: -50% 0;
+}
+
+/* Режимы — внизу по центру; у редактора внизу его инструменты, поэтому режимы — сверху. */
+.d-modes {
+  position: absolute;
+  left: 50%;
+  bottom: var(--m-bottom);
+  translate: -50% 0;
+  border-radius: 18px;
+}
+
+.d-modes.d-modes-top {
+  top: var(--m-top);
+  bottom: auto;
+}
+
+.d-modes button {
+  flex-direction: row;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.d-modes button:not(.on):hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.d-modes button.on kbd {
+  border-color: rgba(29, 20, 0, 0.45);
+  background: rgba(255, 255, 255, 0.35);
+  color: #1d1400;
+}
+
+.d-hints {
+  position: absolute;
+  left: var(--m-left);
+  bottom: var(--m-bottom);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 550;
+  transition: opacity 1.2s ease;
+}
+
+.d-hints span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.d-hints.faded {
+  opacity: 0.28;
+}
+
+.d-hints.faded:hover {
+  opacity: 1;
+  transition-duration: 0.2s;
+}
+
+.d-banner {
+  bottom: calc(var(--m-bottom) + 66px);
+  max-width: 560px;
+}
+
+.d-banner .m-banner-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.d-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--m-bottom) + 66px);
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px 9px 10px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.d-prompt kbd {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 14px;
+  background: linear-gradient(180deg, #ffc560, var(--accent));
+  border-color: rgba(29, 20, 0, 0.35);
+  color: #1d1400;
+}
+
+.d-street {
+  position: absolute;
+  top: var(--m-top);
+  left: 50%;
+  translate: -50% 0;
+  height: 38px;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.d-street-right {
+  position: absolute;
+  top: var(--m-top);
+  right: var(--m-right);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.d-row-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.d-row-buttons .m-round.d-round {
+  width: 44px;
+  height: 44px;
+}
+
+.d-ui .minimap,
+.d-ui .minimap-show {
+  position: relative;
+  top: auto;
+  right: auto;
+}
+
+.d-ui .minimap {
+  width: 180px;
+  height: 180px;
+}
+
+.d-ui .minimap-large {
+  width: min(360px, 42vh);
+  height: min(360px, 42vh);
+}
+
+.d-ui .minimap-buttons {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.d-ui .minimap:hover .minimap-buttons {
+  opacity: 1;
+}
+
+.d-speedo {
+  position: absolute;
+  right: var(--m-right);
+  bottom: var(--m-bottom);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.d-speedo svg {
+  position: absolute;
+  inset: 0;
+}
+
+.d-speedo b {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.d-speedo span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.d-speedo .d-gear {
+  position: absolute;
+  bottom: 14px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffc560;
+}
+
+/* Настройки: одна панель справа, вкладки. */
+.d-settings {
+  position: absolute;
+  top: var(--m-top);
+  right: var(--m-right);
+  width: 380px;
+  max-height: calc(100% - 2 * var(--m-top));
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  border-radius: 20px;
+  animation: d-panel-in 0.18s ease-out both;
+}
+
+@keyframes d-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.d-settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.d-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.d-close:hover {
+  color: #fff;
+}
+
+.d-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 14px 0 12px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.d-tabs button {
+  flex: 1;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.d-tabs button.on {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.d-tabs button:not(.on):hover {
+  color: #fff;
+}
+
+.d-settings-body {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+
+.d-time-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+  font-weight: 650;
+}
+
+.d-time-head b {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+}
+
+.d-settings .m-row {
+  min-height: 48px;
+  font-size: 14.5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.d-settings .m-seg-small button {
+  min-height: 34px;
+}
+
+.d-settings .m-chip {
+  height: 38px;
+}
+
+.d-settings .m-chip:not(.on):hover,
+.d-settings .m-seg-small button:not(.on):hover {
+  color: #fff;
+}
+
+.d-settings .car-colors .car-color {
+  width: 24px;
+  height: 24px;
+}
+
+.d-disabled {
+  opacity: 0.45;
+}
+
+.d-keys h4 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.d-keys dl {
+  margin: 0;
+}
+
+.d-keys dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.d-keys dt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.d-keys dd {
+  margin: 0;
+  color: var(--muted);
+  text-align: right;
+}
+
+.d-ui-settings .d-side,
+.d-ui-settings .d-top-right,
+.d-ui-settings .d-street-right {
+  visibility: hidden;
+}
+
+.d-hidden-note {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  animation: d-note-out 3.5s ease forwards;
+}
+
+@keyframes d-note-out {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Карточка дома — под компасом, левее кнопок справа. */
+.app:has(.d-ui) .building-card {
+  top: 84px;
+  right: 92px;
+}
+
+/* ==========================================================================================
+   Планшет: раскладка телефона, но крупнее и просторнее; настройки — окошком у кнопок справа,
+   а не листом на всю ширину; руль и педали — выше края, под большие пальцы.
+   ========================================================================================== */
+
+.m-ui-tablet {
+  --m-top: max(24px, env(safe-area-inset-top));
+  --m-bottom: max(24px, env(safe-area-inset-bottom));
+  --m-left: max(24px, env(safe-area-inset-left));
+  --m-right: max(24px, env(safe-area-inset-right));
+}
+
+.m-ui-tablet .m-round {
+  width: 58px;
+  height: 58px;
+}
+
+.m-ui-tablet .m-round.m-small {
+  width: 52px;
+  height: 52px;
+}
+
+.m-ui-tablet .m-pill {
+  height: 48px;
+  font-size: 16px;
+}
+
+.m-ui-tablet .m-side {
+  top: 50%;
+  bottom: auto;
+  translate: 0 -50%;
+}
+
+.m-ui-tablet .m-modes {
+  max-width: 520px;
+}
+
+.m-ui-tablet .m-sheet {
+  left: auto;
+  right: calc(var(--m-right) + 76px);
+  top: 50%;
+  bottom: auto;
+  translate: 0 -50%;
+  width: 380px;
+  max-height: calc(100% - 2 * var(--m-top));
+  padding: 6px 18px 18px;
+  border-radius: 22px;
+  border-bottom: 1px solid var(--glass-edge);
+  animation-name: d-panel-in;
+}
+
+.m-ui-tablet.m-ui-sheet .m-side {
+  visibility: visible;
+}
+
+.m-ui-tablet.m-ui-sheet .m-modes {
+  visibility: visible;
+}
+
+.m-ui-tablet .minimap {
+  width: 156px;
+  height: 156px;
+}
+
+.m-ui-tablet .m-stick {
+  width: 136px;
+  height: 136px;
+  bottom: calc(var(--m-bottom) + 110px);
+  left: calc(var(--m-left) + 100px);
+}
+
+.m-ui-tablet .m-steer {
+  bottom: calc(var(--m-bottom) + 96px);
+  left: calc(var(--m-left) + 16px);
+  gap: 16px;
+}
+
+.m-ui-tablet .m-steer-button {
+  width: 96px;
+  height: 96px;
+}
+
+.m-ui-tablet .m-pedals {
+  bottom: calc(var(--m-bottom) + 86px);
+  right: calc(var(--m-right) + 16px);
+  gap: 16px;
+}
+
+.m-ui-tablet .m-brake {
+  width: 88px;
+  height: 88px;
+}
+
+.m-ui-tablet .m-gas {
+  width: 112px;
+  height: 112px;
+}
+
+.m-ui-tablet .m-handbrake {
+  width: 60px;
+  height: 60px;
+}
+
+.m-ui-tablet .m-speed {
+  min-width: 96px;
+  padding: 10px 18px;
+}
+
+.m-ui-tablet .m-speed b {
+  font-size: 30px;
+}
+
+.m-ui-tablet .m-board {
+  width: 96px;
+  height: 96px;
+  bottom: calc(var(--m-bottom) + 80px);
+}
+
+.m-ui-tablet .m-hint-steer {
+  bottom: calc(var(--m-bottom) + 206px);
+}
+
+.m-ui-tablet .m-hint-pedals {
+  bottom: calc(var(--m-bottom) + 300px);
 }

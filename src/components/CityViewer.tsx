@@ -991,7 +991,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       store.setDriveControls({
         toggleView: () => drive.toggleView(),
         backToRoad: () => drive.backToRoad(),
-        setTouch: (throttle, steer) => drive.setTouch(throttle, steer),
+        setTouch: (throttle, steer, handbrake) => drive.setTouch(throttle, steer, handbrake),
       });
       owned.push({ destroy: () => store.setDriveControls(undefined) });
 

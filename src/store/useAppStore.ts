@@ -99,8 +99,8 @@ export interface WalkControls {
 export interface DriveControls {
   toggleView: () => void;
   backToRoad: () => void;
-  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо. */
-  setTouch: (throttle: number, steer: number) => void;
+  /** Кнопки на экране: газ 1, тормоз и назад −1; руль −1 влево … 1 вправо; ручник. */
+  setTouch: (throttle: number, steer: number, handbrake: boolean) => void;
 }
 
 /** Громкость по группам из браузера (если сохранена и в порядке). */
@@ -248,6 +248,9 @@ interface AppState {
   /** Регистрирует сцена: перелёт к виду сверху или под углом. */
   changeView?: (mode: 'top' | 'tilt') => void;
   setChangeView: (change: ((mode: 'top' | 'tilt') => void) | undefined) => void;
+  /** Интерфейс спрятан (клавиша H) — видна только сцена. */
+  hudHidden: boolean;
+  setHudHidden: (hidden: boolean) => void;
   /** Курс камеры в обзоре, градусы от севера (для компаса). */
   cameraHeading: number;
   setCameraHeading: (heading: number) => void;
@@ -373,6 +376,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (viewMode !== get().viewMode) set({ viewMode });
   },
   setChangeView: (changeView) => set({ changeView }),
+  hudHidden: false,
+  setHudHidden: (hudHidden) => set({ hudHidden }),
   cameraHeading: 0,
   setCameraHeading: (cameraHeading) => {
     if (cameraHeading !== get().cameraHeading) set({ cameraHeading });

@@ -151,7 +151,7 @@ export function InfoPanel() {
             </ul>
           )}
 
-          <p className="hint muted">Клик по зданию — подробности. Все клавиши — кнопка «?» справа внизу.</p>
+          <p className="hint muted">Клик по зданию — подробности. Все клавиши — в настройках (⚙ справа), вкладка «Клавиши».</p>
 
           <button type="button" className="button" onClick={() => flyHome?.()} disabled={!flyHome}>
             Вернуться к району
