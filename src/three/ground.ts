@@ -82,6 +82,11 @@ export class GroundTexture {
     this.underlay = new GroundUnderlay(anisotropy);
   }
 
+  /** Текстуры покрытий и их прямоугольники (локальные метры) — для травы: она берёт цвет и маску с земли. */
+  get landLevels(): readonly { texture: CanvasTexture; rect: Vector4 }[] {
+    return this.levels.map((level) => ({ texture: level.texture, rect: level.uniform }));
+  }
+
   /** Вставка в шейдер материала земли (подключается через hookMaterial). */
   readonly hook = (shader: ShaderSource) => {
     this.levels.forEach((level, i) => {

@@ -42,10 +42,14 @@ const ROAD_PROFILE_STEP = 1;
 /** За границей двора — переход от плоскости двора к съёмке, м. */
 const YARD_SHOULDER = 3;
 /** Ровная площадка под домом — на столько шире контура, м; дальше — переход на PAD_SHOULDER м. */
-const PAD_MARGIN = 1;
-const PAD_SHOULDER = 3;
+const PAD_MARGIN = 3.5;
+const PAD_SHOULDER = 6;
+/** Площадки соседних построек с разницей уровней до стольких метров — на одну высоту. */
+const PAD_JOIN_STEP = 1.2;
 /** Участки посёлка: на столько метров размывается переход между плоскостями соседей. */
-const PLOT_BLEND = 3;
+const PLOT_BLEND = 9;
+/** Сколько уклона оставить участку (доля от уклона съёмки): двор — почти терраса на уровне фундамента дома. */
+const PLOT_SLOPE_KEEP = 0.5;
 
 type XY = [number, number];
 
@@ -251,8 +255,9 @@ export class DetailHeights {
    * кучи, машины — уходят). Сами плоскости размыты на PLOT_BLEND м: у общего забора соседей — плавный
    * переход, а не ступенька, и за краем участков земля плавно возвращается к съёмке.
    */
-  flattenPlots(plots: readonly (readonly (readonly [number, number])[])[]): void {
-    const rings = plots.map((plot) => plot.map(this.toGrid)).filter((ring) => ring.length >= 3);
+  flattenPlots(plots: readonly (readonly (readonly [number, number])[])[], anchors?: readonly (readonly [number, number] | undefined)[]): void {
+    const list = plots.map((plot, n) => ({ ring: plot.map(this.toGrid), anchor: anchors?.[n] && this.toGrid(anchors[n]!) })).filter(({ ring }) => ring.length >= 3);
+    const rings = list.map(({ ring }) => ring);
     if (!rings.length) return;
     // Плотный кусок сетки вокруг участков (с запасом на размытие): высота плоскостей и «доля участков».
     let minX = Infinity;
@@ -281,7 +286,7 @@ export class DetailHeights {
     const ys: number[] = [];
     const zs: number[] = [];
     const ks: number[] = [];
-    for (const ring of rings) {
+    for (const { ring, anchor } of list) {
       xs.length = ys.length = zs.length = ks.length = 0;
       this.inside(ring, (i, px, py) => {
         const c = i % this.width;
@@ -292,8 +297,15 @@ export class DetailHeights {
         zs.push(this.nodeHeight(i));
         ks.push(k);
       });
-      const plane = fitPlane(xs, ys, zs);
-      if (!plane) continue;
+      const fitted = fitPlane(xs, ys, zs);
+      if (!fitted) continue;
+      // Плоскость — через уровень фундамента (середину дома; нет дома — середину участка), с ослабленным
+      // уклоном: площадка под домом почти совпадает с двором, и вокруг дома нет ступенек и бугров.
+      const [ax, ay] = anchor ?? [xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length];
+      const h0 = fitted(ax, ay);
+      const gx = (fitted(ax + 1, ay) - h0) * PLOT_SLOPE_KEEP;
+      const gy = (fitted(ax, ay + 1) - h0) * PLOT_SLOPE_KEEP;
+      const plane = (x: number, y: number) => h0 + gx * (x - ax) + gy * (y - ay);
       ks.forEach((k, n) => {
         value[k] = plane(xs[n]!, ys[n]!);
         share[k] = 1;
@@ -327,21 +339,48 @@ export class DetailHeights {
    * иначе бугры съёмки под домом поднимают пол и дом стоит на высоком цоколе.
    */
   flattenPads(footprints: readonly (readonly (readonly [number, number])[])[]): void {
+    const pads = footprints
+      .map((footprint) => {
+        const ring = footprint.map(this.toGrid);
+        const under: number[] = [];
+        this.visit(ring, PAD_MARGIN, (i, _x, _y, d) => {
+          if (d <= PAD_MARGIN) under.push(this.nodeHeight(i));
+        });
+        return { ring, under, level: under.length ? median(under) : NaN };
+      })
+      .filter((pad) => pad.under.length);
+    // Постройки вплотную (площадки перекрываются: дом с верандой, баня у сарая) — на одной высоте. Иначе узлы
+    // сетки между ними тянутся к соседней площадке, и край постройки висит над землёй. Не объединяем то,
+    // что по земле разнесено больше PAD_JOIN_STEP: там честная ступень склона.
+    const parent = pads.map((_, k) => k);
+    const root = (k: number): number => (parent[k] === k ? k : (parent[k] = root(parent[k]!)));
+    const boxes = pads.map(({ ring }) => {
+      const xs = ring.map((p) => p[0]);
+      const ys = ring.map((p) => p[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as const;
+    });
+    const reach = 2 * PAD_MARGIN + 0.5;
+    for (let a = 0; a < pads.length; a++) {
+      for (let b = a + 1; b < pads.length; b++) {
+        const A = boxes[a]!;
+        const B = boxes[b]!;
+        if (B[0] > A[2] + reach || A[0] > B[2] + reach || B[1] > A[3] + reach || A[1] > B[3] + reach) continue;
+        if (Math.abs(pads[a]!.level - pads[b]!.level) > PAD_JOIN_STEP) continue;
+        const near = (from: XY[], to: XY[]) => from.some(([x, y]) => signedDistance(x, y, to) <= reach);
+        if (near(pads[a]!.ring, pads[b]!.ring) || near(pads[b]!.ring, pads[a]!.ring)) parent[root(a)] = root(b);
+      }
+    }
+    const groups = new Map<number, number[]>();
+    pads.forEach((pad, k) => groups.set(root(k), [...(groups.get(root(k)) ?? []), ...pad.under]));
     const best = new Map<number, { out: number; h: number }>();
-    for (const footprint of footprints) {
-      const ring = footprint.map(this.toGrid);
-      const under: number[] = [];
-      this.visit(ring, PAD_MARGIN, (i, _x, _y, d) => {
-        if (d <= PAD_MARGIN) under.push(this.nodeHeight(i));
-      });
-      if (!under.length) continue;
-      const level = median(under);
-      this.visit(ring, PAD_MARGIN + PAD_SHOULDER, (i, _x, _y, d) => {
+    pads.forEach((pad, k) => {
+      const level = median(groups.get(root(k))!);
+      this.visit(pad.ring, PAD_MARGIN + PAD_SHOULDER, (i, _x, _y, d) => {
         const out = d - PAD_MARGIN;
         const prev = best.get(i);
         if (!prev || out < prev.out) best.set(i, { out, h: level });
       });
-    }
+    });
     this.blend(best, PAD_SHOULDER);
   }
 

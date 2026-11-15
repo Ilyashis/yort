@@ -13,6 +13,7 @@ import { CityScene } from '../three/CityScene';
 import { DetailsLayer } from '../three/DetailsLayer';
 import { FurnitureLayer } from '../three/FurnitureLayer';
 import { TIME_FLOW_HOURS_PER_SECOND } from '../three/dayNight';
+import { GrassLayer } from '../three/GrassLayer';
 import { GroundLayer } from '../three/GroundLayer';
 import { LandmarksLayer } from '../three/LandmarksLayer';
 import { EditLayer } from '../three/EditLayer';
@@ -330,16 +331,47 @@ export function CityViewer({ territory }: { territory: Territory }) {
           const u = -dx * p.toStreet[1] + dy * p.toStreet[0];
           return Math.abs(u) <= p.width / 2 + 1 && v >= -1 && v <= p.depth + 1.5;
         });
+      const parts = assignParts(collection.features, buildingParts);
+
+      // Деревня из моделей: домам OSM подобраны башкирские дома (изба, пятистенок, вальмовый, кирпичный, баня)
+      // по размеру контура и по тому, какой стороной дом стоит к улице. Дома из частей и сложные — как были.
+      const roadLines = environment.streets.roads.map((r) => r.coords.map(frame.toLocal));
+      const villageHouses: VillageHouse[] = village
+        ? collection.features.flatMap((f) => {
+            if (parts.byBuilding.get(f.properties.id)?.length) return [];
+            if (f.geometry.type === 'MultiPolygon' && f.geometry.coordinates.length > 1) return [];
+            const ring = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0];
+            const house = ring && chooseVillageModel(f.properties.id, ring.map(frame.toLocal), roadLines, f.properties.building);
+            // Цвета кровли и стен — из OSM или по съёмке с дрона (если есть).
+            const roof = f.properties.roofColour;
+            const wall = f.properties.colour;
+            return house ? [roof || wall ? { ...house, colors: { roof, wall } } : house] : [];
+          })
+        : [];
+
       // Подробный рельеф (съёмка с дрона) — под жизнь деревни: двор — плоскостью по уклону, под дорогами и
       // тропинками — полотно, под домами и сараями — ровные площадки. Иначе бугры съёмки в пару десятков
       // сантиметров поднимают дома на высокий цоколь и делают дороги волнистыми.
       if (heights.detail) {
-        if (estates) heights.detail.flattenPlots(estates.plots.map((p) => p.ring.map(frame.toLonLat)));
+        if (estates) {
+          // Участок выравнивается по уровню дома: опора — середина прямоугольника дома-модели.
+          const houseAt = new Map(villageHouses.map((h) => [h.id, frame.toLonLat([h.rect.reduce((s, v) => s + v[0], 0) / h.rect.length, h.rect.reduce((s, v) => s + v[1], 0) / h.rect.length])]));
+          heights.detail.flattenPlots(
+            estates.plots.map((p) => p.ring.map(frame.toLonLat)),
+            estates.plots.map((p) => houseAt.get(p.id)),
+          );
+        }
         else heights.detail.flattenYards(yards.map((y) => y.corners.map(frame.toLonLat)));
         heights.detail.flattenRoads([...environment.streets.roads, ...environment.streets.paths]);
         // Площадки — последними: дом у самой дороги не должен съезжать на её обочину.
+        // Под домами-моделями — по прямоугольнику модели (он шире контура OSM), иначе край цоколя висит над склоном.
+        const modelled = new Set(villageHouses.map((h) => h.id));
         heights.detail.flattenPads([
-          ...buildingFootprints.map((rings) => openRing(rings[0] ?? [])),
+          ...collection.features
+            .filter((f) => !modelled.has(f.properties.id))
+            .flatMap((f) => (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates))
+            .map((rings) => openRing(rings[0] ?? [])),
+          ...villageHouses.map((h) => h.rect.map(frame.toLonLat)),
           ...(estates?.plots.flatMap((p) => p.outbuildings.map((b) => b.rect.map(frame.toLonLat))) ?? []),
         ]);
       }
@@ -395,7 +427,6 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const benches = orientBenches(environment.streets, frame);
       // Витрины и вывески — только в городе.
       const streetFront = village ? new Set<string>() : findStreetFrontBuildings(collection.features, environment.ground, frame);
-      const parts = assignParts(collection.features, buildingParts);
 
       const buildings = new BuildingsLayer(c, collection, parts, frame, localHeight, village, streetFront, c.csm);
       owned.push(buildings);
@@ -408,21 +439,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       );
       owned.push(details);
 
-      // Деревня из моделей: домам OSM подобраны башкирские дома (изба, пятистенок, вальмовый, кирпичный, баня)
-      // по размеру контура и по тому, какой стороной дом стоит к улице. Дома из частей и сложные — как были.
-      const roadLines = environment.streets.roads.map((r) => r.coords.map(frame.toLocal));
-      const villageHouses: VillageHouse[] = village
-        ? collection.features.flatMap((f) => {
-            if (parts.byBuilding.get(f.properties.id)?.length) return [];
-            if (f.geometry.type === 'MultiPolygon' && f.geometry.coordinates.length > 1) return [];
-            const ring = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0];
-            const house = ring && chooseVillageModel(f.properties.id, ring.map(frame.toLocal), roadLines, f.properties.building);
-            // Цвета кровли и стен — из OSM или по съёмке с дрона (если есть).
-            const roof = f.properties.roofColour;
-            const wall = f.properties.colour;
-            return house ? [roof || wall ? { ...house, colors: { roof, wall } } : house] : [];
-          })
-        : [];
+      if (import.meta.env.DEV) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates });
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
       if (villageModels) owned.push(villageModels);
       const modelIds = new Set(villageHouses.map((h) => h.id));
@@ -488,6 +505,16 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(trees);
       const furniture = new FurnitureLayer(c, lamps, benches, frame, localHeight, c.csm);
       owned.push(furniture);
+      // Трава у ног: только на зелёном покрытии земли, цвет — от него же.
+      const grass = new GrassLayer(c, localHeight, ground.texture.landLevels, c.csm, useAppStore.getState().graphicsQuality === 'high' ? 'high' : 'normal');
+      grass.setEnabled(useAppStore.getState().grassOn);
+      owned.push(grass);
+      owned.push({
+        destroy: useAppStore.subscribe((state, prev) => {
+          if (state.grassOn !== prev.grassOn) grass.setEnabled(state.grassOn);
+          if (state.graphicsQuality !== prev.graphicsQuality) grass.setDensity(state.graphicsQuality === 'high' ? 'high' : 'normal');
+        }),
+      });
       ground.setLamps(furniture.lampSpots());
       const monuments = await LandmarksLayer.create(c, landmarks, frame, localHeight, c.csm);
       owned.push(monuments);
@@ -681,7 +708,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(editor);
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
-      const groundFollowers = [buildings, details, villageModels, estateModels, estateLayer, frontGardens, trees, furniture];
+      const groundFollowers = [buildings, details, villageModels, estateModels, estateLayer, frontGardens, trees, furniture, grass];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
         ground.refreshTerrain(changed);

@@ -163,6 +163,8 @@ interface AppState {
   surveyOn: boolean;
   /** Во сколько раз усилить перепады рельефа (для сравнения; 1 — как в данных). */
   reliefScale: number;
+  /** Трава у ног (на прогулке и низко над землёй). */
+  grassOn: boolean;
   /** Что из съёмки есть у этого района (undefined — съёмки нет). */
   survey?: { terrain: boolean; colored: number; added: number };
   /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
@@ -207,6 +209,7 @@ interface AppState {
   setOutlines: (on: boolean) => void;
   setSurveyOn: (on: boolean) => void;
   setReliefScale: (scale: number) => void;
+  setGrassOn: (on: boolean) => void;
   setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setDriveControls: (controls: DriveControls | undefined) => void;
@@ -252,6 +255,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
   surveyOn: readPref('survey', ['on', 'off'] as const, 'on') === 'on',
   reliefScale: Number(readPref('relief', RELIEF_SCALES.map(String), '1')),
+  grassOn: readPref('grass', ['on', 'off'] as const, 'on') === 'on',
   walkMouseLocked: false,
   driveHud: { speed: 0, gear: 'N' },
   driveView: 'chase',
@@ -341,6 +345,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setReliefScale: (reliefScale) => {
     writePref('relief', String(reliefScale));
     set({ reliefScale });
+  },
+  setGrassOn: (grassOn) => {
+    writePref('grass', grassOn ? 'on' : 'off');
+    set({ grassOn });
   },
   setSurvey: (survey) => set({ survey }),
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),

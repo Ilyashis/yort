@@ -26,6 +26,8 @@ export function InfoPanel() {
   const setSurveyOn = useAppStore((s) => s.setSurveyOn);
   const reliefScale = useAppStore((s) => s.reliefScale);
   const setReliefScale = useAppStore((s) => s.setReliefScale);
+  const grassOn = useAppStore((s) => s.grassOn);
+  const setGrassOn = useAppStore((s) => s.setGrassOn);
 
   const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
   // Панель можно свернуть до выбора места — сцене больше места (запоминается).
@@ -104,6 +106,11 @@ export function InfoPanel() {
               </button>
             ))}
           </div>
+
+          <label className="toggle" title="Пучки травы у ног — на прогулке, за рулём и при низком облёте">
+            <input type="checkbox" checked={grassOn} onChange={(event) => setGrassOn(event.target.checked)} />
+            Трава
+          </label>
 
           {survey && (
             <label className="toggle" title="Своя съёмка с дрона: подробный рельеф, цвета крыш и стен домов, постройки, которых нет в OSM">
