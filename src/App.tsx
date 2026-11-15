@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { BuilderPanel } from './components/BuilderPanel';
 import { BuildingCard } from './components/BuildingCard';
 import { CityViewer } from './components/CityViewer';
@@ -6,7 +7,7 @@ import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
-import { CAN_EDIT } from './config/mode';
+import { CAN_EDIT, PUBLISHED_VIEW } from './config/mode';
 import { MapTreesPanel } from './components/MapTreesPanel';
 
 import { PlotPanel } from './components/PlotPanel';
@@ -14,7 +15,7 @@ import { DriveHud } from './components/DriveHud';
 import { Minimap } from './components/Minimap';
 import { WalkHud } from './components/WalkHud';
 import { WalkPanel } from './components/WalkPanel';
-import { defaultTerritory, findTerritory } from './config/territory';
+import { defaultTerritory, findTerritory, territoryDataUrl } from './config/territory';
 import { isOnStreet, useAppStore } from './store/useAppStore';
 
 /** Панель «Деревья по карте» (сравнить режимы пышности) — скрыта, режим «Средне»; вдруг пригодится. */
@@ -30,11 +31,31 @@ export function App() {
   // «Моя версия» посёлка меняет участки, рельеф и постройки — тоже собираем заново.
   const villagePlan = useAppStore((s) => s.villagePlan && territory.kind === 'village');
   const reliefScale = useAppStore((s) => s.reliefScale);
+  // Зритель: сначала — опубликованный вид (перепады и слои, как у редактора), потом сцена.
+  const [viewFor, setViewFor] = useState<string | undefined>(CAN_EDIT ? territory.id : undefined);
+  useEffect(() => {
+    if (CAN_EDIT) return setViewFor(territory.id);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(territoryDataUrl(territory, PUBLISHED_VIEW), { cache: 'no-cache' });
+        if (response.ok && (response.headers.get('content-type') ?? '').includes('json')) useAppStore.getState().applyView(await response.json());
+      } catch {
+        // Нет опубликованного вида — как по умолчанию.
+      }
+      if (!cancelled) setViewFor(territory.id);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [territory]);
 
   return (
     <main className="app">
       {/* Свой ключ у каждого населённого пункта: при переключении сцена собирается заново. */}
-      <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}:${reliefScale}`} territory={territory} />
+      {viewFor === territory.id && (
+        <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}:${reliefScale}`} territory={territory} />
+      )}
       {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
       <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
         <div className="intro-title">

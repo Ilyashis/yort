@@ -13,6 +13,15 @@ import { CAN_EDIT } from '../config/mode';
 // У зрителя (сайт) слои деревни — всегда одни и те же: сохранённые в браузере настройки слоёв не читаем.
 
 /** Варианты усиления рельефа в панели. */
+/** Вид деревни, который публикует редактор: перепады рельефа и слои. */
+export interface PublishedView {
+  reliefScale: number;
+  surveyOn: boolean;
+  villagePlan: boolean;
+  villageModels: boolean;
+  grassOn: boolean;
+}
+
 export const RELIEF_SCALES = [1, 1.2, 1.5, 2, 3] as const;
 import type { BuildingColorMode } from '../world/base/buildingPlan';
 import type { BaseBuildingProperties, BaseBuildingsStats } from '../world/base/types';
@@ -223,6 +232,8 @@ interface AppState {
   setMapOverlay: (on: boolean) => void;
   setMapOpacity: (opacity: number) => void;
   setMapTrees: (mode: MapTreesMode) => void;
+  /** Опубликованный вид (у зрителя): перепады и слои — как у редактора, без записи в настройки браузера. */
+  applyView: (view: Partial<PublishedView>) => void;
   setMapTreesCount: (count: number | undefined) => void;
   setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
@@ -361,6 +372,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('survey', surveyOn ? 'on' : 'off');
     set({ surveyOn });
   },
+  applyView: (view) =>
+    set({
+      ...(RELIEF_SCALES.includes(view.reliefScale as (typeof RELIEF_SCALES)[number]) ? { reliefScale: view.reliefScale } : {}),
+      ...(typeof view.surveyOn === 'boolean' ? { surveyOn: view.surveyOn } : {}),
+      ...(typeof view.villagePlan === 'boolean' ? { villagePlan: view.villagePlan } : {}),
+      ...(typeof view.villageModels === 'boolean' ? { villageModels: view.villageModels } : {}),
+      ...(typeof view.grassOn === 'boolean' ? { grassOn: view.grassOn } : {}),
+    }),
   setReliefScale: (reliefScale) => {
     writePref('relief', String(reliefScale));
     set({ reliefScale });

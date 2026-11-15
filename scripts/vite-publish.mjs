@@ -1,5 +1,5 @@
-// «Опубликовать» в редакторе: локальный сервер разработки (`npm run dev`) записывает правки деревни и
-// деревья по карте в файлы данных района (public/data/territories/<id>/edits.json и map-trees.json).
+// «Опубликовать» в редакторе: локальный сервер разработки (`npm run dev`) записывает правки деревни, вид
+// (перепады рельефа и слои, view.json) и деревья по карте в файлы данных района (public/data/territories/<id>/edits.json и map-trees.json).
 // В сборке для сайта этого нет. Дальше файлы коммитятся и уходят на сайт вместе с проектом.
 // Отдельным JS-модулем: проверка типов проекта (tsc) идёт без типов Node.
 
@@ -40,6 +40,10 @@ export function publishEdits() {
             if (!body.edits || typeof body.edits !== 'object') return reply(400, { ok: false, error: 'нет правок' });
             const files = ['edits.json'];
             await writeFile(join(folder, 'edits.json'), JSON.stringify(body.edits) + '\n');
+            if (body.view && typeof body.view === 'object') {
+              await writeFile(join(folder, 'view.json'), JSON.stringify(body.view) + '\n');
+              files.push('view.json');
+            }
             if (body.mapTrees && typeof body.mapTrees === 'object') {
               await writeFile(join(folder, 'map-trees.json'), JSON.stringify(body.mapTrees) + '\n');
               files.push('map-trees.json');

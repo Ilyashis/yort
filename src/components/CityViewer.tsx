@@ -1020,7 +1020,13 @@ export function CityViewer({ territory }: { territory: Territory }) {
           const response = await fetch(PUBLISH_URL, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ territory: territory.id, edits: useEditStore.getState().edits, mapTrees: mapTrees.published }),
+            body: JSON.stringify({
+              territory: territory.id,
+              edits: useEditStore.getState().edits,
+              mapTrees: mapTrees.published,
+              // Вид, в котором редактор видит деревню (перепады, слои), — сайт покажет её так же.
+              view: (({ reliefScale, surveyOn, villagePlan, villageModels, grassOn }) => ({ reliefScale, surveyOn, villagePlan, villageModels, grassOn }))(useAppStore.getState()),
+            }),
           });
           const result = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; files?: string[] };
           if (!response.ok || !result.ok) throw new Error(result.error ?? `сервер ответил ${response.status}`);
