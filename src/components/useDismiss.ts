@@ -8,8 +8,9 @@ export function useDismiss(onClose: () => void, buttonSelector: string) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDown = (event: PointerEvent) => {
-      const target = event.target as Element | null;
-      if (ref.current && target && !ref.current.contains(target) && !target.closest?.(buttonSelector)) onClose();
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (ref.current && !ref.current.contains(target) && !target.closest(buttonSelector)) onClose();
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.code !== 'Escape') return;

@@ -132,7 +132,11 @@ function TimePanel({ onClose, lat, lon }: { onClose: () => void; lat: number; lo
         <input type="checkbox" checked={flowing} onChange={(e) => setFlowing(e.target.checked)} />
         Время идёт (сутки за 6 минут)
       </label>
-      <p className="muted sound-note">Летний день, середина июля: солнце по-настоящему, ночью горят окна и фонари.</p>
+      <p className="muted sound-note">
+        {season === 'winter'
+          ? 'Зимний день, конец декабря: солнце низко, день короткий; ночью горят окна, фонари и гирлянды.'
+          : 'Летний день, середина июня: солнце по-настоящему, ночью горят окна и фонари.'}
+      </p>
     </div>
   );
 }
