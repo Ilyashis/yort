@@ -6,6 +6,8 @@ import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
+import { MapTreesPanel } from './components/MapTreesPanel';
+
 import { PlotPanel } from './components/PlotPanel';
 import { DriveHud } from './components/DriveHud';
 import { Minimap } from './components/Minimap';
@@ -13,6 +15,9 @@ import { WalkHud } from './components/WalkHud';
 import { WalkPanel } from './components/WalkPanel';
 import { defaultTerritory, findTerritory } from './config/territory';
 import { isOnStreet, useAppStore } from './store/useAppStore';
+
+/** Панель «Деревья по карте» (сравнить режимы пышности) — скрыта, режим «Средне»; вдруг пригодится. */
+const SHOW_MAP_TREES_PANEL = false;
 
 export function App() {
   const mode = useAppStore((s) => s.mode);
@@ -45,6 +50,7 @@ export function App() {
         <>
           <div className="sidebar">
             <InfoPanel />
+            {SHOW_MAP_TREES_PANEL && <MapTreesPanel />}
             {building ? (
               <BuilderPanel />
             ) : (

@@ -1,3 +1,4 @@
+import type { MapTreesMode } from '../world/base/mapTrees';
 import { create } from 'zustand';
 import { DEFAULT_VOLUMES, type Volumes } from '../audio/AudioEngine';
 import type { GraphicsQuality } from '../three/CityScene';
@@ -168,6 +169,10 @@ interface AppState {
   /** Карта деревни (сгенерированный вид сверху) поверх земли — для дорисовки; прозрачность 0…1. */
   mapOverlay: boolean;
   mapOpacity: number;
+  /** Деревья по карте (снимку с дрона): выкл, редко, средне, пышно — временная панель для сравнения. */
+  mapTrees: MapTreesMode;
+  /** Сколько деревьев по карте посажено сейчас (для панели). */
+  mapTreesCount?: number;
   /** Что из съёмки есть у этого района (undefined — съёмки нет). */
   survey?: { terrain: boolean; colored: number; added: number };
   /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
@@ -215,6 +220,8 @@ interface AppState {
   setGrassOn: (on: boolean) => void;
   setMapOverlay: (on: boolean) => void;
   setMapOpacity: (opacity: number) => void;
+  setMapTrees: (mode: MapTreesMode) => void;
+  setMapTreesCount: (count: number | undefined) => void;
   setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setDriveControls: (controls: DriveControls | undefined) => void;
@@ -262,6 +269,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   reliefScale: Number(readPref('relief', RELIEF_SCALES.map(String), '1')),
   grassOn: readPref('grass', ['on', 'off'] as const, 'on') === 'on',
   mapOverlay: readPref('map-overlay', ['on', 'off'] as const, 'off') === 'on',
+  // Деревья по карте — «Средне» (выбрано сравнением). Панель выбора скрыта, поэтому сохранённый в браузере
+  // режим не читаем: у всех одинаково. Вернуть выбор — MapTreesPanel в App.tsx и readPref('map-trees', …).
+  mapTrees: 'normal' as MapTreesMode,
   mapOpacity: Number(readPref('map-opacity', ['0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1'], '0.7')),
   walkMouseLocked: false,
   driveHud: { speed: 0, gear: 'N' },
@@ -361,6 +371,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('map-overlay', mapOverlay ? 'on' : 'off');
     set({ mapOverlay });
   },
+  setMapTrees: (mapTrees) => {
+    writePref('map-trees', mapTrees);
+    set({ mapTrees });
+  },
+  setMapTreesCount: (mapTreesCount) => set({ mapTreesCount }),
   setMapOpacity: (mapOpacity) => {
     writePref('map-opacity', String(mapOpacity));
     set({ mapOpacity });

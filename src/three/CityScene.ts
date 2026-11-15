@@ -130,9 +130,12 @@ export class CityScene {
         const material = (object as { material?: Material | Material[] }).material;
         if (material && isOverlay(material)) overlays.push(object);
       });
-      // Мелочь (деревья, трава, заборы, палисадники) в AO не идёт: это второй проход всей сцены — вдвое
-      // больше вызовов и треугольников, а затенение углов нужно домам и земле.
-      const skipped = [...this.noAo].filter((object) => object.visible);
+      // Деревья и трава в AO не идут: это второй проход всей сцены — вдвое больше вызовов и треугольников.
+      // Заборы и палисадники — идут (иначе затемнение у стены дома за забором ложится на забор).
+      // Размытие дали и контуры берут глубину из этого же прохода — с ними деревья нужны (иначе крона на фоне
+      // неба размывалась бы как небо).
+      const depthNeeded = this.illustration.uniforms['blurStrength']!.value > 0 || this.illustration.uniforms['useOutlines']!.value > 0;
+      const skipped = depthNeeded ? [] : [...this.noAo].filter((object) => object.visible);
       for (const object of [...overlays, ...skipped]) object.visible = false;
       try {
         renderAo(...args);

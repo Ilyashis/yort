@@ -49,7 +49,6 @@ interface Chunk {
 }
 
 export class PartsLayer {
-  private readonly unskipAo: () => void;
   private readonly group = new Group();
   private readonly materials: HouseMaterials;
   private chunks: Chunk[] = [];
@@ -68,7 +67,6 @@ export class PartsLayer {
     this.group.name = name;
     this.materials = createHouseMaterials(csm);
     city.scene.add(this.group);
-    this.unskipAo = city.skipAo(this.group);
 
     this.removeAnimator = city.addAnimator(() => {
       this.updateLod();
@@ -198,7 +196,6 @@ export class PartsLayer {
 
   destroy(): void {
     this.removeAnimator();
-    this.unskipAo();
     const cic = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
     if (this.idle !== undefined) cic?.(this.idle);
     this.clear();

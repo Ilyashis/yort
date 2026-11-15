@@ -50,6 +50,8 @@ import type { BaseBuildingFeature } from '../world/base/types';
 import { planEstates, type EstateInput, type EstatePlan, type Plot } from '../world/village/estates';
 import { EstateLayer } from '../three/EstateLayer';
 import { editPlan, movePalisade, runKey, type Palisade } from '../world/village/fenceEdits';
+import type { GroundArea, GroundDelta } from '../three/merged';
+import { BlockedGrid, findTreeSpots, inside as insideRing, MAP_TREE_MODES, type MapTreesMode } from '../world/base/mapTrees';
 import type { HouseModelId } from '../world/village/houseModels';
 import { analyzePlot } from '../world/user/plot';
 import { toObstacle, toProperties, userBuildingId } from '../world/user/userBuildings';
@@ -639,6 +641,100 @@ export function CityViewer({ territory }: { territory: Territory }) {
         });
 
       const trees = new TreesLayer(c, [...parkTrees, ...forestTrees], parkTrees.length, frame, localHeight, c.csm);
+      // Деревья по карте (снимку с дрона) — своим слоем: режим пышности меняют на временной панели, чтобы сравнить.
+      const mapTrees: { layer?: TreesLayer; mode?: MapTreesMode; pixels?: Promise<{ rgba: Uint8ClampedArray; w: number; h: number; meta: { west: number; south: number; east: number; north: number } } | undefined>; blocked?: (x: number, y: number) => boolean } = {};
+      const loadMapPixels = () =>
+        (mapTrees.pixels ??= (async () => {
+          try {
+            const response = await fetch(territoryDataUrl(territory, 'render.json'));
+            if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
+            const meta = (await response.json()) as { west: number; south: number; east: number; north: number };
+            const blob = await (await fetch(territoryDataUrl(territory, 'render.webp'))).blob();
+            const image = await createImageBitmap(blob);
+            // Вдвое мельче (≈1,4 м на пиксель): кроны видны, а считать вчетверо быстрее.
+            const w = Math.round(image.width / 2);
+            const h = Math.round(image.height / 2);
+            const canvas = new OffscreenCanvas(w, h);
+            const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+            ctx.drawImage(image, 0, 0, w, h);
+            image.close();
+            return { rgba: ctx.getImageData(0, 0, w, h).data, w, h, meta };
+          } catch (error) {
+            console.warn('[map-trees] карта не загрузилась', error);
+            return undefined;
+          }
+        })());
+      /** Куда деревья по карте не сажаем: дома и постройки, дороги и тропы, уже стоящие деревья, леса OSM, даль. */
+      const mapTreesBlocked = () => {
+        if (mapTrees.blocked) return mapTrees.blocked;
+        const grid = new BlockedGrid(1.5);
+        for (const rings of buildingFootprints) grid.polygon(openRing(rings[0] ?? []).map(frame.toLocal), 2);
+        for (const h of villageHouses) grid.polygon(h.rect, 1.5);
+        for (const h of estateHouses) grid.polygon(h.rect, 1);
+        for (const r of environment.streets.roads) grid.line(r.coords.map(frame.toLocal), r.width / 2 + 1.5);
+        for (const p of environment.streets.paths) grid.line(p.coords.map(frame.toLocal), p.width / 2 + 1);
+        for (const [lon, lat] of parkTrees) grid.circle(...frame.toLocal([lon, lat]), 3);
+        const woods = environment.ground
+          .filter((f) => f.properties.kind === 'green' && f.properties.cover === 'wood')
+          .flatMap(polygonsOfGround)
+          .map((rings) => {
+            const ring = (rings[0] ?? []).map(frame.toLocal);
+            const xs = ring.map((p) => p[0]);
+            const ys = ring.map((p) => p[1]);
+            return { ring, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as const };
+          });
+        // Сажаем вокруг деревни: в прямоугольнике домов с запасом 300 м.
+        const hx = villageHouses.flatMap((h) => h.rect.map((p) => p[0]));
+        const hy = villageHouses.flatMap((h) => h.rect.map((p) => p[1]));
+        const region = hx.length ? [Math.min(...hx) - 300, Math.min(...hy) - 300, Math.max(...hx) + 300, Math.max(...hy) + 300] : [-Infinity, -Infinity, Infinity, Infinity];
+        mapTrees.blocked = (x, y) =>
+          x < region[0]! || y < region[1]! || x > region[2]! || y > region[3]! || grid.has(x, y) || woods.some((w) => x >= w.box[0] && x <= w.box[2] && y >= w.box[1] && y <= w.box[3] && insideRing(x, y, w.ring));
+        return mapTrees.blocked;
+      };
+      const applyMapTrees = async () => {
+        const mode = useAppStore.getState().mapTrees;
+        if (mode === mapTrees.mode) return;
+        mapTrees.mode = mode;
+        mapTrees.layer?.destroy();
+        mapTrees.layer = undefined;
+        if (mode === 'off') {
+          store.setMapTreesCount(undefined);
+          c.requestRender();
+          return;
+        }
+        store.setMapTreesCount(undefined);
+        const map = await loadMapPixels();
+        if (disposed || mapTrees.mode !== mode) return;
+        if (!map) return store.setMapTreesCount(0);
+        const { rgba, w, h, meta } = map;
+        const blocked = mapTreesBlocked();
+        const lonPer = (meta.east - meta.west) / w;
+        const latPer = (meta.north - meta.south) / h;
+        const pixel = latPer * 110_574;
+        const { spacing, cover } = MAP_TREE_MODES[mode];
+        const spots = findTreeSpots(rgba, w, h, (px, py) => frame.toLocal([meta.west + (px + 0.5) * lonPer, meta.north - (py + 0.5) * latPer]), {
+          spacing,
+          cover,
+          pixel,
+          allowed: (x, y) => !blocked(x, y),
+        });
+        // У домов — подробные деревья, дальше — лесные (упрощённые): первыми идут ближние к домам.
+        const near = villageHouses.length ? new BlockedGrid(20) : undefined;
+        for (const v of villageHouses) near?.circle(v.rect[0]![0], v.rect[0]![1], 60);
+        const ordered = [...spots.filter(([x, y]) => near?.has(x, y)), ...spots.filter(([x, y]) => !near?.has(x, y))];
+        const detailed = spots.filter(([x, y]) => near?.has(x, y)).length;
+        const points: TreePoint[] = ordered.map(([x, y, height]) => [...frame.toLonLat([x, y]), height]);
+        mapTrees.layer = new TreesLayer(c, points, detailed, frame, localHeight, c.csm);
+        store.setMapTreesCount(points.length);
+        refreshObstacles();
+        c.requestRender();
+      };
+      owned.push({ destroy: () => mapTrees.layer?.destroy() });
+      owned.push({
+        destroy: useAppStore.subscribe((state, prev) => {
+          if (state.mapTrees !== prev.mapTrees) void applyMapTrees();
+        }),
+      });
       owned.push(trees);
       const furniture = new FurnitureLayer(c, lamps, benches, frame, localHeight, c.csm);
       owned.push(furniture);
@@ -737,6 +833,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const replaced = replacedOsmIds(edits);
         const modelRects = villageModelsOn() ? [...modelAreas].filter(([id]) => !replaced.has(id)).map(([, area]) => area) : [];
         trees.hideWithin([...footprints, ...newRoads], 2, modelRects);
+        mapTrees.layer?.hideWithin([...footprints, ...newRoads], 2, modelRects);
         // Фонари у убранных дорог тоже уходят: проезжая часть + отступ фонаря от бордюра.
         const removedRoads = edits.removedRoads.flatMap((key) => ground.roadOutline(key).map((rings) => rings[0] ?? []));
         if (furniture.hideWithin([...footprints, ...newRoads, ...removedRoads], 2, modelRects)) ground.setLamps(furniture.lampSpots());
@@ -887,7 +984,20 @@ export function CityViewer({ territory }: { territory: Territory }) {
       editStore.setPropTools({ info: (key) => editor.propInfo(key), rotate: (key, delta) => editor.rotateProp(key, delta) });
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
-      const groundFollowers = [buildings, publicDetails, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
+      const groundFollowers: ({ shiftGround: (delta: GroundDelta, area: GroundArea) => void } | undefined)[] = [
+        buildings,
+        publicDetails,
+        details,
+        villageModels,
+        addressPlates,
+        estateModels,
+        estateLayer,
+        frontGardens,
+        trees,
+        furniture,
+        grass,
+        { shiftGround: (delta, area) => mapTrees.layer?.shiftGround(delta, area) },
+      ];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
         ground.refreshTerrain(changed);
@@ -992,6 +1102,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         editLayer.highlight(lines);
       };
       applyEdits();
+      void applyMapTrees();
       const unsubscribeEdits = useEditStore.subscribe((state, prev) => {
         if (state.edits !== prev.edits) applyEdits();
         else if (state.selection !== prev.selection) {
