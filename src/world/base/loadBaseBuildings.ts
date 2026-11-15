@@ -1,9 +1,10 @@
 import { baseBuildingsUrl, territoryDataUrl, type Territory } from '../../config/territory';
 import type { BaseBuildingsCollection, BaseBuildingsStats } from './types';
+import { fetchRetry } from '../../utils/fetchRetry';
 
 export async function loadBaseBuildings(territory: Territory): Promise<BaseBuildingsCollection> {
   const url = baseBuildingsUrl(territory);
-  const response = await fetch(url);
+  const response = await fetchRetry(url);
   if (!response.ok) {
     throw new Error(
       `Не найдены данные зданий (${url}, HTTP ${response.status}). Выполните: npm run data:fetch`,
@@ -15,7 +16,7 @@ export async function loadBaseBuildings(territory: Territory): Promise<BaseBuild
 /** Части зданий (building:part); файла может не быть — тогда частей нет. */
 export async function loadBuildingParts(territory: Territory): Promise<BaseBuildingsCollection['features']> {
   try {
-    const response = await fetch(territoryDataUrl(territory, 'building-parts.geojson'));
+    const response = await fetchRetry(territoryDataUrl(territory, 'building-parts.geojson'));
     if (!response.ok) return [];
     return ((await response.json()) as BaseBuildingsCollection).features;
   } catch {

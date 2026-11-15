@@ -4,6 +4,7 @@ import { EMPTY_EDITS, parseEdits, type EditRoadKind, type EditedBuilding, type E
 import type { FenceStyle } from '../world/village/estates';
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptLevelBy, SculptMode } from '../world/base/sculpt';
+import { fetchRetry } from '../utils/fetchRetry';
 
 /** Инструменты редактора (как в градостроителях): выбор, дом растяжкой, дорога и забор линией, кисть рельефа. */
 export type EditTool = 'select' | 'house' | 'road' | 'fence' | 'terrain';
@@ -73,7 +74,7 @@ export const sameEdits = (a: Edits, b: Edits) => a === b || JSON.stringify(a) ==
 /** Опубликованные правки района (файл данных); нет файла — правок нет. */
 export async function fetchPublishedEdits(url: string): Promise<Edits> {
   try {
-    const response = await fetch(url, { cache: 'no-cache' });
+    const response = await fetchRetry(url, { cache: 'no-cache' });
     if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return EMPTY_EDITS;
     return parseEdits(await response.json()) ?? EMPTY_EDITS;
   } catch {

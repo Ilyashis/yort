@@ -233,6 +233,9 @@ interface AppState {
   /** Переключает населённый пункт: сцена пересоздаётся, постройки пользователя сбрасываются. */
   setTerritory: (id: string) => void;
   setStatus: (status: LoadStatus, error?: string) => void;
+  /** Насколько загружена сцена, 0…1 (для заставки). */
+  loadProgress: number;
+  setLoadProgress: (progress: number) => void;
   setTerrain: (terrain: TerrainKind) => void;
   setStats: (stats: BaseBuildingsStats) => void;
   selectBuilding: (building: BaseBuildingProperties | undefined) => void;
@@ -353,7 +356,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       walkStreet: undefined,
     });
   },
-  setStatus: (status, error) => set({ status, error }),
+  setStatus: (status, error) => set(status === 'loading' ? { status, error, loadProgress: 0 } : { status, error, loadProgress: 1 }),
+  loadProgress: 0,
+  setLoadProgress: (loadProgress) => {
+    if (loadProgress > get().loadProgress) set({ loadProgress });
+  },
   setTerrain: (terrain) => set({ terrain }),
   setStats: (stats) => set({ stats }),
   selectBuilding: (selectedBuilding) => set({ selectedBuilding }),

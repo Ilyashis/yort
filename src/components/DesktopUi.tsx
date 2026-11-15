@@ -57,7 +57,21 @@ const CloseIcon = () => (
 const K = ({ children }: { children: ReactNode }) => <kbd>{children}</kbd>;
 
 /** Круглая кнопка с подсказкой при наведении: название и клавиша. */
-function HudButton({ tip, hotkey, onClick, on, children, className = '' }: { tip: string; hotkey?: string; onClick: () => void; on?: boolean; children: ReactNode; className?: string }) {
+function HudButton({
+  tip,
+  hotkey,
+  onClick,
+  on,
+  children,
+  className = '',
+}: {
+  tip: string;
+  hotkey?: string;
+  onClick: () => void;
+  on?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <div className="d-tip-wrap">
       <button type="button" className={`m-glass m-round d-round ${on ? 'on' : ''} ${className}`} onClick={onClick} aria-label={tip} aria-pressed={on}>
@@ -109,7 +123,14 @@ function SoundTab() {
           <span>
             {label} <b>{Math.round(volumes[key] * 100)}%</b>
           </span>
-          <input type="range" min={0} max={100} value={Math.round(volumes[key] * 100)} disabled={!soundOn} onChange={(e) => setVolumes({ [key]: Number(e.target.value) / 100 })} />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(volumes[key] * 100)}
+            disabled={!soundOn}
+            onChange={(e) => setVolumes({ [key]: Number(e.target.value) / 100 })}
+          />
         </label>
       ))}
       <p className="m-note">Браузер включит звук после первого клика по странице.</p>
@@ -224,7 +245,8 @@ const KEY_ROWS: { title: string; rows: [ReactNode, string][] }[] = [
         <>
           <K>C</K> <K>R</K>
         </>,
-        'камера; вернуть на дорогу'],
+        'камера; вернуть на дорогу',
+      ],
       [<K key="f2">F</K>, 'выйти пешком'],
     ],
   },
@@ -239,12 +261,14 @@ function KeysTab() {
           <h4>{group.title}</h4>
           <dl>
             {/* У редактора T — инструмент «Дорога», атмосфера — только кнопкой. */}
-            {group.rows.filter(([, what]) => !(CAN_EDIT && what.startsWith('время суток'))).map(([keys, what], i) => (
-              <div key={i}>
-                <dt>{keys}</dt>
-                <dd>{what}</dd>
-              </div>
-            ))}
+            {group.rows
+              .filter(([, what]) => !(CAN_EDIT && what.startsWith('время суток')))
+              .map(([keys, what], i) => (
+                <div key={i}>
+                  <dt>{keys}</dt>
+                  <dd>{what}</dd>
+                </div>
+              ))}
           </dl>
         </div>
       ))}
@@ -359,7 +383,17 @@ function Speedometer() {
   return (
     <div className="m-glass d-speedo" aria-live="off">
       <svg viewBox="0 0 132 132" aria-hidden="true">
-        <circle cx="66" cy="66" r="56" fill="none" stroke="rgba(255,255,255,.15)" strokeWidth="6" strokeDasharray={`${arc} 352`} transform="rotate(135 66 66)" strokeLinecap="round" />
+        <circle
+          cx="66"
+          cy="66"
+          r="56"
+          fill="none"
+          stroke="rgba(255,255,255,.15)"
+          strokeWidth="6"
+          strokeDasharray={`${arc} 352`}
+          transform="rotate(135 66 66)"
+          strokeLinecap="round"
+        />
         <circle
           cx="66"
           cy="66"
@@ -403,12 +437,15 @@ export function DesktopUi() {
   const [settings, setSettings] = useState<Tab | undefined>();
   const [lastTab, setLastTab] = useState<Tab>('atmosphere');
   const closeSettings = useCallback(() => setSettings(undefined), []);
-  const openSettings = useCallback((tab?: Tab) => {
-    setSettings((open) => {
-      const next = tab ?? lastTab;
-      return open === next ? undefined : next;
-    });
-  }, [lastTab]);
+  const openSettings = useCallback(
+    (tab?: Tab) => {
+      setSettings((open) => {
+        const next = tab ?? lastTab;
+        return open === next ? undefined : next;
+      });
+    },
+    [lastTab],
+  );
   const setTab = (tab: Tab) => {
     setLastTab(tab);
     setSettings(tab);
@@ -462,7 +499,13 @@ export function DesktopUi() {
 
   const rightButtons = (
     <>
-      <HudButton tip="Атмосфера" hotkey={CAN_EDIT ? undefined : 'T'} className="d-settings-opener" on={settings === 'atmosphere'} onClick={() => openSettings('atmosphere')}>
+      <HudButton
+        tip="Атмосфера"
+        hotkey={CAN_EDIT ? undefined : 'T'}
+        className="d-settings-opener"
+        on={settings === 'atmosphere'}
+        onClick={() => openSettings('atmosphere')}
+      >
         <AtmosphereIcon />
       </HudButton>
       <HudButton tip={soundOn ? 'Выключить звук' : 'Включить звук'} on={soundOn} onClick={() => setSoundOn(!soundOn)}>
@@ -471,7 +514,13 @@ export function DesktopUi() {
       <HudButton tip="Спрятать интерфейс" hotkey="H" onClick={() => setHidden(true)}>
         <HideIcon />
       </HudButton>
-      <HudButton tip="Настройки" hotkey={CAN_EDIT ? undefined : 'Esc'} className="d-settings-opener" on={!!settings && settings !== 'atmosphere'} onClick={() => openSettings(lastTab === 'atmosphere' ? 'sound' : lastTab)}>
+      <HudButton
+        tip="Настройки"
+        hotkey={CAN_EDIT ? undefined : 'Esc'}
+        className="d-settings-opener"
+        on={!!settings && settings !== 'atmosphere'}
+        onClick={() => openSettings(lastTab === 'atmosphere' ? 'sound' : lastTab)}
+      >
         <GearIcon />
       </HudButton>
     </>
@@ -484,23 +533,34 @@ export function DesktopUi() {
           {/* У редактора место выбирают в его панели слева. */}
           {!CAN_EDIT && (
             <div className="d-top-left">
-              <label className="m-glass m-pill d-place">
-                <select value={territoryId} onChange={(e) => setTerritory(e.target.value)} aria-label="Населённый пункт">
-                  {territories.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                <span>{territory?.shortName}</span>
-                <ChevronDown />
-              </label>
+              {territories.length < 2 ? (
+                <button type="button" className="m-glass m-pill" onClick={() => useAppStore.getState().flyHome?.()} title="Показать всю деревню">
+                  {territory?.shortName}
+                </button>
+              ) : (
+                <label className="m-glass m-pill d-place">
+                  <select value={territoryId} onChange={(e) => setTerritory(e.target.value)} aria-label="Населённый пункт">
+                    {territories.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span>{territory?.shortName}</span>
+                  <ChevronDown />
+                </label>
+              )}
               <span className="d-brand">AI UFA</span>
             </div>
           )}
           <div className="d-top-right">
             <Compass />
-            <button type="button" className="m-glass m-round m-small m-text" onClick={() => changeView?.(viewMode === 'top' ? 'tilt' : 'top')} title={viewMode === 'top' ? 'Вид под углом' : 'Вид сверху'}>
+            <button
+              type="button"
+              className="m-glass m-round m-small m-text"
+              onClick={() => changeView?.(viewMode === 'top' ? 'tilt' : 'top')}
+              title={viewMode === 'top' ? 'Вид под углом' : 'Вид сверху'}
+            >
               {viewMode === 'top' ? '3D' : '2D'}
             </button>
           </div>
@@ -540,7 +600,11 @@ export function DesktopUi() {
 
       {picking && (
         <div className="m-glass m-banner d-banner" role="status">
-          <span>{mode === 'pick-drive-start' ? 'Кликните по улице — машина встанет на ближайшую дорогу' : 'Кликните по улице или площади — окажетесь там на уровне глаз'}</span>
+          <span>
+            {mode === 'pick-drive-start'
+              ? 'Кликните по улице — машина встанет на ближайшую дорогу'
+              : 'Кликните по улице или площади — окажетесь там на уровне глаз'}
+          </span>
           <button type="button" className="m-banner-button" onClick={() => controls?.cancelPick()}>
             Отмена <K>Esc</K>
           </button>

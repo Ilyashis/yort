@@ -1,3 +1,4 @@
+import { CAN_EDIT } from './mode';
 import territoriesJson from './territories.json';
 
 export interface Territory {
@@ -16,7 +17,10 @@ export interface Territory {
  * Населённые пункты, между которыми можно переключаться. Новый — добавьте в territories.json
  * и выгрузите данные: TERRITORY=<id> npm run data:fetch.
  */
-export const territories: readonly Territory[] = territoriesJson as Territory[];
+const allTerritories = territoriesJson as Territory[];
+
+/** На сайте пока только деревни (Уфа — у редактора, локально). */
+export const territories: readonly Territory[] = CAN_EDIT ? allTerritories : allTerritories.filter((t) => t.kind === 'village');
 
 export const defaultTerritory: Territory = territories[0]!;
 

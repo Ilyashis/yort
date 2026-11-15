@@ -6,6 +6,7 @@ import { EditPanel } from './components/EditPanel';
 import { EditorToolbar } from './components/EditorToolbar';
 import { HelpPanel } from './components/HelpPanel';
 import { InfoPanel } from './components/InfoPanel';
+import { IntroVeil } from './components/IntroVeil';
 import { CAN_EDIT, PUBLISHED_VIEW } from './config/mode';
 import { MapTreesPanel } from './components/MapTreesPanel';
 
@@ -14,6 +15,7 @@ import { DesktopUi } from './components/DesktopUi';
 import { MobileUi, useDevice } from './components/MobileUi';
 import { defaultTerritory, findTerritory, territoryDataUrl } from './config/territory';
 import { isOnStreet, useAppStore } from './store/useAppStore';
+import { fetchRetry } from './utils/fetchRetry';
 
 /** Панель «Деревья по карте» (сравнить режимы пышности) — скрыта, режим «Средне»; вдруг пригодится. */
 const SHOW_MAP_TREES_PANEL = false;
@@ -21,7 +23,6 @@ const SHOW_MAP_TREES_PANEL = false;
 export function App() {
   const mode = useAppStore((s) => s.mode);
   const building = useAppStore((s) => !!s.builder);
-  const loading = useAppStore((s) => s.status === 'loading');
   const territory = useAppStore((s) => findTerritory(s.territoryId) ?? defaultTerritory);
   // Данные съёмки с дрона меняют рельеф и дома — сцену проще собрать заново.
   const surveyOn = useAppStore((s) => s.surveyOn);
@@ -38,7 +39,7 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const response = await fetch(territoryDataUrl(territory, PUBLISHED_VIEW), { cache: 'no-cache' });
+        const response = await fetchRetry(territoryDataUrl(territory, PUBLISHED_VIEW), { cache: 'no-cache' });
         if (response.ok && (response.headers.get('content-type') ?? '').includes('json')) useAppStore.getState().applyView(await response.json());
       } catch {
         // Нет опубликованного вида — как по умолчанию.
@@ -56,13 +57,8 @@ export function App() {
       {viewFor === territory.id && (
         <CityViewer key={`${territory.id}:${surveyOn ? 'survey' : 'osm'}:${villagePlan ? 'plan' : 'yards'}:${reliefScale}`} territory={territory} />
       )}
-      {/* Плавное появление: пока город грузится, его закрывает мягкая вуаль. */}
-      <div className={`intro-veil ${loading ? '' : 'intro-veil-hidden'}`} aria-hidden={!loading}>
-        <div className="intro-title">
-          AI UFA
-          <span>Загружаем: {territory.shortName}…</span>
-        </div>
-      </div>
+      {/* Заставка: небо с облаками и название; после загрузки — пролёт сквозь облака в деревню. */}
+      <IntroVeil key={territory.id} territory={territory} />
       {mobile ? (
         <>
           {!isOnStreet(mode) && <BuildingCard />}

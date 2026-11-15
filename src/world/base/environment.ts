@@ -1,6 +1,7 @@
 import { territoryDataUrl, type Territory } from '../../config/territory';
 import { EMPTY_STREETS, type StreetsData } from './streetFurniture';
 import type { Ring } from './types';
+import { fetchRetry } from '../../utils/fetchRetry';
 
 /** Тип поверхности земли (порядок отрисовки задаёт GroundLayer). */
 export type GroundKind =
@@ -60,7 +61,7 @@ export async function loadEnvironment(territory: Territory): Promise<Environment
 
 async function fetchOptional<T>(url: string): Promise<T | undefined> {
   try {
-    const response = await fetch(url);
+    const response = await fetchRetry(url);
     return response.ok ? ((await response.json()) as T) : undefined;
   } catch {
     return undefined;

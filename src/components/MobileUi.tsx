@@ -83,7 +83,17 @@ function useDismissOnTouch(show: boolean, done: () => void, timeout = 0) {
 // --- значки ---------------------------------------------------------------------------------------
 
 export const Icon = ({ children, size = 24 }: { children: ReactNode; size?: number }) => (
-  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+  <svg
+    viewBox="0 0 24 24"
+    width={size}
+    height={size}
+    aria-hidden="true"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
     {children}
   </svg>
 );
@@ -162,7 +172,19 @@ export const CameraIcon = () => (
 
 type Sheet = 'atmosphere' | 'more' | 'place';
 
-function RoundButton({ label, onClick, children, on, className = '' }: { label: string; onClick: () => void; children: ReactNode; on?: boolean; className?: string }) {
+function RoundButton({
+  label,
+  onClick,
+  children,
+  on,
+  className = '',
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  on?: boolean;
+  className?: string;
+}) {
   return (
     <div className="m-round-wrap">
       <button type="button" className={`m-glass m-round ${on ? 'on' : ''} ${className}`} onClick={onClick} aria-label={label} aria-pressed={on}>
@@ -347,7 +369,13 @@ function MoreSheet({ onClose, onAtmosphere }: { onClose: () => void; onAtmospher
       {soundOn && (
         <label className="m-volume">
           <span>Громкость {Math.round(volumes.master * 100)}%</span>
-          <input type="range" min={0} max={100} value={Math.round(volumes.master * 100)} onChange={(e) => setVolumes({ master: Number(e.target.value) / 100 })} />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(volumes.master * 100)}
+            onChange={(e) => setVolumes({ master: Number(e.target.value) / 100 })}
+          />
         </label>
       )}
       <div className="m-row">
@@ -497,13 +525,23 @@ function Overview({ setSheet }: { setSheet: (sheet: Sheet | undefined) => void }
 
   return (
     <>
-      <button type="button" className="m-glass m-pill m-place m-sheet-opener" onClick={() => setSheet('place')}>
+      {/* Одно место — касание показывает всю деревню; несколько — список. */}
+      <button
+        type="button"
+        className="m-glass m-pill m-place m-sheet-opener"
+        onClick={() => (territories.length < 2 ? useAppStore.getState().flyHome?.() : setSheet('place'))}
+      >
         {name}
-        <ChevronDown />
+        {territories.length > 1 && <ChevronDown />}
       </button>
       <div className="m-top-right">
         <Compass />
-        <button type="button" className="m-glass m-round m-small m-text" onClick={() => changeView?.(viewMode === 'top' ? 'tilt' : 'top')} aria-label={viewMode === 'top' ? 'Вид под углом' : 'Вид сверху'}>
+        <button
+          type="button"
+          className="m-glass m-round m-small m-text"
+          onClick={() => changeView?.(viewMode === 'top' ? 'tilt' : 'top')}
+          aria-label={viewMode === 'top' ? 'Вид под углом' : 'Вид сверху'}
+        >
           {viewMode === 'top' ? '3D' : '2D'}
         </button>
       </div>
@@ -688,7 +726,19 @@ export const HandbrakeIcon = () => (
 );
 
 /** Кнопка, которую держат: нажата — пока палец на ней. */
-function HoldButton({ pedal, onChange, className, label, children }: { pedal: Pedal; onChange: (pedal: Pedal, on: boolean) => void; className: string; label: string; children: ReactNode }) {
+function HoldButton({
+  pedal,
+  onChange,
+  className,
+  label,
+  children,
+}: {
+  pedal: Pedal;
+  onChange: (pedal: Pedal, on: boolean) => void;
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
   const [pressed, setPressed] = useState(false);
   const set = (on: boolean) => {
     setPressed(on);

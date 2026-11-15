@@ -2,6 +2,7 @@
 // собирает scripts/fetch_parcels.py; его может не быть — тогда участков и адресов нет.
 
 import { territoryDataUrl, type Territory } from '../../config/territory';
+import { fetchRetry } from '../../utils/fetchRetry';
 
 export interface Parcel {
   /** Кадастровый номер. */
@@ -55,7 +56,7 @@ export function parseAddress(address: string | undefined): { street: string; num
 
 export async function loadParcels(territory: Territory): Promise<ParcelsFile | undefined> {
   try {
-    const response = await fetch(territoryDataUrl(territory, 'parcels.json'));
+    const response = await fetchRetry(territoryDataUrl(territory, 'parcels.json'));
     if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
     const file = (await response.json()) as ParcelsFile;
     for (const parcel of file.parcels) Object.assign(parcel, parseAddress(parcel.address));

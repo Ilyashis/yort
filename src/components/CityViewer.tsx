@@ -31,7 +31,7 @@ import { TreesLayer } from '../three/TreesLayer';
 import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
-import { flyToArea, flyToTerritory, focusOf, setIntroView } from '../three/views';
+import { flyToArea, flyToTerritory, focusOf, introLanding, setIntroView, startIntroFlight } from '../three/views';
 import { addStroke, centroidOf, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
 import { findHouseModel } from '../world/village/houseModels';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
@@ -66,6 +66,7 @@ import { StreetIndex } from '../world/walk/streets';
 import { chooseVillageModel, growRect, modelFacadeShift, type VillageHouse } from '../world/village/villagePlan';
 import { VillageModelsLayer } from '../three/VillageModelsLayer';
 import { FrontGardensLayer, type GardenSite } from '../three/FrontGardensLayer';
+import { fetchRetry } from '../utils/fetchRetry';
 
 /** Камера при пересборке сцены (смена рельефа, съёмки, плана): тот же район открывается с того же места. */
 let keptView: { territory: string; position: Vector3; target: Vector3 } | undefined;
@@ -73,7 +74,7 @@ let keptView: { territory: string; position: Vector3; target: Vector3 } | undefi
 /** Рельеф района: сетка DEM из terrain.json; нет файла — плоская земля. */
 async function loadHeights(territory: Territory, survey: boolean): Promise<{ heightAt: (lon: number, lat: number) => number; kind: TerrainKind; credit?: string; detail?: DetailHeights }> {
   try {
-    const response = await fetch(territoryDataUrl(territory, 'terrain.json'));
+    const response = await fetchRetry(territoryDataUrl(territory, 'terrain.json'));
     if (response.ok) {
       const file = (await response.json()) as TerrainFile;
       const grid = decodeTerrainFile(file);
@@ -94,7 +95,7 @@ async function loadHeights(territory: Territory, survey: boolean): Promise<{ hei
 /** Есть ли файл данных района (без скачивания: запрос HEAD; сервер разработки на нет файла отдаёт HTML). */
 async function dataExists(territory: Territory, name: string): Promise<boolean> {
   try {
-    const response = await fetch(territoryDataUrl(territory, name), { method: 'HEAD' });
+    const response = await fetchRetry(territoryDataUrl(territory, name), { method: 'HEAD' });
     return response.ok && !!response.headers.get('content-type')?.includes('json');
   } catch {
     return false;
@@ -104,7 +105,7 @@ async function dataExists(territory: Territory, name: string): Promise<boolean> 
 /** Находки по съёмке с дрона (survey.json): цвета домов и новые постройки; нет файла — нет и находок. */
 async function loadSurvey(territory: Territory): Promise<SurveyFile | undefined> {
   try {
-    const response = await fetch(territoryDataUrl(territory, 'survey.json'));
+    const response = await fetchRetry(territoryDataUrl(territory, 'survey.json'));
     if (!response.ok || !response.headers.get('content-type')?.includes('json')) return undefined;
     return (await response.json()) as SurveyFile;
   } catch {
@@ -115,7 +116,7 @@ async function loadSurvey(territory: Territory): Promise<SurveyFile | undefined>
 /** Подробный рельеф terrain-detail.json — по своей съёмке с дрона; нет файла — нет и уточнения. */
 async function loadDetail(territory: Territory, base: (lon: number, lat: number) => number): Promise<{ heights: DetailHeights; credit: string } | undefined> {
   try {
-    const response = await fetch(territoryDataUrl(territory, 'terrain-detail.json'));
+    const response = await fetchRetry(territoryDataUrl(territory, 'terrain-detail.json'));
     if (!response.ok || !response.headers.get('content-type')?.includes('json')) return undefined;
     const file = (await response.json()) as DetailTerrainFile;
     return { heights: new DetailHeights(decodeDetailFile(file), base), credit: file.metadata.credit };
@@ -230,8 +231,10 @@ export function CityViewer({ territory }: { territory: Territory }) {
     async function init() {
       store.setStatus('loading');
       const surveyOn = useAppStore.getState().surveyOn;
+      store.setLoadProgress(0.05);
       const loaded = await loadHeights(territory, surveyOn);
       if (disposed) return;
+      store.setLoadProgress(0.2);
       // Усиление рельефа (настройка «Рельеф ×k»): перепады от высоты центра района умножаются на k.
       const k = useAppStore.getState().reliefScale;
       const { south: s0, west: w0, north: n0, east: e0 } = territory.bbox;
@@ -290,6 +293,10 @@ export function CityViewer({ territory }: { territory: Territory }) {
       keptView = undefined;
       if (kept) c.setView(kept.position, kept.target);
       else setIntroView(c, territory, frame, localHeight);
+      // Заставка: по ходу загрузки камера летит от дальнего вида к виду вдоль главной улицы.
+      const intro = kept ? undefined : startIntroFlight(c, () => useAppStore.getState().loadProgress);
+      let introLanded = false;
+      if (intro) owned.push(intro);
       store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5));
 
       const [osmCollection, buildingParts, environment, surveyFile, parcelsFile] = await Promise.all([
@@ -377,6 +384,15 @@ export function CityViewer({ territory }: { territory: Territory }) {
             return house ? [roof || wall ? { ...house, colors: { roof, wall } } : house] : [];
           })
         : [];
+      if (intro && village && villageHouses.length) {
+        const centers = villageHouses.map((h) => h.rect[0]!);
+        const focus = focusOf(centers);
+        const landing = focus ? introLanding(focus, roadLines, centers, localHeight) : undefined;
+        if (landing) {
+          intro.land(landing);
+          introLanded = true;
+        }
+      }
 
       // Подробный рельеф (съёмка с дрона) — под жизнь деревни: двор — плоскостью по уклону, под дорогами и
       // тропинками — полотно, под домами и сараями — ровные площадки. Иначе бугры съёмки в пару десятков
@@ -426,11 +442,14 @@ export function CityViewer({ territory }: { territory: Territory }) {
       }
       // Правки места (и мазки кисти рельефа) — до постройки слоёв: всё встаёт на уже поправленную землю.
       // Опубликованные правки (одни для всех) и у редактора — его черновик поверх них.
+      store.setLoadProgress(0.5);
       const publishedEdits = await fetchPublishedEdits(territoryDataUrl(territory, PUBLISHED_EDITS));
       if (disposed) return;
+      store.setLoadProgress(0.6);
       useEditStore.getState().load(territory.id, publishedEdits);
       sculpt.strokes = useEditStore.getState().edits.terrain;
-      if (sculpt.strokes.length) sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
+      // Без рельефа (файл не загрузился) правки кистью не применяем: выровненное по настоящей высоте встало бы столбами.
+      if (sculpt.strokes.length && heights.kind !== 'flat') sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
       const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
       // Оси дорог: асфальт — улицы, грунтовки — проезды (track); по ним — колеи, заплатки, лужи.
       const roadAxes = [
@@ -445,7 +464,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const loadMap = () =>
         (mapTexture ??= (async () => {
           try {
-            const response = await fetch(territoryDataUrl(territory, 'render.json'));
+            const response = await fetchRetry(territoryDataUrl(territory, 'render.json'));
             if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
             const meta = (await response.json()) as { west: number; south: number; east: number; north: number };
             const texture = await new TextureLoader().loadAsync(territoryDataUrl(territory, 'render.webp'));
@@ -653,7 +672,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       /** Опубликованные деревья по карте: { detailed, trees: [lon, lat, высота][] }. */
       const fetchMapTrees = async (): Promise<{ detailed: number; trees: TreePoint[] } | undefined> => {
         try {
-          const response = await fetch(territoryDataUrl(territory, PUBLISHED_MAP_TREES), { cache: 'no-cache' });
+          const response = await fetchRetry(territoryDataUrl(territory, PUBLISHED_MAP_TREES), { cache: 'no-cache' });
           if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
           const data = (await response.json()) as { detailed?: number; trees?: unknown };
           const trees = (Array.isArray(data.trees) ? data.trees : []).filter(
@@ -667,10 +686,10 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const loadMapPixels = () =>
         (mapTrees.pixels ??= (async () => {
           try {
-            const response = await fetch(territoryDataUrl(territory, 'render.json'));
+            const response = await fetchRetry(territoryDataUrl(territory, 'render.json'));
             if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
             const meta = (await response.json()) as { west: number; south: number; east: number; north: number };
-            const blob = await (await fetch(territoryDataUrl(territory, 'render.webp'))).blob();
+            const blob = await (await fetchRetry(territoryDataUrl(territory, 'render.webp'))).blob();
             const image = await createImageBitmap(blob);
             // Вдвое мельче (≈1,4 м на пиксель): кроны видны, а считать вчетверо быстрее.
             const w = Math.round(image.width / 2);
@@ -851,7 +870,9 @@ export function CityViewer({ territory }: { territory: Territory }) {
         }),
       });
       ground.setLamps(furniture.lampSpots());
+      store.setLoadProgress(0.75);
       const monuments = await LandmarksLayer.create(c, landmarks, frame, localHeight, c.csm);
+      store.setLoadProgress(0.9);
       owned.push(monuments);
       if (disposed) return;
       store.setStats(computeStats(collection));
@@ -1420,7 +1441,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // Всё загружено — плавный пролёт к району (у деревни — к домам).
       const focus = village ? focusOf(villageHouses.map((h) => h.rect[0]!)) : undefined;
       store.setFlyHome(() => flyToTerritory(c, territory, frame, localHeight, 1.5, focus));
-      if (!kept) flyToTerritory(c, territory, frame, localHeight, 3.2, focus);
+      // Первый вход: вид заставки уже долетает сам; нет его (город, нет улиц) — обычный пролёт к району.
+      if (!kept && !introLanded) {
+        intro?.destroy();
+        flyToTerritory(c, territory, frame, localHeight, 3.2, focus);
+      }
     }
 
     init().catch((error: unknown) => {
