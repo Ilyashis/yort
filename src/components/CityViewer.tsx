@@ -29,7 +29,7 @@ import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
-import { addStroke, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
+import { addStroke, centroidOf, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
 import { findHouseModel } from '../world/village/houseModels';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import { loadEnvironment, polygonsOfGround, type Environment, type TreePoint } from '../world/base/environment';
@@ -49,7 +49,8 @@ import { planYards, VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
 import type { BaseBuildingFeature } from '../world/base/types';
 import { planEstates, type EstateInput, type EstatePlan, type Plot } from '../world/village/estates';
 import { EstateLayer } from '../three/EstateLayer';
-import { editPlan, runKey } from '../world/village/fenceEdits';
+import { editPlan, movePalisade, runKey, type Palisade } from '../world/village/fenceEdits';
+import type { HouseModelId } from '../world/village/houseModels';
 import { analyzePlot } from '../world/user/plot';
 import { toObstacle, toProperties, userBuildingId } from '../world/user/userBuildings';
 import { Collider } from '../world/walk/collider';
@@ -542,21 +543,66 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const frontGardens = yards.some((y) => y.palisade) ? new FrontGardensLayer(c, localHeight, c.csm) : undefined;
       if (frontGardens) owned.push(frontGardens);
       const villageHouseById = new Map(villageHouses.map((h) => [h.id, h]));
-      let gardensForModels: boolean | undefined;
+      /** Где дом стоял и где стоит сейчас (передвинутые и повёрнутые в редакторе): середина и угол фасада. */
+      const houseFrame = (rect: readonly Vec2[]) => ({ center: centroidOf(rect.slice(0, 4)), angle: Math.atan2(rect[1]![1] - rect[0]![1], rect[1]![0] - rect[0]![0]) });
+      const originalRect = (id: string): Vec2[] | undefined => {
+        const model = villageHouseById.get(id);
+        if (model) return model.rect;
+        const f = featureById.get(id);
+        const ring = f && (f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0]?.[0]);
+        return ring ? openRing(ring).map(frame.toLocal) : undefined;
+      };
+      /** Передвинутые дома: id дома OSM → новый прямоугольник (локальные метры), модель, сдвиг и поворот. */
+      const movedHouses = () => {
+        const out = new Map<string, { rect: Vec2[]; model?: HouseModelId; from: ReturnType<typeof houseFrame>; to: ReturnType<typeof houseFrame> }>();
+        for (const b of useEditStore.getState().edits.buildings) {
+          if (!b.source || b.footprint.length < 3) continue;
+          const before = originalRect(b.source);
+          if (!before || before.length < 3) continue;
+          const rect = b.footprint.map(frame.toLocal);
+          const from = houseFrame(before);
+          const to = houseFrame(rect);
+          if (Math.hypot(to.center[0] - from.center[0], to.center[1] - from.center[1]) < 0.05 && Math.abs(Math.sin(to.angle - from.angle)) < 0.002) continue;
+          out.set(b.source, { rect, ...(b.model ? { model: b.model.id } : {}), from, to });
+        }
+        return out;
+      };
+      /** Палисадник двора с учётом передвинутого дома (перед — до уличного забора, если он рядом). */
+      const palisadeOf = (houseId: string, palisade: NonNullable<Yard['palisade']>, moved: ReturnType<typeof movedHouses>, streets: readonly (readonly Vec2[])[]) => {
+        const m = moved.get(houseId.slice(0, houseId.lastIndexOf(':')));
+        return m ? movePalisade(palisade, m.from, m.to, streets) : palisade;
+      };
+      let gardensKey: string | undefined;
       const placeGardens = (models: boolean) => {
-        if (!frontGardens || gardensForModels === models) return;
-        gardensForModels = models;
+        if (!frontGardens) return;
+        const moved = movedHouses();
+        const plan = currentPlan?.();
+        const key = `${models}|${[...moved].map(([id, m]) => `${id}:${m.rect.flat().map((v) => v.toFixed(2)).join(',')}`).join(';')}|${plan === estates ? '' : 'e'}`;
+        if (key === gardensKey && !plan) return;
+        gardensKey = key;
+        const palisadeAt = new Map((plan ?? estates)?.plots.map((p) => [p.id, p.palisade]) ?? []);
         const sites: GardenSite[] = yards.flatMap((y) => {
-          if (!y.palisade) return [];
-          const { origin, toStreet, width, depth } = y.palisade;
-          const house = models ? villageHouseById.get(y.houseId.slice(0, y.houseId.lastIndexOf(':'))) : undefined;
+          const own = plan ? palisadeAt.get(y.houseId) : y.palisade && palisadeOf(y.houseId, y.palisade, moved, []);
+          if (!own) return [];
+          const { origin, toStreet, width, depth } = own;
+          const id = y.houseId.slice(0, y.houseId.lastIndexOf(':'));
+          const m = moved.get(id);
+          const base = models ? villageHouseById.get(id) : undefined;
+          // Передвинутый дом-модель — по его новому прямоугольнику.
+          const house = base && m ? { ...base, rect: m.rect, model: (m.model ?? base.model) as VillageHouse['model'] } : base;
           const shift = house ? modelFacadeShift(house, origin, toStreet) : 0;
           // Сдвигаем начало палисадника к стене модели — штакетник по улице остаётся на месте.
           const at: Vec2 = [origin[0] + toStreet[0] * shift, origin[1] + toStreet[1] * shift];
           return [{ owner: y.houseId, origin: at, toStreet, width, depth: depth - shift, seed: y.seed }];
         });
+        const sitesKey = JSON.stringify(sites);
+        if (sitesKey === lastSites) return;
+        lastSites = sitesKey;
         frontGardens.setSites(sites);
       };
+      let lastSites = '';
+      /** План участков с правками (заборы, ворота, палисадники передвинутых домов); задаётся ниже, с редактором. */
+      let currentPlan: (() => EstatePlan | undefined) | undefined;
       placeGardens(villageModelsOn());
       if (import.meta.env.DEV) Object.assign(window, { __gardens: frontGardens });
       const applyVillageModels = () => {
@@ -787,20 +833,32 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(editLayer);
       // Участки посёлка с правками заборов (точки) и ворот (место на заборе): пересчёт — только когда они меняются.
       const runKeyList = estates?.runs.map(runKey) ?? [];
-      let planCache: { fences: unknown; gates: unknown; plan: EstatePlan } | undefined;
-      const currentPlan = (): EstatePlan | undefined => {
+      let planCache: { fences: unknown; gates: unknown; buildings: unknown; props: unknown; plan: EstatePlan } | undefined;
+      currentPlan = (): EstatePlan | undefined => {
         if (!estates) return undefined;
-        const { estateFences, gates } = useEditStore.getState().edits;
-        if (planCache?.fences === estateFences && planCache.gates === gates) return planCache.plan;
+        const { estateFences, gates, buildings: editedBuildings, props } = useEditStore.getState().edits;
+        if (planCache?.fences === estateFences && planCache.gates === gates && planCache.buildings === editedBuildings && planCache.props === props) return planCache.plan;
+        // Палисадники передвинутых домов — вместе с домом.
+        const moved = movedHouses();
+        const palisades = new Map<string, Palisade>();
+        for (const p of estates.plots) {
+          if (!p.palisade || !moved.size) continue;
+          const id = p.id.slice(0, p.id.lastIndexOf(':'));
+          if (!moved.has(id)) continue;
+          const streets = estates.runs.filter((r) => r.kind === 'street' && r.owners.includes(p.id)).map((r) => r.line);
+          palisades.set(p.id, palisadeOf(p.id, p.palisade, moved, streets));
+        }
         const known = new Set(runKeyList);
         const mine = estateFences.filter((f) => known.has(f.key));
         const plan = editPlan(estates, {
           lines: new Map(mine.flatMap((f) => (f.line ? [[f.key, f.line.map(frame.toLocal)] as const] : []))),
           gates: new Map(gates.flatMap((g) => (g.at ? [[g.plot, frame.toLocal(g.at)] as const] : []))),
           looks: new Map(mine.map((f) => [f.key, { style: f.style, height: f.height, color: f.color }])),
-          gateOptions: new Map(gates.map((g) => [g.plot, { wicketSide: g.wicketSide, canopy: g.canopy }])),
+          gateOptions: new Map(gates.map((g) => [g.plot, { wicketSide: g.wicketSide, canopy: g.canopy, gate: g.gate, wicket: g.wicket }])),
+          palisades,
+          props: new Map(props.map((q) => [q.key, { ...(q.at ? { at: frame.toLocal(q.at) } : {}), angle: q.angle, removed: q.removed }])),
         });
-        planCache = { fences: estateFences, gates, plan };
+        planCache = { fences: estateFences, gates, buildings: editedBuildings, props, plan };
         return plan;
       };
       const editor = new EditorTool({
@@ -815,7 +873,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
         osmBuildings: collection.features,
         yards,
         models: villageModels,
-        ...(estates ? { estate: { base: estates, plan: () => currentPlan()! } } : {}),
+        yardModels: estateModels,
+        ...(estates ? { estate: { base: estates, plan: () => currentPlan!()! } } : {}),
       });
       owned.push(editor);
       editStore.setFenceTools({
@@ -825,6 +884,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         setLook: (id, target, look) => editor.setFenceLook(id, target, look),
         setGate: (id, patch) => editor.setGateOption(id, patch),
       });
+      editStore.setPropTools({ info: (key) => editor.propInfo(key), rotate: (key, delta) => editor.rotateProp(key, delta) });
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
       const groundFollowers = [buildings, publicDetails, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
@@ -891,10 +951,12 @@ export function CityViewer({ territory }: { territory: Territory }) {
           addedRoads: edits.roads.map((r) => ({ kind: r.kind, axis: r.axis, width: r.width })),
           hiddenGardens: hiddenYards,
         });
-        const plan = currentPlan();
+        const plan = currentPlan?.();
         if (plan) estateLayer?.setPlan(plan);
+        placeGardens(villageModelsOn());
         estateLayer?.setHidden(hiddenYards);
-        estateModels?.setHidden(new Set([...hiddenYards].flatMap((id) => outbuildingsOf.get(id) ?? [])));
+        // Постройки убранных дворов и постройки, передвинутые или убранные в редакторе.
+        estateModels?.setHidden(new Set([...[...hiddenYards].flatMap((id) => outbuildingsOf.get(id) ?? []), ...replacedOsmIds(edits)]));
         editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
         refreshObstacles();
         showSelection();
@@ -917,6 +979,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
         if (selection?.type === 'road') {
           const road = edits.roads.find((r) => r.id === selection.id);
           lines = road ? [road.axis] : ground.roadOutline(selection.id).map((rings) => rings[0] ?? []);
+        } else if (selection?.type === 'prop' && editor.showProp()) {
+          return;
         } else if (selection?.type === 'fence' && editor.showFence()) {
           // Свой забор и забор участка — с ручками: подсветку рисует редактор.
           return;
@@ -947,6 +1011,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           s.setResolver(undefined);
           s.setModelApplier(undefined);
           s.setFenceTools(undefined);
+          s.setPropTools(undefined);
           s.setTool(undefined);
           s.select(undefined);
         },

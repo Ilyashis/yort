@@ -4,7 +4,7 @@
 // убраны оба двора.
 
 import type { CSM } from 'three/addons/csm/CSM.js';
-import { pointAt, type EstatePlan, type FenceRun, type Plot } from '../world/village/estates';
+import { pointAt, type EstatePlan, type EstateProp, type FenceRun, type Plot } from '../world/village/estates';
 import { fenceParts, gateParts, propParts } from '../world/village/estateParts';
 import type { Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
@@ -43,13 +43,7 @@ export class EstateLayer {
       this.plotsOf.set(owner, [plot.id]);
       this.plotsOf.set(`gate:${plot.id}`, [plot.id]);
       if (plot.gate) sites.push(gateSite(plot));
-      for (const prop of plot.props)
-        sites.push({
-          owner,
-          center: prop.at,
-          radius: 3,
-          plan: (far) => [{ parts: propParts(prop, far), anchor: prop.at }],
-        });
+      for (const prop of plot.props) sites.push(propSite(plot, prop));
     }
     this.layer.setSites(sites);
   }
@@ -66,6 +60,10 @@ export class EstateLayer {
       sites.push(...runSites(run, k));
     });
     next.plots.forEach((plot, k) => {
+      if (plot.props !== this.plan.plots[k]?.props) {
+        changed.add(`plot:${plot.id}`);
+        sites.push(...plot.props.map((prop) => propSite(plot, prop)));
+      }
       if (plot.gate === this.plan.plots[k]?.gate) return;
       changed.add(`gate:${plot.id}`);
       if (plot.gate) sites.push(gateSite(plot));
@@ -115,6 +113,10 @@ function runSites(run: FenceRun, k: number): PartsSite[] {
     const [center, radius] = extent(piece.line);
     return { owner: `run:${k}`, center, radius, plan: (far: boolean) => [{ parts: fenceParts(piece, far) }] };
   });
+}
+
+function propSite(plot: Plot, prop: EstateProp): PartsSite {
+  return { owner: `plot:${plot.id}`, center: prop.at, radius: 3, plan: (far) => [{ parts: propParts(prop, far), anchor: prop.at }] };
 }
 
 function gateSite(plot: Plot): PartsSite {

@@ -14,7 +14,15 @@ const SPAN: Record<FenceStyle, number> = {
   picket: 2.4,
   slats: 2.5,
   rails: 3,
+  chainlink: 2.5,
+  brick: 3,
+  lattice: 2.5,
+  ranch: 2.5,
+  wattle: 1.2,
+  euro: 2.5,
 };
+/** Металлические заборы: тонкие столбы без рисунка дерева, ворота — из листа. */
+const METALLIC = new Set<FenceStyle>(['metal', 'chainlink', 'lattice', 'euro', 'brick']);
 /** Низ забора уходит в землю на столько: на склоне он не повисает. */
 const SINK = 0.15;
 
@@ -54,7 +62,8 @@ export function fenceParts(run: FenceRun, far: boolean): HousePart[] {
   const parts: HousePart[] = [];
   const H = run.height;
   const color = run.color;
-  const post = shade(color, run.style === 'metal' ? 0.55 : 0.72);
+  const metallic = METALLIC.has(run.style);
+  const post = run.style === 'chainlink' || run.style === 'lattice' ? shade(color, 0.85) : shade(color, metallic ? 0.55 : 0.72);
   const dice = new Dice(run.seed);
   for (const { a, b } of pieces(run.line, run.cuts)) {
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -64,7 +73,16 @@ export function fenceParts(run: FenceRun, far: boolean): HousePart[] {
     const step = len / count;
     for (let k = 0; k <= count; k++) {
       const p: Vec2 = [a[0] + u[0] * step * k, a[1] + u[1] * step * k];
-      if (run.style === 'rails') {
+      if (run.style === 'brick') {
+        // Кирпичный столб с колпаком.
+        parts.push(box([p[0], p[1], (H + 0.25 - SINK) / 2], [0.38, 0.38, H + 0.25 + SINK], angle, '#9c4a32', 'brick'));
+        if (!far) parts.push(box([p[0], p[1], H + 0.3], [0.46, 0.46, 0.08], angle, '#5a5f63', 'metal'));
+      } else if (run.style === 'wattle') {
+        parts.push({ type: 'cylinder', from: [p[0], p[1], -SINK], to: [p[0], p[1], H + 0.15], radius: 0.035, segments: far ? 3 : 5, color: shade(color, 0.8), surface: 'wood', caps: false });
+      } else if (run.style === 'chainlink' || run.style === 'lattice' || run.style === 'euro') {
+        if (!far || k % 2 === 0 || k === count)
+          parts.push({ type: 'cylinder', from: [p[0], p[1], -SINK], to: [p[0], p[1], H + 0.05], radius: 0.035, segments: far ? 4 : 6, color: post, caps: false });
+      } else if (run.style === 'rails') {
         if (!far || k % 2 === 0 || k === count)
           parts.push({
             type: 'cylinder',
@@ -80,10 +98,10 @@ export function fenceParts(run: FenceRun, far: boolean): HousePart[] {
         parts.push(
           box(
             [p[0], p[1], (H + 0.15 - SINK) / 2],
-            [run.style === 'metal' ? 0.07 : 0.1, run.style === 'metal' ? 0.07 : 0.1, H + 0.15 + SINK],
+            [metallic ? 0.07 : 0.1, metallic ? 0.07 : 0.1, H + 0.15 + SINK],
             angle,
             post,
-            run.style === 'metal' ? undefined : 'wood',
+            metallic ? undefined : 'wood',
           ),
         );
     }
@@ -119,6 +137,74 @@ export function fenceParts(run: FenceRun, far: boolean): HousePart[] {
           }
           break;
         }
+        case 'brick':
+          // Между кирпичными столбами — профнастил.
+          parts.push(box([mid[0], mid[1], (H - 0.1 - SINK) / 2 + 0.1], [span - 0.36, 0.025, H - 0.1], angle, color, 'metal'));
+          parts.push(box([mid[0], mid[1], 0.05], [span - 0.36, 0.3, 0.25], angle, '#9c4a32', 'brick'));
+          break;
+        case 'chainlink': {
+          // Рабица: верх и низ, проволока сеткой (вдали — только верх и низ).
+          const wire = shade(color, 1.1);
+          for (const z of [0.08, H - 0.02]) parts.push(box([mid[0], mid[1], z], [span, 0.03, 0.03], angle, post));
+          if (far) break;
+          for (let z = 0.3; z < H - 0.1; z += 0.25) parts.push(box([mid[0], mid[1], z], [span, 0.008, 0.008], angle, wire));
+          const n = Math.round(span / 0.25);
+          for (let i = 1; i < n; i++) {
+            const s = -span / 2 + (span * i) / n;
+            parts.push(box([mid[0] + u[0] * s, mid[1] + u[1] * s, H / 2], [0.008, 0.008, H - 0.1], angle, wire));
+          }
+          break;
+        }
+        case 'lattice': {
+          // Сварная решётка: две поперечины и частые прутья с пиками.
+          for (const z of [0.15, H - 0.15]) parts.push(box([mid[0], mid[1], z], [span, 0.04, 0.04], angle, color));
+          if (far) {
+            parts.push(box([mid[0], mid[1], H / 2], [span, 0.01, H - 0.1], angle, shade(color, 0.9)));
+            break;
+          }
+          const n = Math.max(2, Math.round(span / 0.14));
+          for (let i = 1; i < n; i++) {
+            const s = -span / 2 + (span * i) / n;
+            parts.push(box([mid[0] + u[0] * s, mid[1] + u[1] * s, (H + 0.08 - SINK) / 2], [0.018, 0.018, H + 0.08 + SINK], angle, color));
+          }
+          break;
+        }
+        case 'ranch': {
+          // Ранчо: широкие горизонтальные доски с просветами.
+          const rows = Math.max(2, Math.round(H / 0.32));
+          for (let i = 0; i < rows; i++) {
+            const z = 0.2 + ((H - 0.3) * (i + 0.5)) / rows;
+            parts.push(box([mid[0], mid[1], z], [span + 0.1, 0.03, ((H - 0.3) / rows) * 0.62], angle, shade(color, dice.range(0.96, 1.04)), 'wood'));
+          }
+          break;
+        }
+        case 'wattle': {
+          // Плетень: прутья, сплетённые между кольями, — частые тонкие слои (вдали — сплошной полосой).
+          if (far) {
+            parts.push(box([mid[0], mid[1], (H - SINK) / 2], [span, 0.06, H + SINK], angle, color, 'wood'));
+            break;
+          }
+          for (let z = 0.08, i = 0; z < H; z += 0.09, i++) {
+            const from: Vec3 = [mid[0] - (u[0] * step) / 2, mid[1] - (u[1] * step) / 2, z];
+            const to: Vec3 = [mid[0] + (u[0] * step) / 2, mid[1] + (u[1] * step) / 2, z];
+            parts.push({ type: 'cylinder', from, to, radius: 0.04, segments: 4, color: shade(color, i % 2 ? 0.9 : 1.05), surface: 'wood', caps: false });
+          }
+          break;
+        }
+        case 'euro': {
+          // Евроштакетник: металлические планки с просветами на двух прожилинах.
+          for (const z of [0.35, H - 0.35]) parts.push(box([mid[0], mid[1], z], [span, 0.04, 0.04], angle, post));
+          if (far) {
+            parts.push(box([mid[0], mid[1], (H * 0.95 - SINK) / 2], [span, 0.02, H * 0.95 + SINK], angle, color, 'metal'));
+            break;
+          }
+          const n = Math.max(1, Math.floor(span / 0.16));
+          for (let i = 0; i < n; i++) {
+            const s = -span / 2 + (span / n) * (i + 0.5);
+            parts.push(box([mid[0] + u[0] * s, mid[1] + u[1] * s, (H - SINK) / 2 + 0.05], [0.11, 0.012, H + SINK - 0.1], angle, color, 'metal'));
+          }
+          break;
+        }
         case 'rails':
           for (const z of far ? [0.45, 0.95] : [0.35, 0.75, 1.1]) {
             const from: Vec3 = [mid[0] - (u[0] * step) / 2, mid[1] - (u[1] * step) / 2, z];
@@ -149,9 +235,10 @@ export function gateParts(gate: EstateGate, height: number, far: boolean): House
   const { at, along: u, inward, gate: G, wicket: Wk, wicketSide } = gate;
   const angle = Math.atan2(u[1], u[0]);
   const H = Math.max(height, 1.6) + 0.15;
-  const post = shade(gate.color, gate.style === 'metal' ? 0.5 : 0.7);
-  const surface: Surface = gate.style === 'metal' ? 'metal' : 'boards';
-  const total = G ? G + 0.2 + Wk : Wk;
+  const metallic = METALLIC.has(gate.style);
+  const post = gate.style === 'brick' ? '#9c4a32' : shade(gate.color, metallic ? 0.5 : 0.7);
+  const surface: Surface = metallic ? 'metal' : 'boards';
+  const total = G && Wk ? G + 0.2 + Wk : G || Wk;
   const pos = (s: number, z: number, out = 0): Vec3 => [at[0] + u[0] * s + inward[0] * out, at[1] + u[1] * s + inward[1] * out, z];
   const parts: HousePart[] = [];
   // Раскладка по along: калитка — на конце wicketSide, ворота — на другом.
@@ -159,17 +246,20 @@ export function gateParts(gate: EstateGate, height: number, far: boolean): House
   const wMid = wEnd - wicketSide * (Wk / 2);
   const postTop = H + (gate.canopy ? 0.55 : 0.25);
   // Столбы: по краям проёма и между калиткой и воротами.
-  const posts = G ? [wEnd, wEnd - wicketSide * (Wk + 0.1), -wEnd] : [wEnd, -wEnd];
-  for (const s of posts) parts.push(box(pos(s, (postTop - SINK) / 2), [0.18, 0.18, postTop + SINK], angle, post, gate.style === 'metal' ? undefined : 'wood'));
-  // Калитка.
-  parts.push(box(pos(wMid, H / 2 + 0.04), [Wk - 0.08, 0.05, H - 0.08], angle, shade(gate.color, 1.04), surface));
-  if (!far) parts.push(box(pos(wMid - wicketSide * (Wk / 2 - 0.15), 1.0, -0.04), [0.04, 0.05, 0.12], angle, '#2b2b2b'));
+  const posts = G && Wk ? [wEnd, wEnd - wicketSide * (Wk + 0.1), -wEnd] : [wEnd, -wEnd];
+  const thick = gate.style === 'brick' ? 0.38 : 0.18;
+  for (const s of posts) parts.push(box(pos(s, (postTop - SINK) / 2), [thick, thick, postTop + SINK], angle, post, gate.style === 'brick' ? 'brick' : metallic ? undefined : 'wood'));
+  // Калитка (если есть).
+  if (Wk) {
+    parts.push(box(pos(wMid, H / 2 + 0.04), [Wk - 0.08, 0.05, H - 0.08], angle, shade(gate.color, 1.04), surface));
+    if (!far) parts.push(box(pos(wMid - wicketSide * (Wk / 2 - 0.15), 1.0, -0.04), [0.04, 0.05, 0.12], angle, '#2b2b2b'));
+  }
   // Створки ворот.
   if (G) {
-    const gMid = -wEnd + wicketSide * (G / 2);
+    const gMid = Wk ? -wEnd + wicketSide * (G / 2) : 0;
     for (const k of [-1, 1]) {
       parts.push(box(pos(gMid + (k * G) / 4, H / 2 + 0.06), [G / 2 - 0.05, 0.05, H - 0.04], angle, gate.color, surface));
-      if (!far && gate.style !== 'metal') {
+      if (!far && !metallic) {
         for (const z of [0.4, H - 0.35]) parts.push(box(pos(gMid + (k * G) / 4, z, 0.04), [G / 2 - 0.1, 0.04, 0.1], angle, shade(gate.color, 0.82), 'wood'));
       }
     }
@@ -181,7 +271,7 @@ export function gateParts(gate: EstateGate, height: number, far: boolean): House
     const z0 = postTop + 0.13;
     const ridge = z0 + 0.45;
     const half = total / 2 + 0.45;
-    const roof = gate.style === 'metal' ? gate.color : shade(gate.color, 0.7);
+    const roof = metallic ? gate.color : shade(gate.color, 0.7);
     for (const side of [-1, 1]) {
       const eave = 0.65 * side;
       parts.push(
@@ -190,7 +280,7 @@ export function gateParts(gate: EstateGate, height: number, far: boolean): House
           [inward[0] * side, inward[1] * side, 1],
           0.04,
           roof,
-          gate.style === 'metal' ? 'metal' : 'boards',
+          metallic ? 'metal' : 'boards',
         ),
       );
     }

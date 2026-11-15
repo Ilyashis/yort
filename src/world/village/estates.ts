@@ -39,7 +39,7 @@ export interface EstateInput {
 
 export type OutbuildingModel = 'shed' | 'banya' | 'outhouse' | 'greenhouse' | 'well';
 export type PropKind = 'woodpile' | 'beehive' | 'haystack' | 'doghouse' | 'bench' | 'compost';
-export type FenceStyle = 'boards' | 'metal' | 'picket' | 'slats' | 'rails';
+export type FenceStyle = 'boards' | 'metal' | 'picket' | 'slats' | 'rails' | 'chainlink' | 'brick' | 'lattice' | 'ranch' | 'wattle' | 'euro';
 export type FenceKind = 'street' | 'side' | 'back';
 
 /** Придуманная постройка двора: модель и прямоугольник под неё (против часовой, первая сторона — фасад с дверью). */
@@ -52,6 +52,8 @@ export interface EstateOutbuilding {
 
 /** Мелочь двора: точка, поворот (рад, ось x детали — вдоль length), длина, зерно. */
 export interface EstateProp {
+  /** Номер в плане участка (после правок мелочи двора — у каждой своей, по нему и правка). */
+  ref?: number;
   kind: PropKind;
   at: Vec2;
   angle: number;
@@ -169,6 +171,12 @@ const COLORS: Record<FenceStyle, string[]> = {
   picket: ['#3d8a58', '#2f8f88', '#2f68b0', '#5f9fcf', '#e7e2d4', '#7a5a3e'],
   slats: ['#8d8579', '#7f776b', '#958a76'],
   rails: ['#8a7a64', '#7d6f5c'],
+  chainlink: ['#8f969b', '#3f6b4f', '#7a8086'],
+  brick: ['#5a3e32', '#3f6b4f', '#7c3a2e', '#3a5f86'],
+  lattice: ['#2b2b2b', '#3a4a3f', '#5a4636'],
+  ranch: ['#f1ede4', '#8a6a48', '#6b4a33', '#4f7a54'],
+  wattle: ['#8b7a5a', '#7a6a4c'],
+  euro: ['#7c3a2e', '#3f6b4f', '#3a5f86', '#6b4a33', '#8a8f86'],
 };
 const HEIGHTS: Record<FenceStyle, number> = {
   boards: 1.8,
@@ -176,6 +184,12 @@ const HEIGHTS: Record<FenceStyle, number> = {
   picket: 1.4,
   slats: 1.35,
   rails: 1.2,
+  chainlink: 1.5,
+  brick: 1.9,
+  lattice: 1.5,
+  ranch: 1.2,
+  wattle: 1.1,
+  euro: 1.6,
 };
 
 const sub = (a: Vec2, b: Vec2): Vec2 => [a[0] - b[0], a[1] - b[1]];

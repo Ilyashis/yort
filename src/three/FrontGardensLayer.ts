@@ -30,6 +30,7 @@ export class FrontGardensLayer {
 
   /** Палисадники заново (например, дома стали моделями — у них свой фасад и своя глубина палисадника). */
   setSites(sites: readonly GardenSite[]): void {
+    if (import.meta.env.DEV) (window as unknown as { __gardenSites?: readonly GardenSite[] }).__gardenSites = sites;
     this.layer.setSites(
       sites
         .filter((site) => site.width >= 1 && site.depth >= 0.3)

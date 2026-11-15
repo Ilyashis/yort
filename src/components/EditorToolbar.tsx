@@ -26,7 +26,7 @@ const TOOLS: { tool: EditTool; label: string; key: string; hint: string; icon: R
     tool: 'select',
     label: 'Выбор',
     key: 'V',
-    hint: 'Клик — выбрать дом, дорогу или забор. Дом тяните мышью; белые точки — растянуть, оранжевая — повернуть. У забора точки тяните (магнит к соседям, Alt — без него), «+» — новая точка, синяя — ворота. Delete — убрать.',
+    hint: 'Клик — выбрать дом, дорогу или забор. Дом тяните мышью; белые точки — растянуть, оранжевая — повернуть. У забора точки тяните (магнит к соседям, Alt — без него), «+» — новая точка, синяя — ворота. Сараи, бани, поленницы, ульи, будки и площадки тоже тянут мышью. Delete — убрать.',
     icon: <path d="M5 3l12 7-5 1.5L9.5 17z" />,
   },
   {
@@ -123,7 +123,8 @@ export function EditorToolbar() {
     edits.removedYards.length +
     edits.terrain.length +
     edits.estateFences.length +
-    edits.gates.length;
+    edits.gates.length +
+    edits.props.length;
 
   const exportEdits = () => {
     const blob = new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' });

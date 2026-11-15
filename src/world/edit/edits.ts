@@ -59,9 +59,20 @@ export interface FenceLook {
   color?: string;
 }
 
+/** Ворота и калитка своего забора. */
+export interface FenceGate {
+  /** Середина проёма (нет — посередине забора). */
+  at?: LonLat;
+  gate?: boolean;
+  wicket?: boolean;
+  wicketSide?: -1 | 1;
+  canopy?: boolean;
+}
+
 export interface EditedFence extends FenceLook {
   id: string;
   line: LonLat[];
+  gate?: FenceGate;
 }
 
 export const FENCE_STYLES: Record<FenceStyle, { label: string; height: number; colors: string[] }> = {
@@ -70,6 +81,12 @@ export const FENCE_STYLES: Record<FenceStyle, { label: string; height: number; c
   picket: { label: 'Штакетник', height: 1.4, colors: ['#3d8a58', '#2f8f88', '#2f68b0', '#5f9fcf', '#e7e2d4', '#7a5a3e'] },
   slats: { label: 'Горбыль', height: 1.35, colors: ['#8d8579', '#7f776b', '#958a76'] },
   rails: { label: 'Жерди', height: 1.2, colors: ['#8a7a64', '#7d6f5c'] },
+  chainlink: { label: 'Рабица', height: 1.5, colors: ['#8f969b', '#3f6b4f', '#7a8086', '#2f5f8f'] },
+  brick: { label: 'Кирпич + профлист', height: 1.9, colors: ['#5a3e32', '#3f6b4f', '#7c3a2e', '#3a5f86', '#8a8f86'] },
+  lattice: { label: 'Решётка', height: 1.5, colors: ['#2b2b2b', '#3a4a3f', '#5a4636', '#2f5f8f'] },
+  ranch: { label: 'Ранчо', height: 1.2, colors: ['#f1ede4', '#8a6a48', '#6b4a33', '#4f7a54'] },
+  wattle: { label: 'Плетень', height: 1.1, colors: ['#8b7a5a', '#7a6a4c', '#9a875f'] },
+  euro: { label: 'Евроштакетник', height: 1.6, colors: ['#7c3a2e', '#3f6b4f', '#3a5f86', '#6b4a33', '#8a8f86', '#e7e2d4'] },
 };
 export const FENCE_HEIGHT: [number, number] = [0.8, 2.6];
 
@@ -84,11 +101,17 @@ export interface EditedEstateFence extends FenceLook {
 }
 
 /** Ворота участка посёлка: место на заборе, сторона калитки, козырёк. */
-export interface EditedGate {
+export interface EditedGate extends FenceGate {
   plot: string;
+}
+
+/** Мелочь двора посёлка (поленница, улей, будка…), передвинутая, повёрнутая или убранная: ключ — «участок#номер». */
+export interface EditedProp {
+  key: string;
   at?: LonLat;
-  wicketSide?: -1 | 1;
-  canopy?: boolean;
+  /** Поворот, рад. */
+  angle?: number;
+  removed?: boolean;
 }
 
 export interface Edits {
@@ -107,6 +130,8 @@ export interface Edits {
   estateFences: EditedEstateFence[];
   /** Ворота участков, передвинутые по забору. */
   gates: EditedGate[];
+  /** Мелочь дворов: передвинутая, повёрнутая, убранная. */
+  props: EditedProp[];
 }
 
 export const EMPTY_EDITS: Edits = {
@@ -119,6 +144,7 @@ export const EMPTY_EDITS: Edits = {
   terrain: [],
   estateFences: [],
   gates: [],
+  props: [],
 };
 
 export const ROAD_KINDS: Record<EditRoadKind, { label: string; width: number }> = {
@@ -203,6 +229,15 @@ export function setFenceLine(edits: Edits, id: string, line: LonLat[]): Edits {
   return { ...edits, fences: edits.fences.map((f) => (f.id === id ? { ...f, line } : f)) };
 }
 
+export function setProp(edits: Edits, key: string, patch: Omit<EditedProp, 'key'>): Edits {
+  const old = edits.props.find((p) => p.key === key);
+  return { ...edits, props: [...edits.props.filter((p) => p.key !== key), { ...old, ...patch, key }] };
+}
+
+export function setFenceGate(edits: Edits, id: string, patch: FenceGate): Edits {
+  return { ...edits, fences: edits.fences.map((f) => (f.id === id ? { ...f, gate: { ...f.gate, ...patch } } : f)) };
+}
+
 export function setFenceLook(edits: Edits, id: string, look: FenceLook): Edits {
   return { ...edits, fences: edits.fences.map((f) => (f.id === id ? { ...f, ...look } : f)) };
 }
@@ -231,7 +266,8 @@ export function isEmpty(edits: Edits): boolean {
     !edits.removedYards.length &&
     !edits.terrain.length &&
     !edits.estateFences.length &&
-    !edits.gates.length
+    !edits.gates.length &&
+    !edits.props.length
   );
 }
 
@@ -267,7 +303,10 @@ export function parseEdits(value: unknown): Edits | undefined {
     removedRoads: strings(v.removedRoads),
     fences: arr<EditedFence>(v.fences)
       .filter((f) => f && typeof f.id === 'string')
-      .map((f) => ({ id: f.id, line: points(f.line), ...parseLook(f) }))
+      .map((f) => {
+        const gate = parseGate(f.gate);
+        return { id: f.id, line: points(f.line), ...parseLook(f), ...(gate ? { gate } : {}) };
+      })
       .filter((f) => f.line.length >= 2),
     removedYards: strings(v.removedYards),
     terrain: arr<unknown>(v.terrain)
@@ -282,15 +321,30 @@ export function parseEdits(value: unknown): Edits | undefined {
       .filter((f) => f.line || f.style || f.height || f.color),
     gates: arr<EditedGate>(v.gates)
       .filter((g) => g && typeof g.plot === 'string')
-      .map((g) => {
-        const [at] = points([g.at]);
+      .map((g) => ({ plot: g.plot, ...parseGate(g) })),
+    props: arr<EditedProp>(v.props)
+      .filter((q) => q && typeof q.key === 'string')
+      .map((q) => {
+        const [at] = points([q.at]);
         return {
-          plot: g.plot,
+          key: q.key,
           ...(at ? { at } : {}),
-          ...(g.wicketSide === 1 || g.wicketSide === -1 ? { wicketSide: g.wicketSide } : {}),
-          ...(typeof g.canopy === 'boolean' ? { canopy: g.canopy } : {}),
+          ...(typeof q.angle === 'number' && Number.isFinite(q.angle) ? { angle: q.angle } : {}),
+          ...(q.removed === true ? { removed: true } : {}),
         };
       }),
+  };
+}
+
+function parseGate(g: FenceGate | undefined): FenceGate | undefined {
+  if (!g || typeof g !== 'object') return undefined;
+  const [at] = (Array.isArray(g.at) && g.at.length === 2 && g.at.every((n) => typeof n === 'number' && Number.isFinite(n)) ? [g.at] : []) as LonLat[];
+  return {
+    ...(at ? { at } : {}),
+    ...(typeof g.gate === 'boolean' ? { gate: g.gate } : {}),
+    ...(typeof g.wicket === 'boolean' ? { wicket: g.wicket } : {}),
+    ...(g.wicketSide === 1 || g.wicketSide === -1 ? { wicketSide: g.wicketSide } : {}),
+    ...(typeof g.canopy === 'boolean' ? { canopy: g.canopy } : {}),
   };
 }
 

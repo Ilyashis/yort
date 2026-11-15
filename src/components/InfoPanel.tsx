@@ -4,7 +4,6 @@ import { RELIEF_SCALES, useAppStore } from '../store/useAppStore';
 import { readPref, writePref } from '../utils/prefs';
 import { BUILDING_COLORS } from '../world/base/buildingPlan';
 
-const percent = (part: number, total: number) => (total ? Math.round((part / total) * 100) : 0);
 
 export function InfoPanel() {
   const territoryId = useAppStore((s) => s.territoryId);
@@ -29,7 +28,6 @@ export function InfoPanel() {
   const grassOn = useAppStore((s) => s.grassOn);
   const setGrassOn = useAppStore((s) => s.setGrassOn);
 
-  const knownHeight = stats ? stats.bySource.height + stats.bySource.levels : 0;
   // Панель можно свернуть до выбора места — сцене больше места (запоминается).
   const [collapsed, setCollapsed] = useState(() => readPref('info', ['open', 'collapsed'] as const, 'open') === 'collapsed');
   const toggleCollapsed = () => {
@@ -79,24 +77,6 @@ export function InfoPanel() {
           {status === 'loading' && <p className="status">Загрузка сцены…</p>}
           {status === 'error' && <p className="status status-error">{error}</p>}
 
-          {stats && (
-            <dl className="stats">
-              <div>
-                <dt>Зданий</dt>
-                <dd>{stats.total}</dd>
-              </div>
-              <div>
-                <dt>Высота из OSM</dt>
-                <dd>{percent(knownHeight, stats.total)}%</dd>
-              </div>
-              <div>
-                <dt>Рельеф</dt>
-                <dd title={terrain === 'drone' ? 'Copernicus DEM, уточнён своей съёмкой с дрона' : undefined}>
-                  {terrain === 'flat' || !terrain ? 'плоский' : terrain === 'drone' ? 'дрон, 1 м' : 'DEM, 30 м'}
-                </dd>
-              </div>
-            </dl>
-          )}
 
           <div className="relief-scale" title="Усилить перепады высот, чтобы сравнить. Сцена пересоберётся, камера останется на месте">
             <span>Перепады</span>

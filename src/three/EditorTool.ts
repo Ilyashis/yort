@@ -27,7 +27,9 @@ import {
   setEstateFences,
   setEstateLook,
   setFenceLine,
+  setFenceGate,
   setFenceLook,
+  setProp,
   setGate,
   type FenceLook,
   areaOf,
@@ -58,8 +60,8 @@ import {
   type LonLat,
 } from '../world/edit/edits';
 import { findHouseModel, type HouseModelId } from '../world/village/houseModels';
-import type { EstatePlan } from '../world/village/estates';
-import { dropPoint, gateHalf, gateSpot, magnet, movePoint, runKey, samePoint } from '../world/village/fenceEdits';
+import type { EstateGate, EstatePlan, EstateProp } from '../world/village/estates';
+import { dropPoint, gateHalf, gateSpot, magnet, movePoint, ownGate, propKey, runKey, samePoint } from '../world/village/fenceEdits';
 import { distanceToSegment, type LocalFrame, type Vec2 } from '../world/walk/localFrame';
 import type { BuildingsLayer } from './BuildingsLayer';
 import type { CityScene } from './CityScene';
@@ -111,7 +113,8 @@ type Drag =
       at: ScreenPoint;
       moved: boolean;
     }
-  | { type: 'gate'; plot: string; streets: Vec2[][]; half: number; current?: Vec2 };
+  | { type: 'gate'; plot: string; streets: Vec2[][]; half: number; current?: Vec2 }
+  | { type: 'prop'; key: string; start: Vec2; from: Vec2; at: ScreenPoint; current?: Vec2 };
 
 export interface EditorContext {
   city: CityScene;
@@ -129,6 +132,8 @@ export interface EditorContext {
   yards: readonly Yard[];
   /** Деревня из моделей: дома OSM, нарисованные башкирскими домами (выбор, правка, скрытие). */
   models?: VillageModelsLayer;
+  /** Постройки дворов посёлка (сараи, бани, туалеты, теплицы, колодцы): их тоже двигают и убирают. */
+  yardModels?: VillageModelsLayer;
   /** Участки посёлка: план и план с правками — заборы правят по точкам, ворота двигают по забору. */
   estate?: { base: EstatePlan; plan: () => EstatePlan };
 }
@@ -154,6 +159,8 @@ export class EditorTool {
   private readonly plotIndex: Map<string, number>;
   /** Выбранная точка выделенного забора (Delete убирает её) и чей это забор. */
   private activeVertex?: { fence: string; point: Vec2 };
+  /** Какие постройки дворов были спрятаны до перетаскивания (вернуть при отмене). */
+  private yardHidden?: Set<string>;
   /** Постройки, которых перетаскиваемый дом касался на своём месте (не мешают ему). */
   private touching = new Set<string>();
   /** Alt зажат — магнит выключен. */
@@ -192,6 +199,22 @@ export class EditorTool {
   resolve(id: string): EditedBuilding | undefined {
     const own = useEditStore.getState().edits.buildings.find((b) => b.id === id);
     if (own) return own;
+    // Постройка двора — в правку той же моделью и в том же прямоугольнике.
+    const shed = this.ctx.yardModels?.house(id);
+    const shedRect = shed && this.ctx.yardModels?.rectLonLat(id);
+    if (shed && shedRect) {
+      return {
+        id,
+        source: id,
+        kind: 'shed',
+        footprint: shedRect,
+        floors: 1,
+        roof: 'gabled',
+        facadeColor: '#8a7a64',
+        roofColor: '#6b7176',
+        model: { id: shed.model, seed: shed.seed },
+      };
+    }
     const info = this.ctx.base.buildingInfo(id);
     if (!info || info.outline.length < 3) return undefined;
     const osm = fromOsm({
@@ -229,6 +252,11 @@ export class EditorTool {
       if (!dropped) return notify('Стык заборов не убрать — его можно передвинуть');
       this.activeVertex = undefined;
       this.commitLines(dropped);
+      return;
+    }
+    if (selection.type === 'prop') {
+      commit(setProp(edits, selection.id, { removed: true }));
+      select(undefined);
       return;
     }
     const next =
@@ -346,6 +374,9 @@ export class EditorTool {
       drag.current = snap?.point ?? point;
       layer.setSnap(snap?.point);
       this.showFenceWith(movePoint(drag.affected, drag.from, drag.current), drag.current);
+    } else if (drag.type === 'prop') {
+      drag.current = [drag.from[0] + point[0] - drag.start[0], drag.from[1] + point[1] - drag.start[1]];
+      this.showProp(drag.current);
     } else if (drag.type === 'gate') {
       const spot = gateSpot(drag.streets, point, drag.half);
       if (!spot) return;
@@ -383,9 +414,15 @@ export class EditorTool {
       this.commitLines(movePoint(drag.affected, drag.from, drag.current));
       return;
     }
+    if (drag.type === 'prop') {
+      if (!drag.current || screenDistance(drag.at, position) <= CLICK_PX) return void this.showProp();
+      store.commit(setProp(store.edits, drag.key, { at: this.ctx.frame.toLonLat(drag.current) as LonLat }));
+      return;
+    }
     if (drag.type === 'gate') {
       if (!drag.current) return void this.showFence();
-      store.commit(setGate(store.edits, drag.plot, { at: this.ctx.frame.toLonLat(drag.current) as LonLat }));
+      const at = this.ctx.frame.toLonLat(drag.current) as LonLat;
+      store.commit(store.edits.fences.some((f) => f.id === drag.plot) ? setFenceGate(store.edits, drag.plot, { at }) : setGate(store.edits, drag.plot, { at }));
       return;
     }
     if (drag.type === 'house') {
@@ -430,6 +467,11 @@ export class EditorTool {
   private pressSelect(position: ScreenPoint, point: Vec2 | undefined): Drag | undefined {
     const { selection } = useEditStore.getState();
     if (selection?.type === 'fence') return this.pressFence(position, selection.id);
+    if (selection?.type === 'prop' && point) {
+      const found = this.propByKey(selection.id);
+      if (!found || Math.hypot(point[0] - found.prop.at[0], point[1] - found.prop.at[1]) > propReach(found.prop)) return undefined;
+      return { type: 'prop', key: selection.id, start: point, from: found.prop.at, at: position };
+    }
     if (selection?.type !== 'building' || !point) return undefined;
     const hit = this.pick(position);
     if (!hit.handle && hit.building !== selection.id) return undefined;
@@ -456,6 +498,9 @@ export class EditorTool {
 
     const point = this.ground(position);
     if (!point) return store.select(undefined);
+    // Мелочь двора (поленница, улей, будка…) — по близости к ней.
+    const prop = this.propAt(point);
+    if (prop) return store.select({ type: 'prop', id: prop });
     // Заборы участков посёлка — ближайший (общий забор — участку с той стороны, где клик).
     if (this.ctx.estate) {
       const plot = this.estatePlotAt(point);
@@ -482,11 +527,12 @@ export class EditorTool {
    */
   private pick([x, y]: ScreenPoint): { handle?: Handle; building?: string; fence?: string } {
     const { city, layer, base, models } = this.ctx;
-    const objects = [...layer.pickables, ...base.pickables, ...(models?.pickables ?? [])].filter((object) => object.visible);
+    const yards = this.ctx.yardModels;
+    const objects = [...layer.pickables, ...base.pickables, ...(models?.pickables ?? []), ...(yards?.pickables ?? [])].filter((object) => object.visible);
     const intersection = city.pickObject(x, y, objects);
     const hit = layer.hit(x, y, intersection);
     if (hit.handle || hit.building || hit.fence) return hit;
-    const building = base.buildingFromPick(intersection)?.id ?? models?.buildingFromPick(intersection);
+    const building = base.buildingFromPick(intersection)?.id ?? models?.buildingFromPick(intersection) ?? yards?.buildingFromPick(intersection);
     return building ? { building } : {};
   }
 
@@ -592,6 +638,62 @@ export class EditorTool {
     store.commit(addFence(store.edits, { id, line: line.map(this.ctx.frame.toLonLat) }));
   }
 
+  // --- мелочь дворов ----------------------------------------------------------------
+
+  /** Мелочь двора под точкой: ключ «участок#номер». */
+  private propAt(point: Vec2): string | undefined {
+    const plan = this.ctx.estate?.plan();
+    if (!plan) return undefined;
+    const removed = new Set(useEditStore.getState().edits.removedYards);
+    let best: { key: string; d: number } | undefined;
+    for (const plot of plan.plots) {
+      if (removed.has(plot.id)) continue;
+      plot.props.forEach((prop, i) => {
+        const d = Math.hypot(point[0] - prop.at[0], point[1] - prop.at[1]);
+        if (d <= propReach(prop) && (!best || d < best.d)) best = { key: propKey(plot.id, prop.ref ?? i), d };
+      });
+    }
+    return best?.key;
+  }
+
+  private propByKey(key: string): { plot: string; prop: EstateProp } | undefined {
+    const plan = this.ctx.estate?.plan();
+    const plotId = key.slice(0, key.lastIndexOf('#'));
+    const index = Number(key.slice(key.lastIndexOf('#') + 1));
+    const plot = plan?.plots[this.plotIndex.get(plotId) ?? -1];
+    const prop = plot?.props.find((q, i) => (q.ref ?? i) === index);
+    return prop ? { plot: plotId, prop } : undefined;
+  }
+
+  /** Подсветка выделенной мелочи двора: кольцо вокруг неё (at — где она сейчас, пока тянут). */
+  showProp(at?: Vec2): boolean {
+    const { selection } = useEditStore.getState();
+    const found = selection?.type === 'prop' ? this.propByKey(selection.id) : undefined;
+    if (!found) return false;
+    const [cx, cy] = at ?? found.prop.at;
+    const r = propReach(found.prop);
+    const ring = Array.from({ length: 33 }, (_, k): LonLat => {
+      const a = (k / 32) * Math.PI * 2;
+      return this.ctx.frame.toLonLat([cx + r * Math.cos(a), cy + r * Math.sin(a)]) as LonLat;
+    });
+    this.ctx.layer.highlight([ring]);
+    this.ctx.layer.setFenceHandles(undefined);
+    return true;
+  }
+
+  /** Что за мелочь и как повёрнута (для панели). */
+  propInfo(key: string): { kind: EstateProp['kind']; angle: number } | undefined {
+    const found = this.propByKey(key);
+    return found && { kind: found.prop.kind, angle: found.prop.angle };
+  }
+
+  rotateProp(key: string, delta: number): void {
+    const found = this.propByKey(key);
+    if (!found) return;
+    const store = useEditStore.getState();
+    store.commit(setProp(store.edits, key, { angle: found.prop.angle + delta }));
+  }
+
   // --- заборы: точки и ворота -------------------------------------------------------
 
   /**
@@ -616,7 +718,15 @@ export class EditorTool {
     const own = edits.fences.find((f) => f.id === id);
     if (own) {
       const style = own.style ?? 'boards';
-      return { own: true, style, height: own.height ?? FENCE_STYLES[style].height, color: own.color, hasStreet: false };
+      const g = own.gate;
+      return {
+        own: true,
+        style,
+        height: own.height ?? FENCE_STYLES[style].height,
+        color: own.color,
+        hasStreet: false,
+        gate: { gate: !!g?.gate, wicket: !!g?.wicket, wicketSide: g?.wicketSide ?? 1, canopy: !!g?.canopy },
+      };
     }
     const estate = this.ctx.estate;
     if (!estate || !this.plotIndex.has(id)) return undefined;
@@ -632,7 +742,7 @@ export class EditorTool {
       height: run.height,
       color: run.color,
       hasStreet: !!street,
-      ...(gate ? { gate: { wicketSide: gate.wicketSide, canopy: gate.canopy } } : {}),
+      gate: { gate: !!gate?.gate, wicket: !!gate?.wicket, wicketSide: gate?.wicketSide ?? 1, canopy: !!gate?.canopy },
     };
   }
 
@@ -648,9 +758,27 @@ export class EditorTool {
   }
 
   /** Ворота участка: сторона калитки, козырёк. */
-  setGateOption(id: string, patch: { wicketSide?: -1 | 1; canopy?: boolean }): void {
+  setGateOption(id: string, patch: { wicketSide?: -1 | 1; canopy?: boolean; gate?: boolean; wicket?: boolean }): void {
     const store = useEditStore.getState();
+    if (store.edits.fences.some((f) => f.id === id)) return store.commit(setFenceGate(store.edits, id, patch));
     store.commit(setGate(store.edits, id, patch));
+  }
+
+  /** Ворота выделенного забора: участка (из плана с правками) или своего; и заборы, по которым их можно двигать. */
+  private gateOf(id: string): { gate: EstateGate; lines: Vec2[][] } | undefined {
+    const own = useEditStore.getState().edits.fences.find((f) => f.id === id);
+    if (own) {
+      const line = own.line.map(this.ctx.frame.toLocal);
+      const style = own.style ?? 'boards';
+      const g = own.gate && ownGate(line, { ...own.gate, at: own.gate.at && this.ctx.frame.toLocal(own.gate.at) }, { style, color: own.color ?? '#8a6a48' });
+      return g ? { gate: g.gate, lines: [line] } : undefined;
+    }
+    const plan = this.ctx.estate?.plan();
+    const gate = plan?.plots[this.plotIndex.get(id) ?? -1]?.gate;
+    if (!plan || !gate) return undefined;
+    const street = plan.runs.filter((r) => r.kind === 'street' && r.owners[0] === id);
+    const lines = (street.length ? street : plan.runs.filter((r) => r.owners.includes(id))).map((r) => r.line);
+    return { gate, lines };
   }
 
   /** Вернуть забор участка и ворота как были. */
@@ -713,14 +841,14 @@ export class EditorTool {
         if (q && Math.hypot(q[0] - p[0], q[1] - p[1]) >= INSERT_MIN_M) spec.inserts.push({ line: key, index: i, point: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2] });
       });
     }
-    // Ворота участка — синей ручкой; пока их тянут — проём подсвечен на заборе.
-    const plot = this.ctx.estate && this.plotIndex.has(id) ? this.ctx.estate.plan().plots[this.plotIndex.get(id)!] : undefined;
+    // Ворота — синей ручкой; пока их тянут — проём подсвечен на заборе.
+    const current = this.gateOf(id)?.gate;
     const highlight = keys.map((k) => lines.get(k)!.map(frame.toLonLat));
-    if (plot?.gate) {
-      spec.gate = gate ?? plot.gate.at;
+    if (current) {
+      spec.gate = gate ?? current.at;
       if (gate) {
-        const half = gateHalf(plot.gate);
-        const along = plot.gate.along;
+        const half = gateHalf(current);
+        const along = current.along;
         highlight.push([frame.toLonLat([gate[0] - along[0] * half, gate[1] - along[1] * half]), frame.toLonLat([gate[0] + along[0] * half, gate[1] + along[1] * half])]);
       }
     }
@@ -735,12 +863,8 @@ export class EditorTool {
     if (!handle) return undefined;
     const lines = this.fenceLines();
     if (handle.handle === 'gate') {
-      const plot = this.ctx.estate?.plan().plots[this.plotIndex.get(id) ?? -1];
-      if (!plot?.gate) return undefined;
-      const streets = this.ctx.estate!.plan()
-        .runs.filter((r) => r.kind === 'street' && r.owners[0] === id)
-        .map((r) => r.line);
-      return streets.length ? { type: 'gate', plot: id, streets, half: gateHalf(plot.gate) } : undefined;
+      const found = this.gateOf(id);
+      return found?.lines.length ? { type: 'gate', plot: id, streets: found.lines, half: gateHalf(found.gate) } : undefined;
     }
     if (handle.handle !== 'vertex' && handle.handle !== 'insert') return undefined;
     let affected: Map<string, Vec2[]>;
@@ -1015,6 +1139,11 @@ export class EditorTool {
     const { edits } = useEditStore.getState();
     this.ctx.base.setHidden(new Set([...edits.removedBuildings, b.id]));
     this.ctx.models?.setHidden(new Set([...replacedOsmIds(edits), b.id]));
+    const yards = this.ctx.yardModels;
+    if (yards) {
+      this.yardHidden = new Set(yards.hiddenIds);
+      yards.setHidden(new Set([...this.yardHidden, b.id]));
+    }
     this.ctx.layer.render(edits, undefined, b.id);
   }
 
@@ -1023,6 +1152,8 @@ export class EditorTool {
     const { edits, selection } = useEditStore.getState();
     this.ctx.base.setHidden(new Set(edits.removedBuildings));
     this.ctx.models?.setHidden(replacedOsmIds(edits));
+    if (this.yardHidden) this.ctx.yardModels?.setHidden(this.yardHidden);
+    this.yardHidden = undefined;
     this.ctx.layer.render(edits, selection?.type === 'building' ? selection.id : undefined);
   }
 
@@ -1052,6 +1183,9 @@ export class EditorTool {
 }
 
 export type { Handle };
+
+/** Насколько близко к мелочи двора клик её выбирает, м. */
+const propReach = (prop: EstateProp) => Math.max(0.9, prop.length / 2 + 0.4);
 
 function pointInRing([x, y]: Vec2, ring: readonly Vec2[]): boolean {
   let inside = false;

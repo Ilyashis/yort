@@ -16,6 +16,7 @@ import {
   removeBuilding,
   removeFence,
   removeRoad,
+  setProp,
   turnFacade,
   upsertBuilding,
   upsertRoad,
@@ -34,6 +35,15 @@ const ROOFS: { roof: EditRoof; label: string }[] = [
   { roof: 'hipped', label: 'Вальмовая' },
 ];
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
+
+const PROP_NAMES: Record<string, string> = {
+  woodpile: 'Поленница',
+  beehive: 'Улей',
+  haystack: 'Стог сена',
+  doghouse: 'Собачья будка',
+  bench: 'Лавочка',
+  compost: 'Компостный ящик',
+};
 
 const FENCE_ORDER = Object.keys(FENCE_STYLES) as (keyof typeof FENCE_STYLES)[];
 
@@ -83,6 +93,7 @@ export function EditPanel() {
   const applyModel = useEditStore((s) => s.applyModel);
   const select = useEditStore((s) => s.select);
   const fenceTools = useEditStore((s) => s.fenceTools);
+  const propTools = useEditStore((s) => s.propTools);
   const [fenceTarget, setFenceTarget] = useState<'street' | 'all'>('street');
   // Другой забор — снова «Уличный».
   useEffect(() => setFenceTarget('street'), [selection?.id]);
@@ -91,6 +102,11 @@ export function EditPanel() {
   const commit = useEditStore.getState().commit;
   const remove = () => {
     const store = useEditStore.getState();
+    if (selection.type === 'prop') {
+      store.commit(setProp(store.edits, selection.id, { removed: true }));
+      store.select(undefined);
+      return;
+    }
     const next =
       selection.type === 'building'
         ? removeBuilding(store.edits, selection.id)
@@ -284,6 +300,31 @@ export function EditPanel() {
     );
   }
 
+  if (selection.type === 'prop') {
+    const info = propTools?.info(selection.id);
+    if (!info) return null;
+    return (
+      <aside className="panel building-card edit-panel">
+        {close}
+        <h2>{PROP_NAMES[info.kind] ?? 'Мелочь двора'}</h2>
+        <p className="muted">Тяните её мышью — встанет, куда отпустите.</p>
+        <div className="button-row">
+          <button type="button" className="button" onClick={() => propTools?.rotate(selection.id, Math.PI / 6)} title="Повернуть против часовой на 30°">
+            ↺ Повернуть
+          </button>
+          <button type="button" className="button" onClick={() => propTools?.rotate(selection.id, -Math.PI / 6)} title="Повернуть по часовой на 30°">
+            ↻ Повернуть
+          </button>
+        </div>
+        <div className="button-row">
+          <button type="button" className="button" onClick={remove}>
+            Убрать <kbd>Del</kbd>
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   if (selection.type === 'road') {
     const road = edits.roads.find((r) => r.id === selection.id);
     return (
@@ -381,9 +422,17 @@ export function EditPanel() {
               ))}
             </div>
           </div>
-          {info.gate && (
-            <div className="field">
-              <span>Ворота</span>
+          <div className="field">
+            <span>Ворота и калитка</span>
+            <label className="toggle">
+              <input type="checkbox" checked={info.gate.gate} onChange={(e) => fenceTools?.setGate(selection.id, { gate: e.target.checked })} />
+              Ворота (две створки, проезд)
+            </label>
+            <label className="toggle">
+              <input type="checkbox" checked={info.gate.wicket} onChange={(e) => fenceTools?.setGate(selection.id, { wicket: e.target.checked })} />
+              Калитка
+            </label>
+            {info.gate.gate && info.gate.wicket && (
               <div className="segmented segmented-small" role="group" aria-label="Калитка">
                 <button type="button" className={info.gate.wicketSide === -1 ? 'active' : ''} onClick={() => fenceTools?.setGate(selection.id, { wicketSide: -1 })}>
                   Калитка слева
@@ -392,18 +441,21 @@ export function EditPanel() {
                   Калитка справа
                 </button>
               </div>
+            )}
+            {(info.gate.gate || info.gate.wicket) && (
               <label className="toggle">
                 <input type="checkbox" checked={info.gate.canopy} onChange={(e) => fenceTools?.setGate(selection.id, { canopy: e.target.checked })} />
-                Козырёк над воротами
+                Козырёк над входом
               </label>
-            </div>
-          )}
+            )}
+            {(info.gate.gate || info.gate.wicket) && <p className="muted">Синюю точку на заборе тяните — проём поедет вдоль забора.</p>}
+          </div>
         </>
       )}
       {editable && (
         <p className="muted">
           Тяните белые точки — у соседской точки или забора они примагнитятся (Alt — без магнита). «+» на середине — новая точка; клик по точке и{' '}
-          <kbd>Del</kbd> — убрать излом.{!own && ' Синюю точку — ворота — двигайте вдоль уличного забора.'}
+          <kbd>Del</kbd> — убрать излом.
         </p>
       )}
       <div className="button-row">

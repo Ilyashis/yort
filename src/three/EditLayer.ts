@@ -40,7 +40,8 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { hashString } from '../utils/hash';
 import { chimneys, FENCE_COLOR_HEX } from '../world/base/buildingDetails';
-import { fenceParts } from '../world/village/estateParts';
+import { fenceParts, gateParts } from '../world/village/estateParts';
+import { ownGate } from '../world/village/fenceEdits';
 import type { FenceRun } from '../world/village/estates';
 import type { HousePart } from '../world/village/houseParts';
 import { onGround } from './PartsLayer';
@@ -523,6 +524,13 @@ export class EditLayer {
       height: fence.height ?? FENCE_STYLES[style].height,
       seed,
     };
+    // Ворота и калитка — проёмом в заборе, на земле в середине проёма.
+    const gate = fence.gate && ownGate(run.line, { ...fence.gate, at: fence.gate.at && this.frame.toLocal(fence.gate.at) }, run);
+    if (gate) {
+      run.cuts = [gate.cut];
+      const ground = this.heightAt(gate.gate.at[0], gate.gate.at[1]);
+      for (const part of gateParts(gate.gate, run.height, false)) out.push(onGround(part, ground, this.heightAt));
+    }
     for (const part of fenceParts(run, false)) out.push(onGround(part, undefined, this.heightAt));
   }
 

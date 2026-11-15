@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../walk/localFrame';
 import type { EstatePlan, FenceRun, Plot } from './estates';
-import { dropPoint, editPlan, gateHalf, gateSpot, magnet, movePoint, runKey } from './fenceEdits';
+import { dropPoint, editPlan, gateHalf, gateSpot, magnet, movePalisade, movePoint, ownGate, propKey, runKey } from './fenceEdits';
 
 const run = (owners: string[], kind: FenceRun['kind'], line: Vec2[], cuts: [number, number][] = []): FenceRun => ({
   owners,
@@ -163,5 +163,65 @@ describe('правки заборов посёлка', () => {
       2,
     );
     expect(spot).toEqual([7, 0]);
+  });
+
+  it('ворота и калитку включают и выключают', () => {
+    const base = plan();
+    const onlyWicket = editPlan(base, { lines: new Map(), gates: new Map(), gateOptions: new Map([['a', { gate: false }]]) });
+    expect(onlyWicket.plots[0]!.gate!.gate).toBe(0);
+    expect(onlyWicket.plots[0]!.gate!.wicket).toBe(1);
+    expect(onlyWicket.runs[0]!.cuts).toEqual([[10 - 0.6, 10 + 0.6]]);
+    const none = editPlan(base, { lines: new Map(), gates: new Map(), gateOptions: new Map([['a', { gate: false, wicket: false }]]) });
+    expect(none.plots[0]!.gate).toBeUndefined();
+    expect(none.plots[0]!.driveway).toBeUndefined();
+    expect(none.runs[0]!.cuts).toEqual([]);
+    // Участку без ворот их ставят — посередине забора.
+    const bare = { ...base, plots: [{ ...base.plots[0]!, gate: undefined }], runs: [{ ...base.runs[0]!, cuts: [] }, base.runs[1]!] };
+    const added = editPlan(bare, { lines: new Map(), gates: new Map(), gateOptions: new Map([['a', { wicket: true }]]) });
+    expect(added.plots[0]!.gate!.wicket).toBe(1);
+    expect(added.plots[0]!.gate!.at[0]).toBeCloseTo(10);
+    expect(added.runs[0]!.cuts.length).toBe(1);
+  });
+
+  it('свой забор: ворота посередине или в точке, проём — вырезом', () => {
+    const line: Vec2[] = [
+      [0, 0],
+      [20, 0],
+    ];
+    const g = ownGate(line, { gate: true, wicket: true }, { style: 'boards', color: '#000' })!;
+    expect(g.gate.at).toEqual([10, 0]);
+    expect(g.cut[1] - g.cut[0]).toBeCloseTo(4.5);
+    expect(ownGate(line, { gate: true, at: [1, 3] }, { style: 'boards', color: '#000' })!.gate.at[0]).toBeCloseTo(1.8);
+    expect(ownGate(line, {}, { style: 'boards', color: '#000' })).toBeUndefined();
+  });
+
+  it('палисадник едет с домом, перед — снова на заборе', () => {
+    const p = { origin: [10, 8] as Vec2, toStreet: [0, -1] as Vec2, width: 6, depth: 8 };
+    const moved = movePalisade(p, { center: [10, 12], angle: 0 }, { center: [14, 10], angle: 0 }, [
+      [
+        [0, 0],
+        [20, 0],
+      ],
+    ]);
+    expect(moved.origin).toEqual([14, 6]);
+    expect(moved.depth).toBeCloseTo(6);
+  });
+
+  it('мелочь двора двигают, поворачивают и убирают', () => {
+    const base = plan();
+    const props = [
+      { kind: 'bench' as const, at: [5, 5] as Vec2, angle: 0, length: 1.5, seed: 1 },
+      { kind: 'woodpile' as const, at: [15, 20] as Vec2, angle: 0, length: 2, seed: 2 },
+    ];
+    const withProps = { ...base, plots: [{ ...base.plots[0]!, props }] };
+    const next = editPlan(withProps, {
+      lines: new Map(),
+      gates: new Map(),
+      props: new Map([
+        [propKey('a', 0), { removed: true }],
+        [propKey('a', 1), { at: [16, 21] as Vec2, angle: 1 }],
+      ]),
+    });
+    expect(next.plots[0]!.props).toEqual([{ ...props[1]!, ref: 1, at: [16, 21], angle: 1 }]);
   });
 });

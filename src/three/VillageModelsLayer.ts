@@ -229,6 +229,11 @@ export class VillageModelsLayer {
   }
 
   /** Модель дома (если он сейчас нарисован моделью). */
+  /** Какие дома сейчас не рисуются. */
+  get hiddenIds(): ReadonlySet<string> {
+    return this.hidden;
+  }
+
   house(id: string): VillageHouse | undefined {
     return this.group.visible && !this.hidden.has(id) ? this.byId.get(id) : undefined;
   }

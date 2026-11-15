@@ -28,7 +28,8 @@ export interface FenceInfo {
   color?: string;
   /** У участка есть уличный забор (иначе вид — у всех его заборов). */
   hasStreet: boolean;
-  gate?: { wicketSide: -1 | 1; canopy: boolean };
+  /** Ворота и калитка: есть ли, сторона калитки, козырёк. */
+  gate: { gate: boolean; wicket: boolean; wicketSide: -1 | 1; canopy: boolean };
 }
 
 /** Как рисовать дорогу: по точкам, линией (карандаш) или кистью (свободная форма, своя ширина). */
@@ -37,7 +38,9 @@ export type RoadDraw = 'points' | 'line' | 'brush';
 export type Selection =
   | { type: 'building'; id: string }
   | { type: 'road'; id: string }
-  | { type: 'fence'; id: string };
+  | { type: 'fence'; id: string }
+  /** Мелочь двора посёлка (id — ключ «участок#номер»). */
+  | { type: 'prop'; id: string };
 
 const HISTORY_LIMIT = 100;
 const storageKey = (territoryId: string) => `citia:edits:${territoryId}`;
@@ -81,8 +84,10 @@ interface EditState {
     reset: (id: string) => void;
     info: (id: string) => FenceInfo | undefined;
     setLook: (id: string, target: 'street' | 'all', look: FenceLook) => void;
-    setGate: (id: string, patch: { wicketSide?: -1 | 1; canopy?: boolean }) => void;
+    setGate: (id: string, patch: { wicketSide?: -1 | 1; canopy?: boolean; gate?: boolean; wicket?: boolean }) => void;
   };
+  /** Мелочь дворов: что это и поворот (регистрирует сцена). */
+  propTools?: { info: (key: string) => { kind: string; angle: number } | undefined; rotate: (key: string, delta: number) => void };
   /** Дорога: как рисовать и ширина (нет — по типу дороги). */
   roadDraw: RoadDraw;
   roadWidth?: number;
@@ -104,6 +109,7 @@ interface EditState {
   setRoadDraw: (mode: RoadDraw) => void;
   setRoadWidth: (width: number | undefined) => void;
   setFenceTools: (tools: EditState['fenceTools']) => void;
+  setPropTools: (tools: EditState['propTools']) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -136,6 +142,7 @@ export const useEditStore = create<EditState>()((set, get) => ({
   setRoadDraw: (roadDraw) => set({ roadDraw }),
   setRoadWidth: (roadWidth) => set({ roadWidth }),
   setFenceTools: (fenceTools) => set({ fenceTools }),
+  setPropTools: (propTools) => set({ propTools }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();
