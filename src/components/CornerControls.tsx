@@ -79,6 +79,8 @@ function TimePanel({ onClose, lat, lon }: { onClose: () => void; lat: number; lo
   const flowing = useAppStore((s) => s.timeFlowing);
   const setTime = useAppStore((s) => s.setTimeOfDay);
   const setFlowing = useAppStore((s) => s.setTimeFlowing);
+  const season = useAppStore((s) => s.season);
+  const setSeason = useAppStore((s) => s.setSeason);
   const ref = useDismiss(onClose, '.time-button');
   const gradient = useMemo(() => skyGradient(lat, lon), [lat, lon]);
   const near = (a: number, b: number) => Math.abs(((a - b + 36) % 24) - 12) < 0.05;
@@ -107,6 +109,17 @@ function TimePanel({ onClose, lat, lon }: { onClose: () => void; lat: number; lo
         <span>12</span>
         <span>18</span>
         <span>24</span>
+      </div>
+      <div className="time-head time-season">
+        <span>Время года</span>
+      </div>
+      <div className="segmented segmented-small" role="group" aria-label="Время года">
+        <button type="button" className={season === 'summer' ? 'active' : ''} onClick={() => setSeason('summer')}>
+          Лето
+        </button>
+        <button type="button" className={season === 'winter' ? 'active' : ''} onClick={() => setSeason('winter')} title="Снег, зимнее солнце, гирлянды на домах и ёлка">
+          Зима
+        </button>
       </div>
       <div className="segmented segmented-small">
         {TIME_PRESETS.map((preset) => (

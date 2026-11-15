@@ -110,8 +110,11 @@ export function sunElevationAt(hours: number, lat: number, lon: number): number 
 }
 
 /** Местное время (часы, дробные) → момент UTC того же дня. */
-export function dateAt(hours: number): Date {
-  const { year, month, day } = DAY;
+/** Зимний день: солнце низко, день короткий. */
+export const WINTER_DAY = { year: 2026, month: 11, day: 25 };
+
+export function dateAt(hours: number, winter = false): Date {
+  const { year, month, day } = winter ? WINTER_DAY : DAY;
   return new Date(Date.UTC(year, month, day) + (hours - UTC_OFFSET_HOURS) * 3_600_000);
 }
 

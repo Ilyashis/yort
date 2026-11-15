@@ -25,6 +25,8 @@ import { TerrainBrush } from '../three/TerrainBrush';
 import { OverviewControls } from '../three/OverviewControls';
 import { PlotTool } from '../three/PlotTool';
 import { UserBuildingsLayer } from '../three/UserBuildingsLayer';
+import { GarlandsLayer, type GarlandHouse } from '../three/GarlandsLayer';
+import { SnowfallLayer } from '../three/SnowfallLayer';
 import { TreesLayer } from '../three/TreesLayer';
 import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
@@ -728,6 +730,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           if (disposed || mapTrees.mode !== mode) return;
           if (!published) return store.setMapTreesCount(0);
           mapTrees.layer = new TreesLayer(c, published.trees, published.detailed, frame, localHeight, c.csm);
+          mapTrees.layer.setWinter(useAppStore.getState().season === 'winter');
           store.setMapTreesCount(published.trees.length);
           refreshObstacles();
           c.requestRender();
@@ -755,6 +758,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const detailed = spots.filter(([x, y]) => near?.has(x, y)).length;
         const points: TreePoint[] = ordered.map(([x, y, height]) => [...frame.toLonLat([x, y]), height]);
         mapTrees.layer = new TreesLayer(c, points, detailed, frame, localHeight, c.csm);
+        mapTrees.layer.setWinter(useAppStore.getState().season === 'winter');
         // Для «Опубликовать»: эти же деревья — в файл, зритель возьмёт их оттуда.
         mapTrees.published = { detailed, trees: points.map(([lon, lat, height]): TreePoint => [round7(lon), round7(lat), Math.round(height * 10) / 10]) };
         store.setMapTreesCount(points.length);
@@ -772,12 +776,78 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(furniture);
       // Трава у ног: только на зелёном покрытии земли, цвет — от него же.
       const grass = new GrassLayer(c, localHeight, ground.texture.landLevels, c.csm, useAppStore.getState().graphicsQuality === 'high' ? 'high' : 'normal');
-      grass.setEnabled(useAppStore.getState().grassOn);
+      // Зимой травы нет — снег.
+      const grassWanted = () => useAppStore.getState().grassOn && useAppStore.getState().season !== 'winter';
+      grass.setEnabled(grassWanted());
       owned.push(grass);
       owned.push({
         destroy: useAppStore.subscribe((state, prev) => {
-          if (state.grassOn !== prev.grassOn) grass.setEnabled(state.grassOn);
+          if (state.grassOn !== prev.grassOn || state.season !== prev.season) grass.setEnabled(grassWanted());
           if (state.graphicsQuality !== prev.graphicsQuality) grass.setDensity(state.graphicsQuality === 'high' ? 'high' : 'normal');
+        }),
+      });
+      // Зима: снег, зимнее солнце, голые лиственные деревья, снегопад, гирлянды на домах и ёлка.
+      const snowfall = new SnowfallLayer(c, (x, z) => localHeight(x, -z));
+      owned.push(snowfall);
+      const garlands = new GarlandsLayer(c, localHeight, c.csm);
+      owned.push(garlands);
+      let garlandsKey = '';
+      /** Место для ёлки: у главной дороги в середине деревни, на свободной земле. */
+      const treeSpot = (() => {
+        if (!village || !villageHouses.length) return undefined;
+        const cx = villageHouses.reduce((s, h) => s + h.rect[0]![0], 0) / villageHouses.length;
+        const cy = villageHouses.reduce((s, h) => s + h.rect[0]![1], 0) / villageHouses.length;
+        const blocked = new BlockedGrid(1.5);
+        for (const rings of buildingFootprints) blocked.polygon(openRing(rings[0] ?? []).map(frame.toLocal), 3);
+        for (const h of villageHouses) blocked.polygon(h.rect, 3);
+        for (const r of environment.streets.roads) blocked.line(r.coords.map(frame.toLocal), r.width / 2 + 2);
+        let best: { p: Vec2; d: number } | undefined;
+        for (const r of environment.streets.roads) {
+          const line = r.coords.map(frame.toLocal);
+          for (let k = 1; k < line.length; k++) {
+            const [ax, ay] = line[k - 1]!;
+            const [bx, by] = line[k]!;
+            const len = Math.hypot(bx - ax, by - ay) || 1;
+            const nx = -(by - ay) / len;
+            const ny = (bx - ax) / len;
+            for (let t = 0; t <= 1; t += 0.25) {
+              for (const side of [1, -1]) {
+                const p: Vec2 = [ax + (bx - ax) * t + nx * side * (r.width / 2 + 7), ay + (by - ay) * t + ny * side * (r.width / 2 + 7)];
+                if (blocked.has(p[0], p[1])) continue;
+                const d = Math.hypot(p[0] - cx, p[1] - cy);
+                if (!best || d < best.d) best = { p, d };
+              }
+            }
+          }
+        }
+        return best?.p;
+      })();
+      /** Гирлянды — на домах, какими их видно сейчас: дома-модели и изменённые в редакторе (с моделью). */
+      const refreshGarlands = () => {
+        if (useAppStore.getState().season !== 'winter') return;
+        const { edits } = useEditStore.getState();
+        const replaced = replacedOsmIds(edits);
+        const houses: GarlandHouse[] = [
+          ...(villageModelsOn() ? villageHouses.filter((h) => !replaced.has(h.id)) : []),
+          ...edits.buildings.flatMap((b) => (b.model && b.footprint.length === 4 ? [{ rect: b.footprint.map(frame.toLocal), model: b.model.id, seed: b.model.seed }] : [])),
+        ];
+        const key = JSON.stringify(houses.map((h) => [h.model, h.seed, h.rect.flat().map((v) => v.toFixed(2))]));
+        if (key === garlandsKey) return;
+        garlandsKey = key;
+        garlands.build(houses, treeSpot);
+      };
+      const applySeason = () => {
+        const winter = useAppStore.getState().season === 'winter';
+        c.setSeason(winter);
+        trees.setWinter(winter);
+        mapTrees.layer?.setWinter(winter);
+        snowfall.setEnabled(winter);
+        refreshGarlands();
+        garlands.setVisible(winter);
+      };
+      owned.push({
+        destroy: useAppStore.subscribe((state, prev) => {
+          if (state.season !== prev.season) applySeason();
         }),
       });
       ground.setLamps(furniture.lampSpots());
@@ -1060,6 +1130,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         furniture,
         grass,
         { shiftGround: (delta, area) => mapTrees.layer?.shiftGround(delta, area) },
+        garlands,
       ];
       const followGround = (change: SculptChange) => {
         const changed = changeRect(change);
@@ -1132,6 +1203,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         estateModels?.setHidden(new Set([...[...hiddenYards].flatMap((id) => outbuildingsOf.get(id) ?? []), ...replacedOsmIds(edits)]));
         editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
         refreshObstacles();
+        refreshGarlands();
         showSelection();
       };
 
@@ -1165,6 +1237,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         editLayer.highlight(lines);
       };
       applyEdits();
+      applySeason();
       void applyMapTrees();
       const unsubscribeEdits = useEditStore.subscribe((state, prev) => {
         if (state.edits !== prev.edits) applyEdits();

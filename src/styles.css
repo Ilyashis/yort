@@ -1454,3 +1454,7 @@ kbd {
 .editor-publish:not(.pending) {
   color: var(--muted);
 }
+
+.time-season {
+  margin-top: 10px;
+}

@@ -47,6 +47,9 @@ export class TreesLayer {
   /** У каждого дерева — его части: (ключ меша, номер экземпляра). */
   private readonly parts: [string, number][][] = [];
   private readonly lastCheck = new Vector3(Infinity, 0, 0);
+  /** Лиственные кроны: летние цвета экземпляров (зимой кроны серо-бурые, без листвы — с инеем сверху). */
+  private readonly summerColors = new Map<InstancedMesh, Float32Array>();
+  private winter = false;
   private readonly removeAnimator: () => void;
   private readonly positions: LonLat[];
   private hidden: boolean[];
@@ -128,6 +131,32 @@ export class TreesLayer {
       this.updateShadows();
       return false;
     });
+  }
+
+  /** Зима: лиственные кроны — голые ветви (серо-бурые, иней сверху даёт общий снег); ели — как есть, со снегом на лапах. */
+  setWinter(winter: boolean): void {
+    if (winter === this.winter) return;
+    this.winter = winter;
+    for (const [key, mesh] of this.meshes) {
+      const shape = key.slice(0, key.indexOf(':'));
+      if ((shape !== 'blob' && shape !== 'forestCrown') || !mesh.instanceColor) continue;
+      const colors = mesh.instanceColor.array as Float32Array;
+      if (winter) {
+        this.summerColors.set(mesh, colors.slice());
+        for (let i = 0; i < mesh.count; i++) {
+          // Ветви: серо-бурые, у каждого дерева свой оттенок.
+          const k = 0.75 + ((i * 2654435761) % 1000) / 1000 / 2;
+          colors[i * 3] = 0.24 * k;
+          colors[i * 3 + 1] = 0.21 * k;
+          colors[i * 3 + 2] = 0.19 * k;
+        }
+      } else {
+        const summer = this.summerColors.get(mesh);
+        if (summer) colors.set(summer);
+      }
+      mesh.instanceColor.needsUpdate = true;
+    }
+    this.city.requestRender();
   }
 
   /** Тень — только у кусков рядом с камерой. */

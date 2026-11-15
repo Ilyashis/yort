@@ -28,6 +28,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import type { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { dateAt, DEFAULT_TIME, lightingAt, type Lighting } from './dayNight';
+import { SEASON } from './shaderHooks';
 import { createIllustrationPass } from './illustrationPass';
 import { NIGHT } from './nightUniforms';
 import { linearColor, moonDirection, SkySystem, sunDirection } from './sky';
@@ -64,6 +65,7 @@ export class CityScene {
   /** Освещение текущего времени суток. */
   lighting: Lighting = lightingAt(30);
   private hours = DEFAULT_TIME;
+  private winter = false;
   private blurOn = false;
   private outlinesOn = false;
   private readonly animators = new Set<Animator>();
@@ -190,7 +192,7 @@ export class CityScene {
   /** Время суток (местное, часы): солнце или луна, небо, свет, окна и фонари. */
   setTime(hours: number): void {
     this.hours = hours;
-    const sun = sunDirection(dateAt(hours), this.location.lat, this.location.lon);
+    const sun = sunDirection(dateAt(hours, this.winter), this.location.lat, this.location.lon);
     const lighting = lightingAt((Math.asin(sun.y) * 180) / Math.PI);
     const moon = moonDirection(sun);
     this.sky.update(sun, moon, lighting);
@@ -209,6 +211,17 @@ export class CityScene {
     this.bloom.enabled = lighting.bloom > 0.02;
     this.lighting = lighting;
     this.requestRender();
+  }
+
+  /** Время года: зима — снег на всём, что смотрит вверх, и зимнее (низкое) солнце. */
+  setSeason(winter: boolean): void {
+    this.winter = winter;
+    SEASON.snow.value = winter ? 1 : 0;
+    this.setTime(this.hours);
+  }
+
+  get isWinter(): boolean {
+    return this.winter;
   }
 
   get time(): number {

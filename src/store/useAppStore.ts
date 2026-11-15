@@ -5,7 +5,6 @@ import type { GraphicsQuality } from '../three/CityScene';
 import type { DriveHudState, DriveView } from '../three/DriveController';
 import { CAR_COLORS } from '../world/drive/carModel';
 import type { MinimapSource } from '../world/map/minimap';
-import { DEFAULT_TIME } from '../three/dayNight';
 import { defaultTerritory, findTerritory, territories } from '../config/territory';
 import type { TerrainKind } from '../world/base/heightGrid';
 import { readPref, writePref } from '../utils/prefs';
@@ -13,6 +12,8 @@ import { CAN_EDIT } from '../config/mode';
 // У зрителя (сайт) слои деревни — всегда одни и те же: сохранённые в браузере настройки слоёв не читаем.
 
 /** Варианты усиления рельефа в панели. */
+export type Season = 'summer' | 'winter';
+
 /** Вид деревни, который публикует редактор: перепады рельефа и слои. */
 export interface PublishedView {
   reliefScale: number;
@@ -20,7 +21,7 @@ export interface PublishedView {
   villagePlan: boolean;
   villageModels: boolean;
   grassOn: boolean;
-  /** Оформление редактора — на сайте начальное (пока зритель не поменял у себя). */
+  /** Оформление редактора — на сайте начальное (пока зритель не поменял у себя). Время суток — не отсюда: у каждого своё. */
   timeOfDay?: number;
   timeFlowing?: boolean;
   graphicsQuality?: GraphicsQuality;
@@ -110,14 +111,19 @@ function readVolumes(): Volumes {
   }
 }
 
-/** Время суток из браузера (если сохранено и в порядке). */
-function readTime(): number {
-  try {
-    const saved = Number(window.localStorage.getItem('citia:time'));
-    return window.localStorage.getItem('citia:time') !== null && saved >= 0 && saved < 24 ? saved : DEFAULT_TIME;
-  } catch {
-    return DEFAULT_TIME;
-  }
+/**
+ * Время суток при открытии — как сейчас у того, кто зашёл (по часам его компьютера). Сменить можно в панели
+ * «Время суток»; в следующий раз снова начнётся с его текущего времени.
+ */
+/** Время года при открытии — по дате у того, кто зашёл: декабрь–февраль — зима. */
+function seasonNow(): Season {
+  const month = new Date().getMonth();
+  return month === 11 || month <= 1 ? 'winter' : 'summer';
+}
+
+function nowHours(): number {
+  const now = new Date();
+  return now.getHours() + now.getMinutes() / 60;
 }
 
 /** Населённый пункт при открытии: из ссылки (?place=…), иначе последний выбранный. */
@@ -177,6 +183,8 @@ interface AppState {
   graphicsQuality: GraphicsQuality;
   /** Время суток (местное, часы 0..24) и идёт ли оно само (запоминается в браузере). */
   timeOfDay: number;
+  /** Время года: лето или зима (снег, голые деревья, гирлянды, ёлка, снегопад). */
+  season: Season;
   timeFlowing: boolean;
   /** Деревня из моделей: дома OSM нарисованы башкирскими домами (запоминается в браузере). */
   villageModels: boolean;
@@ -236,6 +244,7 @@ interface AppState {
   setChangeView: (change: ((mode: 'top' | 'tilt') => void) | undefined) => void;
   setGraphicsQuality: (quality: GraphicsQuality) => void;
   setTimeOfDay: (hours: number) => void;
+  setSeason: (season: Season) => void;
   setTimeFlowing: (on: boolean) => void;
   setVillageModels: (on: boolean) => void;
   setVillagePlan: (on: boolean) => void;
@@ -287,7 +296,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   volumes: readVolumes(),
   viewMode: 'tilt',
   graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
-  timeOfDay: readTime(),
+  timeOfDay: nowHours(),
+  season: seasonNow(),
   timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
   villageModels: !CAN_EDIT || readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
   villagePlan: !CAN_EDIT || readPref('village-plan', ['on', 'off'] as const, 'on') === 'on',
@@ -355,9 +365,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     writePref('graphics', graphicsQuality);
     set({ graphicsQuality });
   },
+  setSeason: (season) => set({ season }),
   setTimeOfDay: (hours) => {
     const timeOfDay = ((hours % 24) + 24) % 24;
-    writePref('time', timeOfDay.toFixed(3));
     set({ timeOfDay });
   },
   setTimeFlowing: (timeFlowing) => {
@@ -395,7 +405,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ...(typeof view.villagePlan === 'boolean' ? { villagePlan: view.villagePlan } : {}),
       ...(typeof view.villageModels === 'boolean' ? { villageModels: view.villageModels } : {}),
       ...(typeof view.grassOn === 'boolean' ? { grassOn: view.grassOn } : {}),
-      ...(typeof view.timeOfDay === 'number' && view.timeOfDay >= 0 && view.timeOfDay < 24 && !ownPref('time') ? { timeOfDay: view.timeOfDay } : {}),
       ...(typeof view.timeFlowing === 'boolean' && !ownPref('time-flow') ? { timeFlowing: view.timeFlowing } : {}),
       ...((view.graphicsQuality === 'high' || view.graphicsQuality === 'normal') && !ownPref('graphics') ? { graphicsQuality: view.graphicsQuality } : {}),
       ...(typeof view.haze === 'boolean' && !ownPref('haze') ? { haze: view.haze } : {}),
