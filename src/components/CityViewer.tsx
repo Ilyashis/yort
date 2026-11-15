@@ -6,7 +6,7 @@ import { SoundZones } from '../audio/soundZones';
 import { LANDMARKS } from '../config/landmarks';
 import { territoryDataUrl, type Territory } from '../config/territory';
 import { isOnStreet, useAppStore } from '../store/useAppStore';
-import { CAN_EDIT, PUBLISH_URL, PUBLISHED_EDITS, PUBLISHED_MAP_TREES } from '../config/mode';
+import { CAN_EDIT, DEBUG, PUBLISH_URL, PUBLISHED_EDITS, PUBLISHED_MAP_TREES } from '../config/mode';
 import { fetchPublishedEdits, useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
 import { BuildingsLayer } from '../three/BuildingsLayer';
@@ -254,7 +254,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const c = new CityScene(container!, { lat: (south + north) / 2, lon: (west + east) / 2 });
       city = c;
       // В разработке — доступ к сцене и сторам из консоли (проверки, отладка).
-      if (import.meta.env.DEV) Object.assign(window, { __city: c, __stores: { app: useAppStore, edit: useEditStore } });
+      if (DEBUG) Object.assign(window, { __city: c, __stores: { app: useAppStore, edit: useEditStore } });
       c.setGroundSampler((x, z) => localHeight(x, -z));
 
       // Время суток — из стора; если «время идёт», сутки проходят за 6 минут.
@@ -331,7 +331,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const bareGround = village ? VILLAGE_GROUND_COLOR : BARE_GROUND_COLOR;
       // «Моя версия» посёлка: земля нарезана на участки вплотную — заборы, ворота, постройки, сады.
       const estates = village && useAppStore.getState().villagePlan ? planEstates(estateInput(collection.features, environment, frame, parcelsFile?.parcels)) : undefined;
-      if (import.meta.env.DEV) Object.assign(window, { __estates: estates });
+      if (DEBUG) Object.assign(window, { __estates: estates });
       // Деревня: дворы у домов — забор с воротами и огород за домом (в OSM участков нет).
       const yards: Yard[] = estates
         ? plotYards(estates)
@@ -471,7 +471,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           if (state.mapOverlay !== prev.mapOverlay || state.mapOpacity !== prev.mapOpacity) void applyMap();
         }),
       });
-      if (import.meta.env.DEV) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
+      if (DEBUG) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
 
       const landmarks = LANDMARKS.filter(({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north);
       const parkTrees = [
@@ -526,7 +526,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       );
       owned.push(details);
 
-      if (import.meta.env.DEV) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates, __sculpt: sculpt });
+      if (DEBUG) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates, __sculpt: sculpt });
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
       if (villageModels) owned.push(villageModels);
       // Таблички с адресом — на домах-моделях, у которых участок с улицей и номером.
@@ -611,7 +611,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       /** План участков с правками (заборы, ворота, палисадники передвинутых домов); задаётся ниже, с редактором. */
       let currentPlan: (() => EstatePlan | undefined) | undefined;
       placeGardens(villageModelsOn());
-      if (import.meta.env.DEV) Object.assign(window, { __gardens: frontGardens });
+      if (DEBUG) Object.assign(window, { __gardens: frontGardens });
       const applyVillageModels = () => {
         placeGardens(villageModelsOn());
         if (!villageModels) return;
@@ -622,7 +622,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         details.setReplaced(on ? modelIds : new Set());
       };
       applyVillageModels();
-      if (import.meta.env.DEV) Object.assign(window, { __village: villageModels });
+      if (DEBUG) Object.assign(window, { __village: villageModels });
 
       // Посёлок «моя версия»: заборы, ворота и мелочь дворов; постройки дворов — моделями (всегда, а не только
       // когда дома OSM нарисованы моделями).
@@ -639,7 +639,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const estateModels = estateHouses.length ? new VillageModelsLayer(c, frame, localHeight, estateHouses, c.csm, 60) : undefined;
       if (estateModels) owned.push(estateModels);
       const outbuildingsOf = new Map((estates?.plots ?? []).map((p) => [p.id, p.outbuildings.map((b) => b.id)]));
-      if (import.meta.env.DEV)
+      if (DEBUG)
         Object.assign(window, {
           __estateLayer: estateLayer,
           __estateModels: estateModels,
@@ -917,7 +917,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       });
       drive.setColor(useAppStore.getState().carColor);
       owned.push(drive);
-      if (import.meta.env.DEV) Object.assign(window, { __drive: drive, __roads: roadsForCar, __frame: frame });
+      if (DEBUG) Object.assign(window, { __drive: drive, __roads: roadsForCar, __frame: frame });
       store.setDriveControls({ toggleView: () => drive.toggleView(), backToRoad: () => drive.backToRoad() });
       owned.push({ destroy: () => store.setDriveControls(undefined) });
 
@@ -1025,7 +1025,19 @@ export function CityViewer({ territory }: { territory: Territory }) {
               edits: useEditStore.getState().edits,
               mapTrees: mapTrees.published,
               // Вид, в котором редактор видит деревню (перепады, слои), — сайт покажет её так же.
-              view: (({ reliefScale, surveyOn, villagePlan, villageModels, grassOn }) => ({ reliefScale, surveyOn, villagePlan, villageModels, grassOn }))(useAppStore.getState()),
+              view: (({ reliefScale, surveyOn, villagePlan, villageModels, grassOn, timeOfDay, timeFlowing, graphicsQuality, haze, blur, outlines }) => ({
+                reliefScale,
+                surveyOn,
+                villagePlan,
+                villageModels,
+                grassOn,
+                timeOfDay: Math.round(timeOfDay * 100) / 100,
+                timeFlowing,
+                graphicsQuality,
+                haze,
+                blur,
+                outlines,
+              }))(useAppStore.getState()),
             }),
           });
           const result = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; files?: string[] };

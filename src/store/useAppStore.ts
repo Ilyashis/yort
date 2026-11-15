@@ -20,7 +20,23 @@ export interface PublishedView {
   villagePlan: boolean;
   villageModels: boolean;
   grassOn: boolean;
+  /** Оформление редактора — на сайте начальное (пока зритель не поменял у себя). */
+  timeOfDay?: number;
+  timeFlowing?: boolean;
+  graphicsQuality?: GraphicsQuality;
+  haze?: boolean;
+  blur?: boolean;
+  outlines?: boolean;
 }
+
+/** Зритель сам менял эту настройку на сайте (она есть в его браузере) — его выбор важнее опубликованного. */
+const ownPref = (key: string) => {
+  try {
+    return window.localStorage.getItem(`citia:${key}`) !== null;
+  } catch {
+    return false;
+  }
+};
 
 export const RELIEF_SCALES = [1, 1.2, 1.5, 2, 3] as const;
 import type { BuildingColorMode } from '../world/base/buildingPlan';
@@ -379,6 +395,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ...(typeof view.villagePlan === 'boolean' ? { villagePlan: view.villagePlan } : {}),
       ...(typeof view.villageModels === 'boolean' ? { villageModels: view.villageModels } : {}),
       ...(typeof view.grassOn === 'boolean' ? { grassOn: view.grassOn } : {}),
+      ...(typeof view.timeOfDay === 'number' && view.timeOfDay >= 0 && view.timeOfDay < 24 && !ownPref('time') ? { timeOfDay: view.timeOfDay } : {}),
+      ...(typeof view.timeFlowing === 'boolean' && !ownPref('time-flow') ? { timeFlowing: view.timeFlowing } : {}),
+      ...((view.graphicsQuality === 'high' || view.graphicsQuality === 'normal') && !ownPref('graphics') ? { graphicsQuality: view.graphicsQuality } : {}),
+      ...(typeof view.haze === 'boolean' && !ownPref('haze') ? { haze: view.haze } : {}),
+      ...(typeof view.blur === 'boolean' && !ownPref('blur') ? { blur: view.blur } : {}),
+      ...(typeof view.outlines === 'boolean' && !ownPref('outlines') ? { outlines: view.outlines } : {}),
     }),
   setReliefScale: (reliefScale) => {
     writePref('relief', String(reliefScale));

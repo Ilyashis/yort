@@ -13,3 +13,6 @@ export const PUBLISHED_MAP_TREES = 'map-trees.json';
 export const PUBLISHED_VIEW = 'view.json';
 /** Адрес, по которому локальный сервер разработки записывает опубликованное (в сборке его нет). */
 export const PUBLISH_URL = '/__citia/publish';
+
+/** Служебный доступ к сцене из консоли (window.__city и др.): у редактора всегда, на сайте — по адресу с ?debug. */
+export const DEBUG: boolean = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug'));

@@ -437,9 +437,13 @@ export function EditorToolbar() {
         <button
           type="button"
           className={`editor-tool editor-publish ${draft ? 'pending' : ''}`}
-          disabled={!draft || publishing || !publisher}
+          disabled={publishing || !publisher}
           onClick={() => void publish()}
-          title={draft ? 'Записать правки в файлы данных — после коммита их увидят все на сайте' : 'Всё опубликовано'}
+          title={
+            draft
+              ? 'Записать правки, вид (перепады, слои, оформление) и деревья в файлы данных — после коммита их увидят все на сайте'
+              : 'Правки уже опубликованы; ещё раз — чтобы записать текущий вид (перепады, слои, оформление)'
+          }
         >
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path d="M10 14V3M6 7l4-4 4 4M4 13v4h12v-4" />
