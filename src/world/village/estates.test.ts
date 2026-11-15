@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec2 } from '../walk/localFrame';
-import { arcPosition, planEstates, simplify, type EstateBuilding } from './estates';
+import { arcPosition, planEstates, simplify, unzigzag, type EstateBuilding } from './estates';
 
 /** Дом w × h м с центром (x, y). */
 const house = (id: string, x: number, y: number, w = 10, h = 8): EstateBuilding => ({
@@ -200,5 +200,33 @@ describe('прямые заборы', () => {
     const lens = plan.runs.flatMap((r) => r.line.slice(1).map((b, i) => Math.hypot(b[0] - r.line[i]![0], b[1] - r.line[i]![1])));
     const short = lens.filter((l) => l < 1.6).length;
     expect(short / lens.length).toBeLessThan(0.15);
+  });
+});
+
+describe('забор без зигзагов', () => {
+  it('точки, скачущие между двумя почти совпадающими границами, сливаются; форма участка остаётся', () => {
+    // Прямая граница y = 0 записана у соседей с расхождением 0,6 м: точки скачут 0 → 0,6 → 0 → 0,6.
+    const zig: [number, number][] = [
+      [0, 0],
+      [6, 0],
+      [8, 0.6],
+      [10, 0],
+      [12, 0.6],
+      [14, 0],
+      [20, 0],
+      [20, 15],
+    ];
+    const out = unzigzag(zig);
+    // Концы и настоящий угол (20, 0) → (20, 15) — на месте.
+    expect(out[0]).toEqual([0, 0]);
+    expect(out[out.length - 1]).toEqual([20, 15]);
+    expect(out.some(([x, y]) => x === 20 && y === 0)).toBe(true);
+    // Зигзаг ушёл: после слияния и упрощения — почти прямая.
+    const line = simplify(out, 0.9);
+    expect(line).toEqual([
+      [0, 0],
+      [20, 0],
+      [20, 15],
+    ]);
   });
 });

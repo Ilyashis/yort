@@ -74,6 +74,7 @@ export type HouseModelId =
   | 'office'
   | 'firestation'
   | 'hospital'
+  | 'mosque'
   | 'shop'
   | 'store'
   | 'busstop'

@@ -147,6 +147,11 @@ const STRAIGHT = 1.0;
 /** Притяжение точки границы к углу и к стороне кадастрового участка, м. */
 const SNAP_CORNER = 1.6;
 const SNAP_EDGE = 1.3;
+/** Зигзаг забора: встречные изломы (больше ZIG_TURN рад) на отрезке короче ZIG_SHORT м. */
+const ZIG_SHORT = 3.5;
+/** Итоговое спрямление забора (и по кадастру), м: мелкие изломы границ соседей уходят в прямую. */
+const FINAL_STRAIGHT = 0.9;
+const ZIG_TURN = 0.3;
 
 const BLOCK = 1;
 const ROADSIDE = 2;
@@ -809,21 +814,73 @@ function straightener(parcels: readonly (readonly Vec2[])[]): (raw: Vec2[]) => V
   };
   return (raw) => {
     if (!segs.length) return simplify(raw, STRAIGHT);
-    let snapped = 0;
-    const pts: Vec2[] = [];
-    for (const p of raw) {
+    // Точки, притянутые к кадастру, — как есть; куски лесенки между ними (не притянулись) спрямляем
+    // отдельно, с допуском STRAIGHT: иначе общий малый допуск оставлял бы зигзаг.
+    const marked = raw.map((p) => {
       const q = snap(p);
-      if (q) snapped++;
-      const v = q ?? p;
-      // Несколько точек притянулись к одному углу — одна точка.
+      return { p: q ?? p, snapped: !!q };
+    });
+    const pts: Vec2[] = [];
+    const push = (v: Vec2) => {
       const prev = pts[pts.length - 1];
+      // Несколько точек притянулись к одному углу — одна точка.
       if (!prev || Math.hypot(prev[0] - v[0], prev[1] - v[1]) > 1e-6) pts.push(v);
+    };
+    for (let i = 0; i < marked.length; ) {
+      if (marked[i]!.snapped) {
+        push(marked[i]!.p);
+        i++;
+        continue;
+      }
+      // Кусок лесенки: от последней притянутой точки до следующей притянутой (обе — концы куска).
+      let j = i;
+      while (j < marked.length && !marked[j]!.snapped) j++;
+      const from = Math.max(0, i - 1);
+      const to = Math.min(marked.length - 1, j);
+      const stretch = marked.slice(from, to + 1).map((m) => m.p);
+      const straight = simplify(stretch, STRAIGHT);
+      (from < i ? straight.slice(1) : straight).forEach(push);
+      i = to < marked.length - 1 || j < marked.length ? to + 1 : j;
     }
     // Концы цепочки — общие с соседними цепочками: оставляем их, даже если совпали с соседней точкой.
     if (pts.length < 2) return [raw[0]!, raw[raw.length - 1]!].map((p) => snap(p) ?? p);
-    // По кадастру — почти без допуска (точки уже на прямых), иначе — спрямляем лесенку.
-    return simplify(pts, snapped >= raw.length * 0.6 ? 0.5 : STRAIGHT);
+    // Кадастр — ориентир, а не закон: изломы границы меньше FINAL_STRAIGHT м — прямой линией между соседями.
+    return simplify(unzigzag(pts), FINAL_STRAIGHT);
   };
+}
+
+/**
+ * Убрать зигзаги: два встречных излома подряд на коротком отрезке (меньше ZIG_SHORT м) — это не форма участка,
+ * а точки, попавшие то на одну, то на другую из двух почти совпадающих границ (у соседних участков в кадастре
+ * общая граница бывает записана с расхождением в десятки сантиметров). Такие две точки сливаются в одну
+ * посередине; повторяем, пока есть что сливать. Концы не трогаем — они общие с соседними заборами.
+ */
+export function unzigzag(points: readonly Vec2[]): Vec2[] {
+  const pts = points.map((p): Vec2 => [p[0], p[1]]);
+  const turn = (a: Vec2, b: Vec2, c: Vec2) => {
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const vx = c[0] - b[0];
+    const vy = c[1] - b[1];
+    return Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+  };
+  for (let pass = 0; pass < 8; pass++) {
+    let merged = false;
+    for (let i = 1; i + 2 < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const c = pts[i + 1]!;
+      const d = pts[i + 2]!;
+      if (Math.hypot(c[0] - b[0], c[1] - b[1]) >= ZIG_SHORT) continue;
+      const t1 = turn(a, b, c);
+      const t2 = turn(b, c, d);
+      if (Math.sign(t1) === Math.sign(t2) || Math.abs(t1) < ZIG_TURN || Math.abs(t2) < ZIG_TURN) continue;
+      pts.splice(i, 2, [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2]);
+      merged = true;
+    }
+    if (!merged) break;
+  }
+  return pts;
 }
 
 /** Ломаная без лишних точек (Дуглас — Пекер); замкнутую делим на две половины. */

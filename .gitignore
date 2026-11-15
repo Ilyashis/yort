@@ -17,3 +17,7 @@ dist/
 
 # промежуточная выгрузка участков НСПД
 .parcels-state.json
+
+# Сгенерированная карта деревни (render) — не в репозитории
+public/data/territories/*/render.webp
+public/data/territories/*/render.json

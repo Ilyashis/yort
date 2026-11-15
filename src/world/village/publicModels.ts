@@ -503,6 +503,106 @@ function shiftPart(part: HousePart, dx: number, dy: number): HousePart {
   return part;
 }
 
+/**
+ * Сельская мечеть: зал (дощатый крашеный или белого кирпича) со стрельчатыми окнами, крыльцо под козырьком,
+ * вальмовая крыша, над входом — минарет: квадратное основание из крыши, восьмигранный ствол, балкон с
+ * ограждением, верхний ярус и шатёр со шпилем и полумесяцем.
+ */
+function planMosque(o: HouseOptions): HousePlan {
+  const dice = new Dice((o.seed ?? 1) + 18000);
+  const W = clamp(o.width ?? 10, 8, 16);
+  const D = clamp(o.depth ?? 12, 9, 18);
+  const brick = dice.chance(0.45);
+  const wall = brick ? dice.pick(BRICK_WHITE) : dice.pick(['#e9eee6', '#dfe9e2', '#e6edf2', '#f1ead6', '#cfe2d4']);
+  const surface: Surface = brick ? 'brick' : 'boards';
+  const green = dice.pick(['#2f7a4a', '#2c6e5a', '#3a8a5a', '#2f6f8a']);
+  const trim = '#ffffff';
+  const gold = '#d8b04a';
+  const hp = 0.6;
+  const t = 0.4;
+  const wallH = 3.7;
+  const top = hp + wallH;
+  const walls = rectWalls(W, D);
+  const parts: HousePart[] = [plinth(W + t + 0.1, D + t + 0.1, hp, '#a8a397')];
+  const openings = emptyOpenings();
+  const style: WindowStyle = { trim, accent: green, frame: '#f7f7f4', top: 'arch', apron: false, sash: 'cross' };
+  const rows = { floors: 1, base: hp, floorHeight: 3, sill: 0.95, w: 1.1, h: 1.8, t, style, dice };
+  const entry = W / 2;
+  doorIn(parts, openings.front, walls.front, entry, hp + 0.05, 1.5, 2.4, t / 2, green, trim);
+  const lines: Record<WallKey, number[]> = {
+    front: fitWindows(W, rows.w, false, 4, 1.4),
+    back: fitWindows(W, rows.w, false, 4, 1.2),
+    left: fitWindows(D, rows.w, false, 5, 1.2),
+    right: fitWindows(D, rows.w, false, 5, 1.2),
+  };
+  for (const key of Object.keys(walls) as WallKey[]) {
+    const skip = key === 'front' ? (u: number) => Math.abs(u - entry) < 1.8 : undefined;
+    windowRows(parts, openings[key], walls[key], lines[key], rows, skip);
+    parts.push(...solidWall(walls[key], hp, wallH, t, openings[key], wall, surface));
+  }
+  cornice(parts, walls, t, top - 0.12, green, 'plaster', 0.22);
+  parts.push(
+    ...porch(walls.front, {
+      u: entry,
+      width: 3.0,
+      depth: 1.8,
+      floor: hp + 0.05,
+      wallOut: t / 2,
+      canopy: { kind: 'gable', z: hp + 2.75 },
+      wood: '#b9b4aa',
+      roof: green,
+      roofSurface: 'metal',
+      trim,
+    }),
+  );
+  const pitch = 30;
+  const roof = hipRoof({ w: W, d: D, top: roofSeat(top, t / 2, pitch), pitch, overhang: 0.5, color: green, surface: 'metal' });
+  parts.push(...roof.parts);
+
+  // Минарет — над входом: основание выходит из крыши выше конька.
+  const my = -D / 2 + 1.7;
+  const baseTop = roof.ridge + 1.2;
+  parts.push({ type: 'box', center: [0, my, (top + baseTop) / 2], size: [2.4, 2.4, baseTop - top], color: wall, surface: brick ? 'brick' : 'boards' });
+  parts.push({ type: 'box', center: [0, my, baseTop + 0.08], size: [2.7, 2.7, 0.16], color: green, surface: 'plaster' });
+  // Ствол — до 4,6 м, но весь минарет с полумесяцем — не выше 19,5 м (у широкого зала конёк выше).
+  const shaftTop = baseTop + clamp(19.5 - (baseTop + 2.4 + 3.2 + 1.95), 2.2, 4.6);
+  parts.push({ type: 'cylinder', from: [0, my, baseTop + 0.16], to: [0, my, shaftTop], radius: 0.95, segments: 8, color: wall, surface: brick ? 'brick' : 'boards' });
+  // Окошки-бойницы на четырёх гранях ствола.
+  for (const [dx, dy, ang] of [
+    [0, -1, 0],
+    [1, 0, Math.PI / 2],
+    [0, 1, 0],
+    [-1, 0, Math.PI / 2],
+  ] as const) {
+    parts.push({ type: 'box', center: [dx * 0.9, my + dy * 0.9, baseTop + 2.6], size: [0.32, 0.12, 0.9], angle: ang, color: '#2c3a48' });
+  }
+  // Балкон (шурфа) с ограждением.
+  parts.push({ type: 'cylinder', from: [0, my, shaftTop], to: [0, my, shaftTop + 0.14], radius: 1.45, segments: 8, color: green });
+  for (let k = 0; k < 16; k++) {
+    const a = (k / 16) * Math.PI * 2;
+    parts.push({ type: 'cylinder', from: [Math.cos(a) * 1.35, my + Math.sin(a) * 1.35, shaftTop + 0.14], to: [Math.cos(a) * 1.35, my + Math.sin(a) * 1.35, shaftTop + 0.95], radius: 0.035, segments: 4, color: trim });
+  }
+  parts.push({ type: 'cylinder', from: [0, my, shaftTop + 0.93], to: [0, my, shaftTop + 1.0], radius: 1.4, segments: 8, color: trim });
+  const upperTop = shaftTop + 2.4;
+  parts.push({ type: 'cylinder', from: [0, my, shaftTop + 0.14], to: [0, my, upperTop], radius: 0.7, segments: 8, color: wall, surface: brick ? 'brick' : 'boards' });
+  // Шатёр, шпиль, полумесяц.
+  const coneTop = upperTop + 3.2;
+  parts.push({ type: 'cylinder', from: [0, my, upperTop], to: [0, my, coneTop], radius: 0.9, radiusTop: 0.04, segments: 8, color: green, surface: 'metal' });
+  parts.push({ type: 'cylinder', from: [0, my, coneTop], to: [0, my, coneTop + 1.0], radius: 0.035, segments: 6, color: gold });
+  parts.push({ type: 'cylinder', from: [0, my, coneTop + 0.35], to: [0, my, coneTop + 0.55], radius: 0.09, segments: 8, color: gold });
+  // Полумесяц — дугой из коротких брусков, рогами вверх, лицом к улице.
+  const cz = coneTop + 1.45;
+  const R = 0.42;
+  for (let k = 0; k <= 8; k++) {
+    const a = Math.PI * (0.15 + (0.7 * k) / 8) + Math.PI;
+    const x = Math.cos(a) * R;
+    const z = cz + Math.sin(a) * R + R * 0.25;
+    const w = 0.07 + 0.08 * Math.sin((Math.PI * k) / 8);
+    parts.push({ type: 'box', center: [x, my, z], size: [0.18, 0.04, w], angle: 0, color: gold });
+  }
+  return finish('mosque', parts, W, D, rect(W + t, D + t));
+}
+
 // --- магазины ------------------------------------------------------------------------------------
 
 /** Магазин: одноэтажный, витрина и дверь с козырьком на улицу, вывеска под карнизом, двускатная крыша вдоль улицы. */
@@ -1085,6 +1185,17 @@ export const PUBLIC_MODELS: HouseModel[] = [
     depth: { min: 8, value: 11, max: 16 },
     floors: { min: 1, value: 1, max: 2 },
     plan: withGround(planHospital),
+  },
+  {
+    id: 'mosque',
+    group: 'public',
+    name: 'Мечеть',
+    short: 'Мечеть',
+    summary: 'доски или кирпич · минарет',
+    description: 'Сельская мечеть: зал со стрельчатыми окнами (дощатый крашеный или белого кирпича), крыльцо под козырьком, вальмовая крыша и минарет над входом — восьмигранный ствол, балкон с ограждением, шатёр со шпилем и полумесяцем.',
+    width: { min: 8, value: 10, max: 16 },
+    depth: { min: 9, value: 12, max: 18 },
+    plan: withGround(planMosque),
   },
   {
     id: 'shop',

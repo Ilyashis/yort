@@ -165,6 +165,9 @@ interface AppState {
   reliefScale: number;
   /** Трава у ног (на прогулке и низко над землёй). */
   grassOn: boolean;
+  /** Карта деревни (сгенерированный вид сверху) поверх земли — для дорисовки; прозрачность 0…1. */
+  mapOverlay: boolean;
+  mapOpacity: number;
   /** Что из съёмки есть у этого района (undefined — съёмки нет). */
   survey?: { terrain: boolean; colored: number; added: number };
   /** За рулём: приборы, камера, цвет машины (цвет запоминается в браузере). */
@@ -210,6 +213,8 @@ interface AppState {
   setSurveyOn: (on: boolean) => void;
   setReliefScale: (scale: number) => void;
   setGrassOn: (on: boolean) => void;
+  setMapOverlay: (on: boolean) => void;
+  setMapOpacity: (opacity: number) => void;
   setSurvey: (survey: AppState['survey']) => void;
   setWalkMouseLocked: (locked: boolean) => void;
   setDriveControls: (controls: DriveControls | undefined) => void;
@@ -256,6 +261,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   surveyOn: readPref('survey', ['on', 'off'] as const, 'on') === 'on',
   reliefScale: Number(readPref('relief', RELIEF_SCALES.map(String), '1')),
   grassOn: readPref('grass', ['on', 'off'] as const, 'on') === 'on',
+  mapOverlay: readPref('map-overlay', ['on', 'off'] as const, 'off') === 'on',
+  mapOpacity: Number(readPref('map-opacity', ['0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1'], '0.7')),
   walkMouseLocked: false,
   driveHud: { speed: 0, gear: 'N' },
   driveView: 'chase',
@@ -349,6 +356,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setGrassOn: (grassOn) => {
     writePref('grass', grassOn ? 'on' : 'off');
     set({ grassOn });
+  },
+  setMapOverlay: (mapOverlay) => {
+    writePref('map-overlay', mapOverlay ? 'on' : 'off');
+    set({ mapOverlay });
+  },
+  setMapOpacity: (mapOpacity) => {
+    writePref('map-opacity', String(mapOpacity));
+    set({ mapOpacity });
   },
   setSurvey: (survey) => set({ survey }),
   setWalkMouseLocked: (walkMouseLocked) => set({ walkMouseLocked }),

@@ -205,7 +205,9 @@ export class LandTextureRenderer {
 
     const village = !!this.input.village;
     const axes = this.axes.filter(({ box }) => box[0] <= x1 && box[2] >= x0 && box[1] <= y1 && box[3] >= y0);
-    for (const paint of HARD) {
+    // В деревне грунтовки — под асфальтом: где проезд выходит на улицу, сверху — асфальт.
+    const order = village ? HARD.filter((p) => p !== 'footway').flatMap((p) => (p === 'road' ? ['footway' as Paint, p] : [p])) : HARD;
+    for (const paint of order) {
       const ofPaint = visible.filter((item) => item.paint === paint);
       if (village && paint === 'road') {
         this.villageAsphalt(ctx, ofPaint, axes, area, pxPerM);
@@ -237,25 +239,40 @@ export class LandTextureRenderer {
   private villageAsphalt(ctx: CanvasRenderingContext2D, items: readonly Item[], axes: readonly Axis[], area: [number, number, number, number], pxPerM: number): void {
     if (!items.length) return;
     const layers = this.layers!;
-    // Обочина — гравийная полоса шире асфальта, под ним: заливка и поверх — узор гравия.
+    // Обочина — гравий вперемешку с травой, под асфальтом: у края асфальта гравия больше, дальше — трава.
+    // Сначала мягкая широкая полоса, потом плотная узкая, сверху — узор гравия и пятна травы.
     ctx.lineJoin = 'round';
-    ctx.lineWidth = VILLAGE_ROAD.shoulderM * 2;
-    ctx.strokeStyle = VILLAGE_ROAD.shoulder;
-    for (const item of items) {
-      this.trace(ctx, item);
-      ctx.stroke();
-    }
-    const gravel = this.pattern(ctx, layers.gravel, pxPerM);
-    if (gravel) {
+    ctx.lineCap = 'round';
+    const band = (widthM: number, style: string | CanvasPattern, alpha = 1) => {
       ctx.save();
-      ctx.globalAlpha = gravel.alpha;
-      ctx.strokeStyle = gravel.pattern;
+      ctx.globalAlpha = alpha;
+      ctx.lineWidth = widthM * 2;
+      ctx.strokeStyle = style;
       for (const item of items) {
         this.trace(ctx, item);
         ctx.stroke();
       }
       ctx.restore();
+    };
+    band(VILLAGE_ROAD.shoulderM * 1.5, VILLAGE_ROAD.shoulder, 0.28);
+    band(VILLAGE_ROAD.shoulderM, VILLAGE_ROAD.shoulder, 0.55);
+    band(VILLAGE_ROAD.shoulderM * 0.55, VILLAGE_ROAD.shoulder, 0.75);
+    const gravel = this.pattern(ctx, layers.gravel, pxPerM);
+    if (gravel) band(VILLAGE_ROAD.shoulderM, gravel.pattern, gravel.alpha * 0.8);
+    // Трава прорастает на обочину пятнами (крупные — видны и издалека, мелкие — вблизи).
+    for (const layer of layers.vergeGrass) {
+      const grass = this.pattern(ctx, layer, pxPerM);
+      if (grass) band(VILLAGE_ROAD.shoulderM * 1.5, grass.pattern, grass.alpha);
     }
+    // Выкрошенный край — до асфальта: зубцы видны только снаружи, а на стыках улиц их закрывает асфальт.
+    for (const item of items) {
+      ctx.setLineDash([0.35 + random01(item.seed) * 0.4, 0.5 + random01(item.seed + 1) * 0.9, 0.2, 0.7]);
+      ctx.strokeStyle = 'rgba(150,142,124,0.9)';
+      ctx.lineWidth = Math.max(0.5, 0.8 / pxPerM);
+      this.trace(ctx, item);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
 
     // Асфальт и всё на нём — внутри контуров дорог.
     ctx.save();
@@ -285,21 +302,6 @@ export class LandTextureRenderer {
     }
     this.overlay(ctx, layers.asphalt, area, pxPerM);
     ctx.restore();
-
-    // Выкрошенный край: неровные зубцы гравия по кромке асфальта.
-    ctx.lineCap = 'round';
-    for (const item of items) {
-      ctx.setLineDash([0.35 + random01(item.seed) * 0.4, 0.5 + random01(item.seed + 1) * 0.9, 0.2, 0.7]);
-      ctx.strokeStyle = 'rgba(150,142,124,0.9)';
-      ctx.lineWidth = Math.max(0.28, 0.8 / pxPerM);
-      this.trace(ctx, item);
-      ctx.stroke();
-      ctx.setLineDash([0.15, 1.6, 0.25, 2.3]);
-      ctx.strokeStyle = 'rgba(70,68,64,0.55)';
-      ctx.lineWidth = Math.max(0.12, 0.8 / pxPerM);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
   }
 
   /**
@@ -739,6 +741,11 @@ function buildLayers() {
     ] as Layer[],
     // Гравий обочины.
     gravel: { canvas: noiseCanvas(256, [[128, 0.7], [32, 0.3]], 95, lightDark([200, 192, 172], [96, 88, 74], 0.4)), metres: 0.025, alpha: 1 } as Layer,
+    // Трава на обочине асфальта: крупные пятна и кустики (прозрачные между ними — там гравий).
+    vergeGrass: [
+      { canvas: noiseCanvas(128, [[6, 0.6], [16, 0.4]], 99, (n) => (n > 0.5 ? [124, 146, 84, Math.round(Math.min((n - 0.5) * 3.2, 1) * 220)] : [0, 0, 0, 0])), metres: 0.5, alpha: 1 },
+      { canvas: noiseCanvas(256, [[48, 0.6], [12, 0.4]], 101, (n) => (n > 0.55 ? [104, 132, 66, Math.round(Math.min((n - 0.55) * 4, 1) * 200)] : [0, 0, 0, 0])), metres: 0.05, alpha: 1 },
+    ] as Layer[],
     // Кустики травы на грунтовке.
     grassTufts: { canvas: noiseCanvas(256, [[48, 0.6], [12, 0.4]], 97, (n) => (n > 0.66 ? [96, 122, 62, Math.round(Math.min((n - 0.66) * 4, 1) * 150)] : [0, 0, 0, 0])), metres: 0.06, alpha: 1 } as Layer,
   };

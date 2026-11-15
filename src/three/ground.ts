@@ -94,6 +94,7 @@ export class GroundTexture {
       shader.uniforms[`landRect${i}`] = { value: level.uniform };
     });
     Object.assign(shader.uniforms, this.underlay.uniforms);
+    Object.assign(shader.uniforms, this.mapOverlay);
     shader.uniforms['citiaLamps'] = NIGHT.lamps;
     shader.uniforms['lampSpots'] = { value: this.lampSpots };
     shader.uniforms['lampSpotCount'] = this.lampSpotCount;
@@ -117,6 +118,9 @@ vec2 landUv(vec4 r) { return (vLand - r.xy) / max(r.zw - r.xy, vec2(1e-3)); }
 // 1 — внутри уровня, к краю плавно в 0: на границе уровни перетекают друг в друга.
 float landWeight(vec2 uv) { vec2 e = min(uv, 1.0 - uv); return smoothstep(0.0, 0.06, min(e.x, e.y)); }
 // Ночью под фонарями — тёплые пятна света (ближайшие к взгляду фонари, локальные метры и сила).
+uniform sampler2D mapOverlay;
+uniform vec4 mapOverlayRect;
+uniform float mapOverlayOpacity;
 uniform float citiaLamps;
 uniform vec3 lampSpots[${MAX_LAMP_SPOTS}];
 uniform int lampSpotCount;
@@ -138,6 +142,13 @@ land = mix(land, land1, landWeight(uv1) * step(1.0, landRect1.z - landRect1.x));
 land = mix(land, land2, landWeight(uv2) * step(1.0, landRect2.z - landRect2.x));
 land = mix(land, land3, landWeight(uv3) * step(1.0, landRect3.z - landRect3.x));
 diffuseColor *= land;
+// Карта деревни (сгенерированный вид сверху) поверх покрытий — для дорисовки; вне карты — как было.
+if (mapOverlayOpacity > 0.001) {
+  vec2 mapUv = (vLand - mapOverlayRect.xy) / max(mapOverlayRect.zw - mapOverlayRect.xy, vec2(1e-3));
+  float inMap = step(0.0, mapUv.x) * step(mapUv.x, 1.0) * step(0.0, mapUv.y) * step(mapUv.y, 1.0);
+  vec4 mapColor = texture2D(mapOverlay, clamp(mapUv, 0.0, 1.0));
+  diffuseColor.rgb = mix(diffuseColor.rgb, mapColor.rgb, mapOverlayOpacity * inMap * mapColor.a);
+}
 applyUnderlay(diffuseColor);`,
       )
       .replace(
@@ -154,6 +165,20 @@ if (citiaLamps > 0.001) {
 }`,
       );
   };
+
+  /** Карта деревни поверх земли: текстура, прямоугольник (локальные метры) и прозрачность. */
+  private readonly mapOverlay = {
+    mapOverlay: { value: null as Texture | null },
+    mapOverlayRect: { value: new Vector4(0, 0, 1, 1) },
+    mapOverlayOpacity: { value: 0 },
+  };
+
+  /** Показать карту (texture — undefined: убрать). rect — x0, y0 (юго-запад), x1, y1 в локальных метрах. */
+  setMapOverlay(texture: Texture | undefined, rect: LocalRect, opacity: number): void {
+    this.mapOverlay.mapOverlay.value = texture ?? null;
+    this.mapOverlay.mapOverlayRect.value.set(rect.x0, rect.y0, rect.x1, rect.y1);
+    this.mapOverlay.mapOverlayOpacity.value = texture ? opacity : 0;
+  }
 
   /** Пятна света фонарей: ближайшие к точке взгляда (локальные метры). */
   setLampSpots(spots: readonly Vec2[], near: Vec2): void {

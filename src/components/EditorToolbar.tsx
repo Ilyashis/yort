@@ -75,6 +75,10 @@ export function EditorToolbar() {
   const [menu, setMenu] = useState(false);
   const [modelGroup, setModelGroup] = useState<HouseModelGroup>(() => (houseModel && findHouseModel(houseModel)?.group) || 'house');
   const [underlayOpen, setUnderlayOpen] = useState(false);
+  const mapOverlay = useAppStore((s) => s.mapOverlay);
+  const setMapOverlay = useAppStore((s) => s.setMapOverlay);
+  const mapOpacity = useAppStore((s) => s.mapOpacity);
+  const setMapOpacity = useAppStore((s) => s.setMapOpacity);
   const underlayMode = useUnderlayStore((s) => s.mode);
   const align = useUnderlayStore((s) => s.align);
   const hasUnderlay = useUnderlayStore((s) => !!s.image);
@@ -267,6 +271,17 @@ export function EditorToolbar() {
           </div>
         </div>
       )}
+      {mapOverlay && (
+        <div className="editor-models">
+          <div className="panel editor-sliders">
+            <label>
+              <span>Карта</span>
+              <input type="range" min={0.3} max={1} step={0.1} value={mapOpacity} onChange={(e) => setMapOpacity(Math.round(Number(e.target.value) * 10) / 10)} />
+              <output>{Math.round(mapOpacity * 100)}%</output>
+            </label>
+          </div>
+        </div>
+      )}
       {tool === 'road' && (
         <div className="segmented editor-kinds" role="group" aria-label="Тип дороги">
           {ROAD_ORDER.map((kind) => (
@@ -312,6 +327,18 @@ export function EditorToolbar() {
           </button>
           {underlayOpen && <UnderlayPanel onClose={() => setUnderlayOpen(false)} />}
         </div>
+        <button
+          type="button"
+          className={`editor-tool ${mapOverlay ? 'active' : ''}`}
+          title="Карта деревни (вид сверху) поверх земли — дорисовывать по ней дома, дороги, заборы. Ещё раз — убрать"
+          onClick={() => setMapOverlay(!mapOverlay)}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M2.5 5l5-2 5 2 5-2v12l-5 2-5-2-5 2z" />
+            <path d="M7.5 3v12M12.5 5v12" />
+          </svg>
+          <span>Карта</span>
+        </button>
         <span className="editor-divider" />
         <button type="button" className="editor-icon" title="Отменить (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
           ↶

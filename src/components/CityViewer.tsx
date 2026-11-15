@@ -1,4 +1,4 @@
-import type { Vector3 } from 'three';
+import { SRGBColorSpace, TextureLoader, type Texture, type Vector3 } from 'three';
 import { buffer, lineString } from '@turf/turf';
 import { useEffect, useRef, useState } from 'react';
 import { Soundscape } from '../audio/Soundscape';
@@ -428,6 +428,40 @@ export function CityViewer({ territory }: { territory: Territory }) {
       ];
       const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion, yardDirt, roadAxes);
       owned.push(ground);
+      // Карта деревни (render.webp + render.json с рамкой в lon/lat) поверх земли — по кнопке «Карта» в редакторе.
+      // Картинка большая: грузится при первом включении.
+      let mapTexture: Promise<{ texture: Texture; rect: { x0: number; y0: number; x1: number; y1: number } } | undefined> | undefined;
+      const loadMap = () =>
+        (mapTexture ??= (async () => {
+          try {
+            const response = await fetch(territoryDataUrl(territory, 'render.json'));
+            if (!response.ok || !(response.headers.get('content-type') ?? '').includes('json')) return undefined;
+            const meta = (await response.json()) as { west: number; south: number; east: number; north: number };
+            const texture = await new TextureLoader().loadAsync(territoryDataUrl(territory, 'render.webp'));
+            texture.colorSpace = SRGBColorSpace;
+            texture.anisotropy = c.renderer.capabilities.getMaxAnisotropy();
+            const [x0, y0] = frame.toLocal([meta.west, meta.south]);
+            const [x1, y1] = frame.toLocal([meta.east, meta.north]);
+            owned.push({ destroy: () => texture.dispose() });
+            return { texture, rect: { x0, y0, x1, y1 } };
+          } catch (error) {
+            console.warn('[map] карта деревни не загрузилась', error);
+            return undefined;
+          }
+        })());
+      const applyMap = async () => {
+        const { mapOverlay, mapOpacity } = useAppStore.getState();
+        const map = mapOverlay ? await loadMap() : undefined;
+        if (disposed) return;
+        ground.texture.setMapOverlay(useAppStore.getState().mapOverlay ? map?.texture : undefined, map?.rect ?? { x0: 0, y0: 0, x1: 1, y1: 1 }, mapOpacity);
+        c.requestRender();
+      };
+      void applyMap();
+      owned.push({
+        destroy: useAppStore.subscribe((state, prev) => {
+          if (state.mapOverlay !== prev.mapOverlay || state.mapOpacity !== prev.mapOpacity) void applyMap();
+        }),
+      });
       if (import.meta.env.DEV) (window as unknown as { __ground?: GroundLayer }).__ground = ground;
 
       const landmarks = LANDMARKS.filter(({ position: [lon, lat] }) => lon >= west && lon <= east && lat >= south && lat <= north);
