@@ -257,10 +257,13 @@ export function createEditing(d: EditingDeps): { dispose: () => void } {
     const store = useEditStore.getState();
     const plots = mapId === '*' ? mapPlots : mapPlots.filter((p) => p.id === mapId);
     if (!plots.length) return;
-    // Вся деревня по шаблону: все прежние заборы с карты убираются — остаются заборы участков.
-    const hidden = mapId === '*' ? { ...replacedBy(plots), fences: (d.mapFences ?? []).map((f) => f.id) } : replacedBy(plots);
-    store.commit(adoptMapPlots(store.edits, plots, frame, hidden));
-    if (mapId === '*') store.notify(`${plots.length} дворов — по шаблону: дом, гараж, баня, сарай там, где они есть на карте; ворота с калиткой у всех; прежние заборы убраны`);
+    // Вся деревня: все заборы удаляются (свои, взятые с карты — тоже), каждый дом — участок по шаблону.
+    const all = mapId === '*';
+    const hidden = all ? { ...replacedBy(plots), fences: (d.mapFences ?? []).map((f) => f.id) } : replacedBy(plots);
+    const base = all ? { ...store.edits, fences: [] } : store.edits;
+    const removedFences = store.edits.fences.length;
+    store.commit(adoptMapPlots(base, plots, frame, hidden));
+    if (all) store.notify(`Удалено заборов: ${removedFences}. ${plots.length} домов — участки по шаблону: дом, гараж, баня, сарай там, где они есть на карте, ворота с калиткой у всех`);
     else store.select({ type: 'plot', id: mapPlotId(plots[0]!.house) });
   });
 
