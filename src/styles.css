@@ -89,6 +89,10 @@ body,
   right: 12px;
   width: 268px;
   max-width: calc(100vw - 24px);
+  /* Длинная карточка (каталог моделей, настройки забора) на невысоком экране — с прокруткой, не под кнопками. */
+  max-height: calc(100% - 84px);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .building-card h2 {
@@ -105,15 +109,17 @@ body,
 
 @media (max-width: 720px) {
   .sidebar {
-    max-height: 45%;
+    max-height: 40%;
   }
 
+  /* Телефон: карточка — над панелью редактора, не выше половины экрана. */
   .building-card {
     top: auto;
-    bottom: 40px;
-    right: 16px;
-    left: 16px;
+    bottom: 150px;
+    right: 12px;
+    left: 12px;
     width: auto;
+    max-height: 42%;
   }
 }
 
@@ -580,7 +586,8 @@ p {
   z-index: 10;
   bottom: 36px;
   left: 50%;
-  transform: translateX(-50%);
+  /* Не transform: анимация появления панелей (panel-in) его перезаписывает — подсказка уезжала вправо. */
+  translate: -50% 0;
   display: flex;
   align-items: center;
   gap: 18px;
@@ -988,14 +995,17 @@ kbd {
 
 /* Модели домов в редакторе: сетка кнопок, подпись размеров, ссылка на мастерскую. */
 .model-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Кнопки по ширине названия, переносятся строками: длинные («Спортплощадка», «Вальмовый») не вылезают за карточку. */
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-top: 6px;
 }
 
 .model-grid button {
-  padding: 6px 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 6px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.06);
@@ -1032,7 +1042,10 @@ kbd {
 /* Кисть рельефа: размер и сила. */
 .editor-sliders {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100vw - 32px);
+  gap: 4px 12px;
   padding: 4px 10px;
   background: rgba(18, 22, 30, 0.82);
 }
@@ -1068,9 +1081,51 @@ kbd {
   font-size: 12px;
 }
 
-@media (max-width: 720px) {
+/* Средние экраны: подписи инструментов прячем (остаются значки и клавиши) — панель не налезает на круглые кнопки. */
+@media (max-width: 1180px) {
   .editor-tool span {
     display: none;
+  }
+}
+
+/* Узкие экраны: круглые кнопки — над панелью редактора, справка и всплывающие панели — выше них. */
+@media (max-width: 900px) {
+  .corner-controls {
+    bottom: 64px;
+  }
+  .help-panel {
+    bottom: 106px;
+  }
+}
+
+/* Телефон: панель инструментов переносится в две строки, без клавиш; круглые кнопки — столбиком справа. */
+@media (max-width: 720px) {
+  .editor-toolbar {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .editor-tool kbd {
+    display: none;
+  }
+  .corner-controls {
+    flex-direction: column;
+    bottom: 150px;
+  }
+  /* Карточка — левее столбика круглых кнопок; длинные подсказки редактора на телефоне не показываем. */
+  .building-card {
+    right: 60px;
+  }
+  .editor-hint {
+    display: none;
+  }
+  .editor .segmented {
+    max-width: calc(100vw - 80px);
+  }
+  .help-panel {
+    bottom: 12px;
+    right: 64px;
+    max-width: calc(100vw - 88px);
+    max-height: 60%;
   }
 }
 
@@ -1172,6 +1227,13 @@ kbd {
   left: 0;
   right: auto;
   width: 280px;
+}
+
+/* Меню и подложка — не выше экрана (над панелью редактора), с прокруткой. */
+.editor-menu {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .underlay-panel h2 {

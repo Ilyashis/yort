@@ -83,6 +83,7 @@ function tuftGeometry(): BufferGeometry {
 }
 
 export class GrassLayer {
+  private readonly unskipAo: () => void;
   readonly group = new Group();
   private readonly mesh: InstancedMesh;
   private readonly material: MeshStandardMaterial;
@@ -171,6 +172,8 @@ vGrass = max(mix(vec3(grey), leaf, 1.45), 0.0) + vec3(-0.004, 0.006, -0.006) * t
     this.group.name = 'grass';
     this.group.add(this.mesh);
     city.scene.add(this.group);
+    this.unskipAo = city.skipAo(this.group);
+
     this.stopAnimator = city.addAnimator(() => {
       this.update();
       return false;
@@ -276,6 +279,7 @@ vGrass = max(mix(vec3(grey), leaf, 1.45), 0.0) + vec3(-0.004, 0.006, -0.006) * t
 
   destroy(): void {
     this.stopAnimator();
+    this.unskipAo();
     this.city.scene.remove(this.group);
     this.mesh.geometry.dispose();
     this.material.dispose();

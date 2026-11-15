@@ -51,7 +51,7 @@ export function Minimap() {
   if (!on) {
     return (
       <button type="button" className="panel minimap-show" onClick={() => setOn(true)} title="Показать мини-карту">
-        Карта <kbd>M</kbd>
+        Мини-карта <kbd>M</kbd>
       </button>
     );
   }

@@ -8,6 +8,7 @@ import { distanceToSegment } from '../walk/localFrame';
 import { openRing, orientedBox, signedArea } from '../base/roofGeometry';
 import { findHouseModel, type HouseModelId } from '../village/houseModels';
 import { parseStroke, type SculptStroke } from '../base/sculpt';
+import type { FenceStyle } from '../village/estates';
 
 export type LonLat = [number, number];
 
@@ -47,11 +48,47 @@ export interface EditedRoad {
   kind: EditRoadKind;
   /** Ось дороги в lon/lat. */
   axis: LonLat[];
+  /** Ширина, м (нет — по типу дороги). */
+  width?: number;
 }
 
-export interface EditedFence {
+/** Вид забора: тип, высота, цвет (нет — как был). */
+export interface FenceLook {
+  style?: FenceStyle;
+  height?: number;
+  color?: string;
+}
+
+export interface EditedFence extends FenceLook {
   id: string;
   line: LonLat[];
+}
+
+export const FENCE_STYLES: Record<FenceStyle, { label: string; height: number; colors: string[] }> = {
+  boards: { label: 'Доска', height: 1.8, colors: ['#8a6a48', '#7a5a3e', '#9a7a52', '#4f7a54', '#4d6f93', '#8b7b5e'] },
+  metal: { label: 'Профнастил', height: 1.85, colors: ['#3f6b4f', '#5a3e32', '#3a5f86', '#7c3a2e', '#2f6f6a', '#8a8f86'] },
+  picket: { label: 'Штакетник', height: 1.4, colors: ['#3d8a58', '#2f8f88', '#2f68b0', '#5f9fcf', '#e7e2d4', '#7a5a3e'] },
+  slats: { label: 'Горбыль', height: 1.35, colors: ['#8d8579', '#7f776b', '#958a76'] },
+  rails: { label: 'Жерди', height: 1.2, colors: ['#8a7a64', '#7d6f5c'] },
+};
+export const FENCE_HEIGHT: [number, number] = [0.8, 2.6];
+
+/** Ширина дороги, м: своя или по типу. */
+export const roadWidth = (r: Pick<EditedRoad, 'kind' | 'width'>) => r.width ?? ROAD_KINDS[r.kind].width;
+export const ROAD_WIDTH: [number, number] = [1.2, 24];
+
+/** Забор участка посёлка с правленой ломаной и/или видом (по ключу runKey плана участков). */
+export interface EditedEstateFence extends FenceLook {
+  key: string;
+  line?: LonLat[];
+}
+
+/** Ворота участка посёлка: место на заборе, сторона калитки, козырёк. */
+export interface EditedGate {
+  plot: string;
+  at?: LonLat;
+  wicketSide?: -1 | 1;
+  canopy?: boolean;
 }
 
 export interface Edits {
@@ -66,6 +103,10 @@ export interface Edits {
   removedYards: string[];
   /** Мазки кисти рельефа — по порядку. */
   terrain: SculptStroke[];
+  /** Заборы участков посёлка с передвинутыми точками. */
+  estateFences: EditedEstateFence[];
+  /** Ворота участков, передвинутые по забору. */
+  gates: EditedGate[];
 }
 
 export const EMPTY_EDITS: Edits = {
@@ -76,6 +117,8 @@ export const EMPTY_EDITS: Edits = {
   fences: [],
   removedYards: [],
   terrain: [],
+  estateFences: [],
+  gates: [],
 };
 
 export const ROAD_KINDS: Record<EditRoadKind, { label: string; width: number }> = {
@@ -133,6 +176,37 @@ export function addFence(edits: Edits, fence: EditedFence): Edits {
   return { ...edits, fences: [...edits.fences, fence] };
 }
 
+/** Заборы посёлка с новыми ломаными (вид остаётся); undefined — сбросить правку забора целиком. */
+export function setEstateFences(edits: Edits, lines: ReadonlyMap<string, LonLat[] | undefined>): Edits {
+  const old = new Map(edits.estateFences.map((f) => [f.key, f]));
+  const others = edits.estateFences.filter((f) => !lines.has(f.key));
+  const changed = [...lines].flatMap(([key, line]) => (line && line.length >= 2 ? [{ ...old.get(key), key, line }] : []));
+  return { ...edits, estateFences: [...others, ...changed] };
+}
+
+/** Вид заборов посёлка по ключам (ломаные остаются). */
+export function setEstateLook(edits: Edits, keys: readonly string[], look: FenceLook): Edits {
+  const old = new Map(edits.estateFences.map((f) => [f.key, f]));
+  const set = new Set(keys);
+  const others = edits.estateFences.filter((f) => !set.has(f.key));
+  return { ...edits, estateFences: [...others, ...keys.map((key) => ({ ...old.get(key), key, ...look }))] };
+}
+
+/** Ворота участка: patch дополняет правку; undefined — вернуть ворота как были. */
+export function setGate(edits: Edits, plot: string, patch: Omit<EditedGate, 'plot'> | undefined): Edits {
+  const old = edits.gates.find((g) => g.plot === plot);
+  const others = edits.gates.filter((g) => g.plot !== plot);
+  return { ...edits, gates: patch ? [...others, { ...old, ...patch, plot }] : others };
+}
+
+export function setFenceLine(edits: Edits, id: string, line: LonLat[]): Edits {
+  return { ...edits, fences: edits.fences.map((f) => (f.id === id ? { ...f, line } : f)) };
+}
+
+export function setFenceLook(edits: Edits, id: string, look: FenceLook): Edits {
+  return { ...edits, fences: edits.fences.map((f) => (f.id === id ? { ...f, ...look } : f)) };
+}
+
 export function addStroke(edits: Edits, stroke: SculptStroke): Edits {
   return { ...edits, terrain: [...edits.terrain, stroke] };
 }
@@ -155,7 +229,9 @@ export function isEmpty(edits: Edits): boolean {
     !edits.removedRoads.length &&
     !edits.fences.length &&
     !edits.removedYards.length &&
-    !edits.terrain.length
+    !edits.terrain.length &&
+    !edits.estateFences.length &&
+    !edits.gates.length
   );
 }
 
@@ -182,18 +258,47 @@ export function parseEdits(value: unknown): Edits | undefined {
     removedBuildings: strings(v.removedBuildings),
     roads: arr<EditedRoad>(v.roads)
       .filter((r) => r && typeof r.id === 'string' && r.kind in ROAD_KINDS)
-      .map((r) => ({ ...r, axis: points(r.axis) }))
+      .map((r) => {
+        const { width, ...rest } = r;
+        const w = typeof width === 'number' && Number.isFinite(width) ? Math.min(ROAD_WIDTH[1], Math.max(ROAD_WIDTH[0], width)) : undefined;
+        return { ...rest, axis: points(r.axis), ...(w !== undefined ? { width: w } : {}) };
+      })
       .filter((r) => r.axis.length >= 2),
     removedRoads: strings(v.removedRoads),
     fences: arr<EditedFence>(v.fences)
       .filter((f) => f && typeof f.id === 'string')
-      .map((f) => ({ ...f, line: points(f.line) }))
+      .map((f) => ({ id: f.id, line: points(f.line), ...parseLook(f) }))
       .filter((f) => f.line.length >= 2),
     removedYards: strings(v.removedYards),
     terrain: arr<unknown>(v.terrain)
       .map(parseStroke)
       .filter((s): s is SculptStroke => !!s),
+    estateFences: arr<EditedEstateFence>(v.estateFences)
+      .filter((f) => f && typeof f.key === 'string')
+      .map((f) => {
+        const line = points(f.line);
+        return { key: f.key, ...(line.length >= 2 ? { line } : {}), ...parseLook(f) };
+      })
+      .filter((f) => f.line || f.style || f.height || f.color),
+    gates: arr<EditedGate>(v.gates)
+      .filter((g) => g && typeof g.plot === 'string')
+      .map((g) => {
+        const [at] = points([g.at]);
+        return {
+          plot: g.plot,
+          ...(at ? { at } : {}),
+          ...(g.wicketSide === 1 || g.wicketSide === -1 ? { wicketSide: g.wicketSide } : {}),
+          ...(typeof g.canopy === 'boolean' ? { canopy: g.canopy } : {}),
+        };
+      }),
   };
+}
+
+function parseLook(f: FenceLook): FenceLook {
+  const style = f.style && f.style in FENCE_STYLES ? f.style : undefined;
+  const height = typeof f.height === 'number' && Number.isFinite(f.height) ? Math.min(FENCE_HEIGHT[1], Math.max(FENCE_HEIGHT[0], f.height)) : undefined;
+  const color = typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : undefined;
+  return { ...(style ? { style } : {}), ...(height !== undefined ? { height } : {}), ...(color ? { color } : {}) };
 }
 
 export const clampFloors = (floors: number) => Math.min(Math.max(Math.round(floors), 1), 30);
@@ -381,6 +486,51 @@ export function simplifyLine(points: readonly Vec2[], tolerance: number): Vec2[]
   const left = simplifyLine(points.slice(0, index + 1), tolerance);
   const right = simplifyLine(points.slice(index), tolerance);
   return [...left.slice(0, -1), ...right];
+}
+
+/** Скруглить изломы дуги радиусом ~radius (не больше половины соседних отрезков): дорога по точкам поворачивает плавно. */
+export function roundCorners(line: readonly Vec2[], radius: number, steps = 8): Vec2[] {
+  if (line.length < 3) return [...line];
+  const out: Vec2[] = [line[0]!];
+  for (let i = 1; i < line.length - 1; i++) {
+    const a = line[i - 1]!;
+    const p = line[i]!;
+    const b = line[i + 1]!;
+    const la = Math.hypot(p[0] - a[0], p[1] - a[1]);
+    const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+    const d = Math.min(radius, la / 2, lb / 2);
+    if (d < 0.2) {
+      out.push(p);
+      continue;
+    }
+    const p0: Vec2 = [p[0] + ((a[0] - p[0]) / la) * d, p[1] + ((a[1] - p[1]) / la) * d];
+    const p2: Vec2 = [p[0] + ((b[0] - p[0]) / lb) * d, p[1] + ((b[1] - p[1]) / lb) * d];
+    // Квадратичная кривая Безье p0 → (p) → p2.
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      const u = 1 - t;
+      out.push([u * u * p0[0] + 2 * u * t * p[0] + t * t * p2[0], u * u * p0[1] + 2 * u * t * p[1] + t * t * p2[1]]);
+    }
+  }
+  out.push(line[line.length - 1]!);
+  return out;
+}
+
+/** Сгладить ломаную (Чайкин, концы на месте): линия от руки без углов. */
+export function smoothLine(line: readonly Vec2[], iterations = 2): Vec2[] {
+  let pts = [...line];
+  for (let n = 0; n < iterations && pts.length > 2; n++) {
+    const next: Vec2[] = [pts[0]!];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      if (i > 0) next.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      if (i < pts.length - 2) next.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    next.push(pts[pts.length - 1]!);
+    pts = next;
+  }
+  return pts;
 }
 
 export function lineLength(points: readonly Vec2[]): number {

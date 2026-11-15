@@ -41,7 +41,8 @@ describe('модели башкирских домов', () => {
       });
 
       it('разумная высота и всё в пределах участка', () => {
-        const [lo, hi, reach] = model.group === 'small' ? [1.5, 5, 2] : model.group === 'public' ? [3, 20, 7.5] : [3, 10, 4];
+        const [lo, hi, reach] =
+          model.group === 'small' ? [1.5, 5, 2] : model.group === 'public' ? [3, 20, 7.5] : model.group === 'leisure' ? [1.5, 6, 3] : [3, 10, 4];
         expect(plan.height).toBeGreaterThan(lo);
         expect(plan.height).toBeLessThan(hi);
         for (const [x, y, z] of allPoints(plan)) {
@@ -108,7 +109,7 @@ describe('модели башкирских домов', () => {
   it('у домов и общественных зданий есть окна, у юрты, остановки, туалета, колодца, сарая, гаража и теплицы — нет', () => {
     for (const model of HOUSE_MODELS) {
       const glass = model.plan().parts.filter((p) => p.type === 'glass').length;
-      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'garage', 'greenhouse'].includes(model.id)) expect(glass).toBe(0);
+      if (['yurt', 'busstop', 'outhouse', 'well', 'shed', 'garage', 'greenhouse', 'football', 'sportsground', 'playground'].includes(model.id)) expect(glass).toBe(0);
       else expect(glass).toBeGreaterThan(model.id === 'banya' ? 0 : model.id === 'shop' ? 2 : 4);
     }
   });

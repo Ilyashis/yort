@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useEditStore } from '../store/useEditStore';
 import { hashString } from '../utils/hash';
@@ -5,7 +6,11 @@ import { HOUSE_MODELS, MODEL_GROUPS, findHouseModel, type HouseModelId } from '.
 import {
   BUILDING_KINDS,
   FACADE_COLORS,
+  FENCE_HEIGHT,
+  FENCE_STYLES,
   ROAD_KINDS,
+  ROAD_WIDTH,
+  roadWidth,
   ROOF_COLORS,
   clampFloors,
   removeBuilding,
@@ -30,6 +35,35 @@ const ROOFS: { roof: EditRoof; label: string }[] = [
 ];
 const ROAD_ORDER: EditRoadKind[] = ['street', 'lane', 'track', 'path'];
 
+const FENCE_ORDER = Object.keys(FENCE_STYLES) as (keyof typeof FENCE_STYLES)[];
+
+/** Ползунок, который меняет значение сразу на экране, а в правки пишет, когда его отпустили (одна правка — одна отмена). */
+function Slider(props: { label: string; unit: string; min: number; max: number; step: number; value: number; whole?: boolean; onCommit: (v: number) => void }) {
+  const [value, setValue] = useState(props.value);
+  useEffect(() => setValue(props.value), [props.value]);
+  const commit = () => {
+    if (value !== props.value) props.onCommit(value);
+  };
+  return (
+    <label className="field">
+      <span>
+        {props.label} <b>{props.whole ? value : fmt(value)}{props.unit ? ` ${props.unit}` : ''}</b>
+      </span>
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={value}
+        onChange={(e) => setValue(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+    </label>
+  );
+}
+
 const fmt = (v: number) => v.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 /** Стороны прямоугольника контура (lon/lat), м: вдоль фасада (первая сторона) и вглубь. */
@@ -48,6 +82,10 @@ export function EditPanel() {
   const resolve = useEditStore((s) => s.resolveBuilding);
   const applyModel = useEditStore((s) => s.applyModel);
   const select = useEditStore((s) => s.select);
+  const fenceTools = useEditStore((s) => s.fenceTools);
+  const [fenceTarget, setFenceTarget] = useState<'street' | 'all'>('street');
+  // Другой забор — снова «Уличный».
+  useEffect(() => setFenceTarget('street'), [selection?.id]);
   if (mode !== 'explore' || !selection) return null;
 
   const commit = useEditStore.getState().commit;
@@ -169,7 +207,8 @@ export function EditPanel() {
                   key={kind}
                   type="button"
                   className={building.kind === kind ? 'active' : ''}
-                  onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : building.floors })}
+                  // Этажность — в пределах нового типа (у дома — не больше 3).
+                  onClick={() => update({ kind, roof: BUILDING_KINDS[kind].roof, floors: kind === 'shed' ? 1 : Math.min(building.floors, kind === 'house' ? 3 : 30) })}
                 >
                   {BUILDING_KINDS[kind].label}
                 </button>
@@ -177,19 +216,16 @@ export function EditPanel() {
             </div>
 
             {building.kind !== 'shed' && (
-              <label className="field">
-                <span>
-                  Этажей <b>{building.floors}</b>
-                </span>
-                <input
-                  type="range"
-                  min={1}
-                  max={building.kind === 'house' ? 3 : 30}
-                  step={1}
-                  value={building.floors}
-                  onChange={(e) => update({ floors: clampFloors(Number(e.target.value)) })}
-                />
-              </label>
+              <Slider
+                label="Этажей"
+                unit=""
+                whole
+                min={1}
+                max={building.kind === 'house' ? 3 : 30}
+                step={1}
+                value={building.floors}
+                onCommit={(floors) => update({ floors: clampFloors(floors) })}
+              />
             )}
 
             <div className="field">
@@ -254,6 +290,17 @@ export function EditPanel() {
       <aside className="panel building-card edit-panel">
         {close}
         <h2>{road ? ROAD_KINDS[road.kind].label : 'Дорога из OpenStreetMap'}</h2>
+        {road && (
+          <Slider
+            label="Ширина"
+            unit="м"
+            min={ROAD_WIDTH[0]}
+            max={ROAD_WIDTH[1]}
+            step={0.5}
+            value={roadWidth(road)}
+            onCommit={(width) => commit(upsertRoad(useEditStore.getState().edits, { ...road, width }))}
+          />
+        )}
         {road ? (
           <div className="segmented segmented-small" role="group" aria-label="Тип дороги">
             {ROAD_ORDER.map((kind) => (
@@ -280,12 +327,91 @@ export function EditPanel() {
   }
 
   const own = edits.fences.some((f) => f.id === selection.id);
+  const info = fenceTools?.info(selection.id);
+  const editable = !!info;
+  const edited = !own && !!fenceTools?.edited(selection.id);
+  const target = fenceTarget === 'street' && info?.hasStreet ? 'street' : 'all';
+  const setLook = (look: Parameters<NonNullable<typeof fenceTools>['setLook']>[2]) => fenceTools?.setLook(selection.id, target, look);
   return (
     <aside className="panel building-card edit-panel">
       {close}
       <h2>Забор</h2>
       <p className="muted">{own ? 'Нарисован вами' : 'Двор вокруг дома — построен по правилу, в OSM границ участков нет'}</p>
+      {info && (
+        <>
+          {!own && info.hasStreet && (
+            <div className="segmented segmented-small" role="group" aria-label="Какие заборы участка">
+              <button type="button" className={target === 'street' ? 'active' : ''} onClick={() => setFenceTarget('street')}>
+                Уличный
+              </button>
+              <button type="button" className={target === 'all' ? 'active' : ''} onClick={() => setFenceTarget('all')}>
+                Весь участок
+              </button>
+            </div>
+          )}
+          <div className="field">
+            <span>Тип</span>
+            <div className="segmented segmented-small" role="group" aria-label="Тип забора">
+              {FENCE_ORDER.map((style) => (
+                <button
+                  key={style}
+                  type="button"
+                  className={info.style === style ? 'active' : ''}
+                  // Новый тип — своей обычной высоты и своего цвета.
+                  onClick={() => setLook({ style, height: FENCE_STYLES[style].height, color: FENCE_STYLES[style].colors[0] })}
+                >
+                  {FENCE_STYLES[style].label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Slider label="Высота" unit="м" min={FENCE_HEIGHT[0]} max={FENCE_HEIGHT[1]} step={0.1} value={info.height} onCommit={(height) => setLook({ height })} />
+          <div className="field">
+            <span>Цвет</span>
+            <div className="swatches" role="group" aria-label="Цвет забора">
+              {[...new Set([...FENCE_STYLES[info.style].colors, ...FENCE_STYLES.picket.colors])].map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={color}
+                  className={info.color === color ? 'active' : ''}
+                  style={{ background: color }}
+                  onClick={() => setLook({ color })}
+                />
+              ))}
+            </div>
+          </div>
+          {info.gate && (
+            <div className="field">
+              <span>Ворота</span>
+              <div className="segmented segmented-small" role="group" aria-label="Калитка">
+                <button type="button" className={info.gate.wicketSide === -1 ? 'active' : ''} onClick={() => fenceTools?.setGate(selection.id, { wicketSide: -1 })}>
+                  Калитка слева
+                </button>
+                <button type="button" className={info.gate.wicketSide === 1 ? 'active' : ''} onClick={() => fenceTools?.setGate(selection.id, { wicketSide: 1 })}>
+                  Калитка справа
+                </button>
+              </div>
+              <label className="toggle">
+                <input type="checkbox" checked={info.gate.canopy} onChange={(e) => fenceTools?.setGate(selection.id, { canopy: e.target.checked })} />
+                Козырёк над воротами
+              </label>
+            </div>
+          )}
+        </>
+      )}
+      {editable && (
+        <p className="muted">
+          Тяните белые точки — у соседской точки или забора они примагнитятся (Alt — без магнита). «+» на середине — новая точка; клик по точке и{' '}
+          <kbd>Del</kbd> — убрать излом.{!own && ' Синюю точку — ворота — двигайте вдоль уличного забора.'}
+        </p>
+      )}
       <div className="button-row">
+        {edited && (
+          <button type="button" className="button" onClick={() => fenceTools?.reset(selection.id)}>
+            Вернуть как было
+          </button>
+        )}
         <button type="button" className="button" onClick={remove}>
           {own ? 'Убрать забор' : 'Убрать забор двора'} <kbd>Del</kbd>
         </button>

@@ -4,7 +4,7 @@
 // убраны оба двора.
 
 import type { CSM } from 'three/addons/csm/CSM.js';
-import { pointAt, type EstatePlan, type FenceRun } from '../world/village/estates';
+import { pointAt, type EstatePlan, type FenceRun, type Plot } from '../world/village/estates';
 import { fenceParts, gateParts, propParts } from '../world/village/estateParts';
 import type { Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
@@ -16,36 +16,33 @@ const PIECE = 30;
 
 export class EstateLayer {
   private readonly layer: PartsLayer;
+  /** Заборы и ворота, изменённые в редакторе, — своим маленьким слоем (базовый не пересобирается). */
+  private readonly edited: PartsLayer;
   /** Чьи участки за каждым владельцем деталей. */
   private readonly plotsOf = new Map<string, string[]>();
+  private changed = new Set<string>();
+  private hiddenPlots: ReadonlySet<string> = new Set();
+  private current: EstatePlan;
 
-  constructor(city: CityScene, heightAt: (x: number, y: number) => number, csm: CSM | undefined, plan: EstatePlan) {
+  constructor(
+    city: CityScene,
+    heightAt: (x: number, y: number) => number,
+    csm: CSM | undefined,
+    private readonly plan: EstatePlan,
+  ) {
     this.layer = new PartsLayer(city, heightAt, csm, 'estates');
+    this.edited = new PartsLayer(city, heightAt, csm, 'estates-edited');
+    this.current = plan;
     const sites: PartsSite[] = [];
     plan.runs.forEach((run, k) => {
-      const owner = `run:${k}`;
-      this.plotsOf.set(owner, run.owners);
-      for (const piece of splitRun(run, PIECE)) {
-        const [center, radius] = extent(piece.line);
-        sites.push({
-          owner,
-          center,
-          radius,
-          plan: (far) => [{ parts: fenceParts(piece, far) }],
-        });
-      }
+      this.plotsOf.set(`run:${k}`, run.owners);
+      sites.push(...runSites(run, k));
     });
     for (const plot of plan.plots) {
       const owner = `plot:${plot.id}`;
       this.plotsOf.set(owner, [plot.id]);
-      const gate = plot.gate;
-      if (gate)
-        sites.push({
-          owner,
-          center: gate.at,
-          radius: 4,
-          plan: (far) => [{ parts: gateParts(gate, plot.fence.height, far), anchor: gate.at }],
-        });
+      this.plotsOf.set(`gate:${plot.id}`, [plot.id]);
+      if (plot.gate) sites.push(gateSite(plot));
       for (const prop of plot.props)
         sites.push({
           owner,
@@ -57,16 +54,36 @@ export class EstateLayer {
     this.layer.setSites(sites);
   }
 
+  /** План с правками заборов: изменённые заборы и ворота — заново, их прежний вид прячется. */
+  setPlan(next: EstatePlan): void {
+    if (next === this.current) return;
+    this.current = next;
+    const changed = new Set<string>();
+    const sites: PartsSite[] = [];
+    next.runs.forEach((run, k) => {
+      if (run === this.plan.runs[k]) return;
+      changed.add(`run:${k}`);
+      sites.push(...runSites(run, k));
+    });
+    next.plots.forEach((plot, k) => {
+      if (plot.gate === this.plan.plots[k]?.gate) return;
+      changed.add(`gate:${plot.id}`);
+      if (plot.gate) sites.push(gateSite(plot));
+    });
+    this.changed = changed;
+    this.edited.setSites(sites);
+    this.applyHidden();
+  }
+
   /** Спрятать дворы участков plots (их заборы — если все хозяева забора спрятаны). */
   setHidden(plots: ReadonlySet<string>): void {
-    this.layer.setHidden((owner) => {
-      const list = this.plotsOf.get(owner);
-      return !!list?.length && list.every((id) => plots.has(id));
-    });
+    this.hiddenPlots = plots;
+    this.applyHidden();
   }
 
   setVisible(visible: boolean): void {
     this.layer.setVisible(visible);
+    this.edited.setVisible(visible);
   }
 
   get triangles(): { near: number; far: number } {
@@ -75,11 +92,39 @@ export class EstateLayer {
 
   shiftGround(delta: GroundDelta, area: GroundArea): void {
     this.layer.shiftGround(delta, area);
+    this.edited.shiftGround(delta, area);
   }
 
   destroy(): void {
     this.layer.destroy();
+    this.edited.destroy();
   }
+
+  private applyHidden(): void {
+    const hidden = (owner: string) => {
+      const list = this.plotsOf.get(owner);
+      return !!list?.length && list.every((id) => this.hiddenPlots.has(id));
+    };
+    this.layer.setHidden((owner) => this.changed.has(owner) || hidden(owner));
+    this.edited.setHidden(hidden);
+  }
+}
+
+function runSites(run: FenceRun, k: number): PartsSite[] {
+  return splitRun(run, PIECE).map((piece) => {
+    const [center, radius] = extent(piece.line);
+    return { owner: `run:${k}`, center, radius, plan: (far: boolean) => [{ parts: fenceParts(piece, far) }] };
+  });
+}
+
+function gateSite(plot: Plot): PartsSite {
+  const gate = plot.gate!;
+  return {
+    owner: `gate:${plot.id}`,
+    center: gate.at,
+    radius: 4,
+    plan: (far) => [{ parts: gateParts(gate, plot.fence.height, far), anchor: gate.at }],
+  };
 }
 
 /** Забор кусками не длиннее max м (вырезы — каждому куску свои, от его начала). */

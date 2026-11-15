@@ -29,7 +29,8 @@ import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, setIntroView } from '../three/views';
-import { ROAD_KINDS, addStroke, replacedOsmIds, toFeature, wallHeightOf } from '../world/edit/edits';
+import { addStroke, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
+import { findHouseModel } from '../world/village/houseModels';
 import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import { loadEnvironment, polygonsOfGround, type Environment, type TreePoint } from '../world/base/environment';
 import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
@@ -48,6 +49,7 @@ import { planYards, VILLAGE_HOUSE_TYPES, type Yard } from '../world/base/yards';
 import type { BaseBuildingFeature } from '../world/base/types';
 import { planEstates, type EstateInput, type EstatePlan, type Plot } from '../world/village/estates';
 import { EstateLayer } from '../three/EstateLayer';
+import { editPlan, runKey } from '../world/village/fenceEdits';
 import { analyzePlot } from '../world/user/plot';
 import { toObstacle, toProperties, userBuildingId } from '../world/user/userBuildings';
 import { Collider } from '../world/walk/collider';
@@ -517,7 +519,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       );
       owned.push(details);
 
-      if (import.meta.env.DEV) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates });
+      if (import.meta.env.DEV) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates, __sculpt: sculpt });
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
       if (villageModels) owned.push(villageModels);
       // Таблички с адресом — на домах-моделях, у которых участок с улицей и номером.
@@ -671,7 +673,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const preview = builder?.result.building;
         for (const c of [collider, carCollider]) {
           c.setIgnored(new Set(edits.removedBuildings));
-          c.setExtraObstacles([...userBuildings.map(toObstacle), ...edits.buildings.map(toFeature)]);
+          // Поле и площадки — не стены: по ним ходят (сетки и заборчики — не помеха для прогулки).
+          c.setExtraObstacles([...userBuildings.map(toObstacle), ...edits.buildings.filter((b) => !b.model || findHouseModel(b.model.id)?.group !== 'leisure').map(toFeature)]);
         }
         const footprints = [
           ...userBuildings.map((b) => b.building.footprint),
@@ -680,7 +683,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         ];
         // Новые дороги: полоса проезжей части — деревья и фонари с неё убираем.
         const newRoads = edits.roads.flatMap((r) => {
-          const strip = buffer(lineString(r.axis), ROAD_KINDS[r.kind].width / 2 + 0.5, { units: 'meters', steps: 4 })?.geometry;
+          const strip = buffer(lineString(r.axis), roadWidth(r) / 2 + 0.5, { units: 'meters', steps: 4 })?.geometry;
           if (!strip) return [];
           return strip.type === 'Polygon' ? [strip.coordinates[0] as [number, number][]] : strip.coordinates.map((p) => p[0] as [number, number][]);
         });
@@ -727,7 +730,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         ...useEditStore
           .getState()
           .edits.roads.filter((r) => r.kind !== 'path')
-          .map((r) => ({ coords: r.axis.map(frame.toLocal), width: ROAD_KINDS[r.kind].width })),
+          .map((r) => ({ coords: r.axis.map(frame.toLocal), width: roadWidth(r) })),
       ];
       const drive = new DriveController(c, carCollider, streetIndex, localHeight, (point) => soundscape.surfaceAt(point), roadsForCar, c.csm, {
         onExit: () => store.setMode('explore'),
@@ -782,6 +785,24 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const editStore = useEditStore.getState();
       const editLayer = new EditLayer(c, frame, localHeight, village);
       owned.push(editLayer);
+      // Участки посёлка с правками заборов (точки) и ворот (место на заборе): пересчёт — только когда они меняются.
+      const runKeyList = estates?.runs.map(runKey) ?? [];
+      let planCache: { fences: unknown; gates: unknown; plan: EstatePlan } | undefined;
+      const currentPlan = (): EstatePlan | undefined => {
+        if (!estates) return undefined;
+        const { estateFences, gates } = useEditStore.getState().edits;
+        if (planCache?.fences === estateFences && planCache.gates === gates) return planCache.plan;
+        const known = new Set(runKeyList);
+        const mine = estateFences.filter((f) => known.has(f.key));
+        const plan = editPlan(estates, {
+          lines: new Map(mine.flatMap((f) => (f.line ? [[f.key, f.line.map(frame.toLocal)] as const] : []))),
+          gates: new Map(gates.flatMap((g) => (g.at ? [[g.plot, frame.toLocal(g.at)] as const] : []))),
+          looks: new Map(mine.map((f) => [f.key, { style: f.style, height: f.height, color: f.color }])),
+          gateOptions: new Map(gates.map((g) => [g.plot, { wicketSide: g.wicketSide, canopy: g.canopy }])),
+        });
+        planCache = { fences: estateFences, gates, plan };
+        return plan;
+      };
       const editor = new EditorTool({
         city: c,
         frame,
@@ -794,8 +815,16 @@ export function CityViewer({ territory }: { territory: Territory }) {
         osmBuildings: collection.features,
         yards,
         models: villageModels,
+        ...(estates ? { estate: { base: estates, plan: () => currentPlan()! } } : {}),
       });
       owned.push(editor);
+      editStore.setFenceTools({
+        edited: (id) => editor.fenceEdited(id),
+        reset: (id) => editor.resetFence(id),
+        info: (id) => editor.fenceInfo(id),
+        setLook: (id, target, look) => editor.setFenceLook(id, target, look),
+        setGate: (id, patch) => editor.setGateOption(id, patch),
+      });
 
       // Кисть рельефа: земля и всё, что на ней, меняются по ходу мазка; мазок — в правки (отмена — Ctrl+Z).
       const groundFollowers = [buildings, publicDetails, details, villageModels, addressPlates, estateModels, estateLayer, frontGardens, trees, furniture, grass];
@@ -859,9 +888,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const hiddenYards = new Set([...edits.removedYards, ...yards.filter((y) => deleted.has(yardOwner(y.houseId))).map((y) => y.houseId)]);
         ground.setEdits({
           removedRoads: new Set(edits.removedRoads),
-          addedRoads: edits.roads.map((r) => ({ kind: r.kind, axis: r.axis })),
+          addedRoads: edits.roads.map((r) => ({ kind: r.kind, axis: r.axis, width: r.width })),
           hiddenGardens: hiddenYards,
         });
+        const plan = currentPlan();
+        if (plan) estateLayer?.setPlan(plan);
         estateLayer?.setHidden(hiddenYards);
         estateModels?.setHidden(new Set([...hiddenYards].flatMap((id) => outbuildingsOf.get(id) ?? [])));
         editLayer.render(edits, selection?.type === 'building' ? selection.id : undefined);
@@ -882,9 +913,13 @@ export function CityViewer({ territory }: { territory: Territory }) {
           editLayer.setHandles(undefined);
         }
         let lines: [number, number][][] = [];
+        if (selection?.type !== 'fence') editor.showFence();
         if (selection?.type === 'road') {
           const road = edits.roads.find((r) => r.id === selection.id);
           lines = road ? [road.axis] : ground.roadOutline(selection.id).map((rings) => rings[0] ?? []);
+        } else if (selection?.type === 'fence' && editor.showFence()) {
+          // Свой забор и забор участка — с ручками: подсветку рисует редактор.
+          return;
         } else if (selection?.type === 'fence') {
           const fence = edits.fences.find((f) => f.id === selection.id);
           const yard = yards.find((y) => y.houseId === selection.id);
@@ -899,6 +934,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           editLayer.render(state.edits, state.selection?.type === 'building' ? state.selection.id : undefined);
           showSelection();
         }
+        if (state.tool !== prev.tool || state.fenceDraw !== prev.fenceDraw || state.roadDraw !== prev.roadDraw) editor.cancelDraft();
         if (state.tool !== prev.tool) {
           c.canvas.style.cursor = state.tool && state.tool !== 'select' ? 'crosshair' : '';
           if (state.tool) store.selectBuilding(undefined);
@@ -910,6 +946,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           const s = useEditStore.getState();
           s.setResolver(undefined);
           s.setModelApplier(undefined);
+          s.setFenceTools(undefined);
           s.setTool(undefined);
           s.select(undefined);
         },

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type HouseModelRef } from '../world/edit/edits';
+import { EMPTY_EDITS, isEmpty, parseEdits, type EditRoadKind, type EditedBuilding, type Edits, type FenceLook, type HouseModelRef } from '../world/edit/edits';
+import type { FenceStyle } from '../world/village/estates';
 import type { HouseModelId } from '../world/village/houseModels';
 import type { SculptLevelBy, SculptMode } from '../world/base/sculpt';
 
@@ -18,6 +19,20 @@ export interface SculptSettings {
   /** «Выровнять» обводкой: к какой высоте (по умолчанию — средняя). */
   levelBy?: SculptLevelBy;
 }
+
+/** Вид выделенного забора для панели. */
+export interface FenceInfo {
+  own: boolean;
+  style: FenceStyle;
+  height: number;
+  color?: string;
+  /** У участка есть уличный забор (иначе вид — у всех его заборов). */
+  hasStreet: boolean;
+  gate?: { wicketSide: -1 | 1; canopy: boolean };
+}
+
+/** Как рисовать дорогу: по точкам, линией (карандаш) или кистью (свободная форма, своя ширина). */
+export type RoadDraw = 'points' | 'line' | 'brush';
 
 export type Selection =
   | { type: 'building'; id: string }
@@ -58,6 +73,19 @@ interface EditState {
   houseModel?: HouseModelId;
   /** Кисть для инструмента «Рельеф». */
   sculpt: SculptSettings;
+  /** Забор: карандашом (ведите линию) или по точкам (клик — точка). */
+  fenceDraw: 'pencil' | 'points';
+  /** Заборы участков: есть ли правки у участка и сброс (регистрирует сцена). */
+  fenceTools?: {
+    edited: (id: string) => boolean;
+    reset: (id: string) => void;
+    info: (id: string) => FenceInfo | undefined;
+    setLook: (id: string, target: 'street' | 'all', look: FenceLook) => void;
+    setGate: (id: string, patch: { wicketSide?: -1 | 1; canopy?: boolean }) => void;
+  };
+  /** Дорога: как рисовать и ширина (нет — по типу дороги). */
+  roadDraw: RoadDraw;
+  roadWidth?: number;
   /** Короткое сообщение внизу экрана (почему нельзя поставить дом и т. п.). */
   notice?: { text: string; at: number };
   /** Дом для правки по id: уже изменённый или дом OSM в виде правки (регистрирует сцена). */
@@ -72,6 +100,10 @@ interface EditState {
   setRoadKind: (kind: EditRoadKind) => void;
   setHouseModel: (model: HouseModelId | undefined) => void;
   setSculpt: (patch: Partial<SculptSettings>) => void;
+  setFenceDraw: (mode: 'pencil' | 'points') => void;
+  setRoadDraw: (mode: RoadDraw) => void;
+  setRoadWidth: (width: number | undefined) => void;
+  setFenceTools: (tools: EditState['fenceTools']) => void;
   /** Новое состояние правок — в историю и в браузер. */
   commit: (next: Edits) => void;
   undo: () => void;
@@ -89,14 +121,21 @@ export const useEditStore = create<EditState>()((set, get) => ({
   future: [],
   roadKind: 'lane',
   sculpt: { mode: 'raise', radius: 8, strength: 0.5 },
+  fenceDraw: 'points',
+  roadDraw: 'points',
 
   load: (territoryId) =>
     set({ territoryId, edits: loadEdits(territoryId), past: [], future: [], selection: undefined, tool: undefined }),
   setTool: (tool) => set({ tool, selection: tool === 'select' ? get().selection : undefined }),
   select: (selection) => set({ selection }),
-  setRoadKind: (roadKind) => set({ roadKind }),
+  // Другой тип дороги — его обычной ширины.
+  setRoadKind: (roadKind) => set({ roadKind, roadWidth: undefined }),
   setHouseModel: (houseModel) => set({ houseModel }),
   setSculpt: (patch) => set({ sculpt: { ...get().sculpt, ...patch } }),
+  setFenceDraw: (fenceDraw) => set({ fenceDraw }),
+  setRoadDraw: (roadDraw) => set({ roadDraw }),
+  setRoadWidth: (roadWidth) => set({ roadWidth }),
+  setFenceTools: (fenceTools) => set({ fenceTools }),
 
   commit: (next) => {
     const { edits, past, territoryId } = get();

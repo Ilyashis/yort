@@ -27,13 +27,27 @@ import { hookMaterial } from './shaderHooks';
 
 const UP = new Vector3(0, 1, 0);
 const ZERO = new Matrix4().makeScale(0, 0, 0);
+/**
+ * Деревья — кусками по TILE м (на каждый кусок и форму — свой InstancedMesh): невидимые куски отсекаются
+ * и в кадре, и в каждом каскаде теней. Раньше все деревья формы были одним мешем — его рисовали целиком
+ * везде, в том числе четыре раза в тени.
+ */
+const TILE = 250;
+/** Тени отбрасывают куски ближе этого к камере, м: дальние тени в дымке не видны, а стоят дорого. */
+const SHADOW_REACH = 450;
+/** Пересчитать, кто отбрасывает тень, когда камера сдвинулась на столько, м. */
+const SHADOW_RECHECK = 25;
 
 export class TreesLayer {
+  private readonly unskipAo: () => void;
   readonly group = new Group();
-  private readonly meshes = new Map<TreeShape, InstancedMesh>();
-  private readonly matrices = new Map<TreeShape, Matrix4[]>();
-  /** У каждого дерева — его части: (форма, номер экземпляра). */
-  private readonly parts: [TreeShape, number][][] = [];
+  /** Меши по ключу «форма:кусок». */
+  private readonly meshes = new Map<string, InstancedMesh>();
+  private readonly matrices = new Map<string, Matrix4[]>();
+  /** У каждого дерева — его части: (ключ меша, номер экземпляра). */
+  private readonly parts: [string, number][][] = [];
+  private readonly lastCheck = new Vector3(Infinity, 0, 0);
+  private readonly removeAnimator: () => void;
   private readonly positions: LonLat[];
   private hidden: boolean[];
 
@@ -53,7 +67,8 @@ export class TreesLayer {
       forestCrown: new SphereGeometry(1, 7, 5),
       forestCone: new ConeGeometry(1, 1, 7),
     };
-    const colors = new Map<TreeShape, Color[]>();
+    const colors = new Map<string, Color[]>();
+    const shapeOf = new Map<string, TreeShape>();
     const palette = new Map<string, Color>();
     const base = new Matrix4();
     const part = new Matrix4();
@@ -65,28 +80,38 @@ export class TreesLayer {
       const plan = planTree(point, i >= forestFrom);
       const [x, y] = frame.toLocal([point[0], point[1]]);
       base.compose(new Vector3(x, heightAt(x, y), -y), rotation.setFromAxisAngle(UP, plan.rotation), new Vector3(plan.height, plan.height, plan.height));
-      const refs: [TreeShape, number][] = [];
+      const refs: [string, number][] = [];
+      const tile = `${Math.floor(x / TILE)}:${Math.floor(y / TILE)}`;
       for (const p of plan.parts) {
         part.compose(new Vector3(p.at[0], p.at[2], -p.at[1]), new Quaternion(), new Vector3(p.scale[0], p.scale[2], p.scale[1]));
         let color = palette.get(p.color);
         if (!color) palette.set(p.color, (color = new Color(p.color)));
-        const list = this.matrices.get(p.shape) ?? [];
-        refs.push([p.shape, list.length]);
+        const key = `${p.shape}:${tile}`;
+        shapeOf.set(key, p.shape);
+        const list = this.matrices.get(key) ?? [];
+        refs.push([key, list.length]);
         list.push(base.clone().multiply(part));
-        this.matrices.set(p.shape, list);
-        const colorList = colors.get(p.shape) ?? [];
+        this.matrices.set(key, list);
+        const colorList = colors.get(key) ?? [];
         colorList.push(color);
-        colors.set(p.shape, colorList);
+        colors.set(key, colorList);
       }
       this.parts.push(refs);
     });
 
     this.group.name = 'trees';
-    for (const [shape, list] of this.matrices) {
-      const material = new MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
-      hookMaterial(material, `tree-${shape}`, undefined, csm);
+    // Материал — один на форму (на все куски).
+    const materials = new Map<TreeShape, MeshStandardMaterial>();
+    for (const [key, list] of this.matrices) {
+      const shape = shapeOf.get(key)!;
+      let material = materials.get(shape);
+      if (!material) {
+        material = new MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
+        hookMaterial(material, `tree-${shape}`, undefined, csm);
+        materials.set(shape, material);
+      }
       const mesh = new InstancedMesh(geometries[shape], material, list.length);
-      const shapeColors = colors.get(shape)!;
+      const shapeColors = colors.get(key)!;
       list.forEach((matrix, k) => {
         mesh.setMatrixAt(k, matrix);
         mesh.setColorAt(k, shapeColors[k]!);
@@ -94,10 +119,26 @@ export class TreesLayer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.computeBoundingSphere();
-      this.meshes.set(shape, mesh);
+      this.meshes.set(key, mesh);
       this.group.add(mesh);
     }
     city.scene.add(this.group);
+    this.unskipAo = city.skipAo(this.group);
+    this.removeAnimator = city.addAnimator(() => {
+      this.updateShadows();
+      return false;
+    });
+  }
+
+  /** Тень — только у кусков рядом с камерой. */
+  private updateShadows(): void {
+    const camera = this.city.camera.position;
+    if (camera.distanceTo(this.lastCheck) < SHADOW_RECHECK) return;
+    this.lastCheck.copy(camera);
+    for (const mesh of this.meshes.values()) {
+      const sphere = mesh.boundingSphere;
+      mesh.castShadow = !sphere || camera.distanceTo(sphere.center) - sphere.radius < SHADOW_REACH;
+    }
   }
 
   get count(): number {
@@ -113,9 +154,9 @@ export class TreesLayer {
     next.forEach((hide, i) => {
       if (hide === this.hidden[i]) return;
       this.hidden[i] = hide;
-      for (const [shape, k] of this.parts[i] ?? []) {
-        const mesh = this.meshes.get(shape)!;
-        mesh.setMatrixAt(k, hide ? ZERO : this.matrices.get(shape)![k]!);
+      for (const [key, k] of this.parts[i] ?? []) {
+        const mesh = this.meshes.get(key)!;
+        mesh.setMatrixAt(k, hide ? ZERO : this.matrices.get(key)![k]!);
         touched.add(mesh);
       }
     });
@@ -127,8 +168,8 @@ export class TreesLayer {
   shiftGround(delta: GroundDelta, area: GroundArea): void {
     const touched = new Set<InstancedMesh>();
     this.parts.forEach((list, i) => {
-      for (const [shape, k] of list) {
-        const matrix = this.matrices.get(shape)![k]!;
+      for (const [key, k] of list) {
+        const matrix = this.matrices.get(key)![k]!;
         const x = matrix.elements[12]!;
         const y = -matrix.elements[14]!;
         if (x < area.x0 || x > area.x1 || y < area.y0 || y > area.y1) continue;
@@ -136,7 +177,7 @@ export class TreesLayer {
         if (!d) continue;
         matrix.elements[13]! += d;
         if (this.hidden[i]) continue;
-        const mesh = this.meshes.get(shape)!;
+        const mesh = this.meshes.get(key)!;
         mesh.setMatrixAt(k, matrix);
         touched.add(mesh);
       }
@@ -150,11 +191,18 @@ export class TreesLayer {
   }
 
   destroy(): void {
+    this.removeAnimator();
+    this.unskipAo();
     this.city.scene.remove(this.group);
+    // Геометрия и материал — общие на форму: освобождаем по одному разу.
+    const geometries = new Set<BufferGeometry>();
+    const materials = new Set<MeshStandardMaterial>();
     for (const mesh of this.meshes.values()) {
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
+      geometries.add(mesh.geometry);
+      materials.add(mesh.material as MeshStandardMaterial);
       mesh.dispose();
     }
+    for (const g of geometries) g.dispose();
+    for (const m of materials) m.dispose();
   }
 }

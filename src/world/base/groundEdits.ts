@@ -12,6 +12,8 @@ import type { Ring } from './types';
 export interface RoadEdit {
   kind: EditRoadKind;
   axis: LonLat[];
+  /** Ширина, м (нет — по типу). */
+  width?: number;
 }
 
 /** Что редактор поменял на земле. */
@@ -107,7 +109,7 @@ export class GroundModel {
     const dirt: Ring[][] = [];
     for (const road of edits.addedRoads) {
       if (road.axis.length < 2) continue;
-      const { width } = ROAD_KINDS[road.kind];
+      const width = road.width ?? ROAD_KINDS[road.kind].width;
       const strip = (half: number) => {
         const result = buffer(lineString(road.axis), half, { units: 'meters', steps: 4 });
         const geometry = result?.geometry;

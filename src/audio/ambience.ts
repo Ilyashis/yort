@@ -34,8 +34,8 @@ export class Ambience {
     this.traffic = this.noiseLayer('lowpass', 320, 0.7, 0.07, 0.35);
     // Листва: средние частоты, громкость «гуляет» как порывы ветра.
     this.wind = this.noiseLayer('bandpass', 900, 0.6, 0.1, 0.4);
-    // Вода: журчание — полосовой шум, частота которого дрожит.
-    this.water = this.noiseLayer('bandpass', 1300, 1.4, 0.4, 0.3);
+    // Вода: тихое журчание — полосовой шум пониже (без шипения), частота плавно дрожит.
+    this.water = this.noiseLayer('bandpass', 900, 1.4, 0.4, 0.3);
     this.waterFilter = (this.water as GainNode & { filter?: BiquadFilterNode }).filter;
 
     this.birdTimer = window.setInterval(() => this.maybeBird(), 700);
@@ -98,7 +98,8 @@ export class Ambience {
     const { traffic, park, water } = this.levels;
     this.traffic.gain.setTargetAtTime(0.03 + 0.42 * traffic, now, timeConstant);
     this.wind.gain.setTargetAtTime(0.02 + 0.22 * park, now, timeConstant);
-    this.water.gain.setTargetAtTime(0.3 * water, now, timeConstant);
+    // Вода — фоном, тише листвы: раньше была самым громким звуком места.
+    this.water.gain.setTargetAtTime(0.07 * water, now, timeConstant);
   }
 
   /**
@@ -173,6 +174,6 @@ export class Ambience {
   private babble(): void {
     const ctx = this.engine.ctx;
     if (!ctx || !this.waterFilter || this.levels.water < 0.02) return;
-    this.waterFilter.frequency.setTargetAtTime(900 + Math.random() * 1200, ctx.currentTime, 0.05);
+    this.waterFilter.frequency.setTargetAtTime(650 + Math.random() * 600, ctx.currentTime, 0.18);
   }
 }

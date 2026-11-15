@@ -99,7 +99,7 @@ export function InfoPanel() {
           )}
 
           <div className="relief-scale" title="Усилить перепады высот, чтобы сравнить. Сцена пересоберётся, камера останется на месте">
-            <span>Рельеф</span>
+            <span>Перепады</span>
             {RELIEF_SCALES.map((k) => (
               <button key={k} type="button" className={k === reliefScale ? 'active' : undefined} onClick={() => setReliefScale(k)}>
                 ×{String(k).replace('.', ',')}

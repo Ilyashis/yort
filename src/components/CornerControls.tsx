@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Volumes } from '../audio/AudioEngine';
 import { findTerritory } from '../config/territory';
 import { isOnStreet, useAppStore } from '../store/useAppStore';
 import { formatTime, lightingAt, sunElevationAt, TIME_PRESETS } from '../three/dayNight';
+import { useDismiss } from './useDismiss';
 
 /** Вид сверху: план — квадрат с сеткой. */
 const TopViewIcon = () => (
@@ -26,27 +27,6 @@ const VOLUME_ROWS: { key: keyof Volumes; label: string }[] = [
   { key: 'ambience', label: 'Звуки города: машины, птицы, вода' },
   { key: 'sfx', label: 'Шаги и щелчки' },
 ];
-
-/** Всплывающая панель закрывается кликом мимо неё (кроме её кнопки) и клавишей Esc. */
-function useDismiss(onClose: () => void, buttonSelector: string) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDown = (event: PointerEvent) => {
-      const target = event.target as Element | null;
-      if (ref.current && target && !ref.current.contains(target) && !target.closest?.(buttonSelector)) onClose();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.code === 'Escape') onClose();
-    };
-    window.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [onClose, buttonSelector]);
-  return ref;
-}
 
 /** Настройки звука: включить/выключить и громкость по группам. */
 function SoundPanel({ onClose }: { onClose: () => void }) {

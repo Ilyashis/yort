@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
+import { useEditStore } from '../store/useEditStore';
+import { MOD } from './EditorToolbar';
 
 const Key = ({ children }: { children: string }) => <kbd>{children}</kbd>;
 
@@ -9,6 +12,14 @@ export function HelpPanel() {
   const walking = useAppStore((s) => s.mode === 'walk');
   const driving = useAppStore((s) => s.mode === 'drive');
   const setOpen = useAppStore((s) => s.setHelpOpen);
+  // Выбрали дом, забор или инструмент — справка уходит и не закрывает карточку справа.
+  useEffect(
+    () =>
+      useEditStore.subscribe((state, prev) => {
+        if ((state.selection && state.selection !== prev.selection) || (state.tool && state.tool !== prev.tool)) setOpen(false);
+      }),
+    [setOpen],
+  );
   if (!open || !ready) return null;
 
   return (
@@ -130,11 +141,11 @@ export function HelpPanel() {
           <dt>
             <Key>T</Key>
           </dt>
-          <dd>дорога: ведите от любой дороги</dd>
+          <dd>дорога: по точкам (клик — точка, двойной клик или Enter — готово), линией или кистью</dd>
           <dt>
             <Key>B</Key>
           </dt>
-          <dd>забор: ведите линию по земле</dd>
+          <dd>забор: клик — точка, двойной клик или Enter — готово (или карандашом); у выделенного забора точки тянутся, ворота двигаются</dd>
           <dt>
             <Key>G</Key>
           </dt>
@@ -147,9 +158,17 @@ export function HelpPanel() {
           <dt>
             <Key>Del</Key>
           </dt>
-          <dd>убрать выбранное</dd>
+          <dd>убрать выбранное (у выделенного забора — выбранную точку)</dd>
           <dt>
-            <Key>Ctrl</Key>
+            <Key>Enter</Key>
+          </dt>
+          <dd>закончить дорогу или забор по точкам</dd>
+          <dt>
+            <Key>Esc</Key>
+          </dt>
+          <dd>отменить рисование, снять выделение, выйти из инструмента</dd>
+          <dt>
+            <Key>{MOD}</Key>
             <Key>Z</Key>
           </dt>
           <dd>отменить (с Shift — повторить)</dd>

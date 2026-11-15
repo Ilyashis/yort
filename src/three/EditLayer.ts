@@ -12,6 +12,8 @@
 //   previewLine(points | undefined, kind?)  — линия, которую рисуют сейчас (дорога, забор), lon/lat;
 //   highlight(lines)                        — подсветка выделенной дороги или забора: линии по земле, lon/lat;
 //   setHandles(building | undefined, outline?) — ручки дома: углы — растянуть, кружок перед фасадом — повернуть;
+//   setFenceHandles(spec | undefined)        — ручки забора: точки, «+» на серединах отрезков, ворота;
+//   setSnap(point | undefined)              — куда притянул магнит (кольцо);
 //   pickables                               — объекты для луча выбора (свои дома, предпросмотр, заборы);
 //   hit(clientX, clientY, intersection?)    — что под курсором: ручка (по экрану), свой дом или свой забор;
 //   destroy().
@@ -37,10 +39,15 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { hashString } from '../utils/hash';
-import { chimneys, FENCE, FENCE_COLOR_HEX, fenceBoxes } from '../world/base/buildingDetails';
+import { chimneys, FENCE_COLOR_HEX } from '../world/base/buildingDetails';
+import { fenceParts } from '../world/village/estateParts';
+import type { FenceRun } from '../world/village/estates';
+import type { HousePart } from '../world/village/houseParts';
+import { onGround } from './PartsLayer';
 import { defaultRoofHeight, openRing, orientedBox, roofFrame, roofTriangles, signedArea } from '../world/base/roofGeometry';
 import { findHouseModel } from '../world/village/houseModels';
 import {
+  FENCE_STYLES,
   ROAD_KINDS,
   footprintCorners,
   modelPlacement,
@@ -57,7 +64,7 @@ import type { LocalFrame, Vec2 } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { toLocal2, toThree } from './coords';
 import { createFacadeMaterial, createRoofMaterial } from './facadeShader';
-import { buildHouseMesh, createHouseMaterials, type HouseMaterials, type HouseMesh } from './houseMesh';
+import { buildHouseGeometries, buildHouseMesh, createHouseMaterials, type HouseMaterials, type HouseMesh } from './houseMesh';
 import { MergedBuilder } from './merged';
 import { MeshBuilder } from './meshBuilder';
 import { hookMaterial } from './shaderHooks';
@@ -87,9 +94,28 @@ interface HandleStyle {
 }
 const CORNER_STYLE: HandleStyle = { size: 17, fill: '#ffffff', outline: '#1b1f27', ring: 2 };
 const ROTATE_STYLE: HandleStyle = { size: 19, fill: '#f5a524', outline: '#ffffff', ring: 2 };
+const VERTEX_STYLE: HandleStyle = { size: 14, fill: '#ffffff', outline: '#1b1f27', ring: 2 };
+const ACTIVE_STYLE: HandleStyle = { size: 17, fill: '#f5a524', outline: '#1b1f27', ring: 2 };
+const INSERT_STYLE: HandleStyle = { size: 11, fill: '#d9f2e3', outline: '#2f8f5b', ring: 2 };
+const GATE_STYLE: HandleStyle = { size: 21, fill: '#3a7bd5', outline: '#ffffff', ring: 3 };
+const SNAP_STYLE: HandleStyle = { size: 26, fill: 'transparent', outline: '#30c26b', ring: 3 };
+
+/** Ручки выделенного забора (локальные метры): точки, середины отрезков — добавить точку, ворота. */
+export interface FenceHandles {
+  vertices: Vec2[];
+  /** Выбранная точка (Delete убирает её). */
+  active?: Vec2;
+  inserts: { line: string; index: number; point: Vec2 }[];
+  gate?: Vec2;
+}
 
 /** Ручка выделенного дома: угол (растянуть) или поворот. */
-export type Handle = { handle: 'corner'; index: number } | { handle: 'rotate' };
+export type Handle =
+  | { handle: 'corner'; index: number }
+  | { handle: 'rotate' }
+  | { handle: 'vertex'; point: Vec2 }
+  | { handle: 'insert'; line: string; index: number; point: Vec2 }
+  | { handle: 'gate'; point: Vec2 };
 
 /** Собранные меши правок; у треугольников стен и крыш — номер дома в ids. */
 interface Assembly {
@@ -126,6 +152,12 @@ export class EditLayer {
   private readonly modelCache = new Map<string, HouseMesh>();
   private readonly cornerPoints: Points;
   private readonly rotatePoints: Points;
+  private readonly vertexPoints: Points;
+  private readonly activePoints: Points;
+  private readonly insertPoints: Points;
+  private readonly gatePoints: Points;
+  private readonly snapPoints: Points;
+  private fenceSpots: { handle: Handle; position: Vector3; size: number }[] = [];
   private main?: Assembly;
   private previewed?: Assembly;
   private line?: Line2;
@@ -152,7 +184,12 @@ export class EditLayer {
     this.cornerPoints = handlePoints(CORNER_STYLE);
     this.rotatePoints = handlePoints(ROTATE_STYLE);
     this.group.name = 'edits';
-    this.group.add(this.cornerPoints, this.rotatePoints);
+    this.vertexPoints = handlePoints(VERTEX_STYLE);
+    this.activePoints = handlePoints(ACTIVE_STYLE);
+    this.insertPoints = handlePoints(INSERT_STYLE);
+    this.gatePoints = handlePoints(GATE_STYLE);
+    this.snapPoints = handlePoints(SNAP_STYLE);
+    this.group.add(this.cornerPoints, this.rotatePoints, this.insertPoints, this.vertexPoints, this.activePoints, this.gatePoints, this.snapPoints);
     city.scene.add(this.group);
   }
 
@@ -176,12 +213,13 @@ export class EditLayer {
   }
 
   /** Линия, которую рисуют сейчас (дорога, забор); undefined — спрятать. */
-  previewLine(points: LonLat[] | undefined, kind?: EditRoadKind | 'fence'): void {
+  previewLine(points: LonLat[] | undefined, kind?: EditRoadKind | 'fence', width?: number): void {
     this.removeLine(this.line);
     this.line = undefined;
     if (kind) {
-      // Ширина линии на экране — условная: настоящая ширина дороги видна после отпускания.
-      this.lineMaterial.linewidth = kind === 'fence' ? 3 : Math.max(3, ROAD_KINDS[kind].width);
+      // Дорога — своей настоящей шириной (в метрах), забор — тонкой линией на экране.
+      this.lineMaterial.worldUnits = kind !== 'fence';
+      this.lineMaterial.linewidth = kind === 'fence' ? 3 : (width ?? ROAD_KINDS[kind].width);
       this.lineMaterial.color.set(kind === 'fence' ? FENCE_LINE : HIGHLIGHT);
       this.lineMaterial.opacity = kind === 'fence' ? 1 : 0.75;
     }
@@ -217,6 +255,39 @@ export class EditLayer {
     setPoints(this.cornerPoints, this.handleSpots.filter((s) => s.handle.handle === 'corner').map((s) => s.position));
     setPoints(this.rotatePoints, this.handleSpots.filter((s) => s.handle.handle === 'rotate').map((s) => s.position));
     this.city.requestRender();
+  }
+
+  /** Ручки выделенного забора; undefined — убрать. */
+  setFenceHandles(spec: FenceHandles | undefined): void {
+    const at = ([x, y]: Vec2) => toThree(x, y, this.heightAt(x, y) + 0.3);
+    this.fenceSpots = [];
+    if (spec) {
+      for (const point of spec.vertices) this.fenceSpots.push({ handle: { handle: 'vertex', point }, position: at(point), size: VERTEX_STYLE.size });
+      for (const { line, index, point } of spec.inserts)
+        this.fenceSpots.push({ handle: { handle: 'insert', line, index, point }, position: at(point), size: INSERT_STYLE.size });
+      if (spec.gate) this.fenceSpots.push({ handle: { handle: 'gate', point: spec.gate }, position: at(spec.gate), size: GATE_STYLE.size });
+    }
+    const of = (kind: Handle['handle']) => this.fenceSpots.filter((s) => s.handle.handle === kind).map((s) => s.position);
+    const active = spec?.active;
+    setPoints(this.vertexPoints, of('vertex'));
+    setPoints(this.activePoints, active ? [at(active)] : []);
+    setPoints(this.insertPoints, of('insert'));
+    setPoints(this.gatePoints, of('gate'));
+    this.city.requestRender();
+  }
+
+  /** Кольцо там, куда притянул магнит. */
+  setSnap(point: Vec2 | undefined): void {
+    setPoints(this.snapPoints, point ? [toThree(point[0], point[1], this.heightAt(point[0], point[1]) + 0.3)] : []);
+    this.city.requestRender();
+  }
+
+  /** Точка на экране (px клиента) для локальной точки на земле; undefined — за камерой. */
+  screenOf([x, y]: Vec2): [number, number] | undefined {
+    const p = this.projected.copy(toThree(x, y, this.heightAt(x, y) + 0.3)).project(this.city.camera);
+    if (p.z < -1 || p.z > 1) return undefined;
+    const rect = this.city.canvas.getBoundingClientRect();
+    return [rect.left + ((p.x + 1) / 2) * rect.width, rect.top + ((1 - p.y) / 2) * rect.height];
   }
 
   /** Объекты для луча выбора: свои дома (и предпросмотр) и свои заборы. */
@@ -274,7 +345,7 @@ export class EditLayer {
     this.removeLine(this.line);
     for (const line of this.highlights) this.removeLine(line);
     this.highlights = [];
-    for (const points of [this.cornerPoints, this.rotatePoints]) {
+    for (const points of [this.cornerPoints, this.rotatePoints, this.vertexPoints, this.activePoints, this.insertPoints, this.gatePoints, this.snapPoints]) {
       points.geometry.dispose();
       const material = points.material as PointsMaterial;
       material.map?.dispose();
@@ -296,7 +367,7 @@ export class EditLayer {
     const walls = new MeshBuilder();
     const roofs = new MeshBuilder();
     const extras = new MergedBuilder();
-    const fenceParts = new MergedBuilder();
+    const fenceList: HousePart[] = [];
     const models: Group[] = [];
     const outlines: Line2[] = [];
     const modelKeys = new Set<string>();
@@ -312,16 +383,22 @@ export class EditLayer {
       }
       this.addBuilding(building, index, tint, walls, roofs, extras);
     });
-    const fenceLines = fences.map(({ id, line }) => {
-      const local = line.map(this.frame.toLocal);
-      this.addFence(id, local, fenceParts);
-      return { id, line: local };
+    const fenceLines = fences.map((fence) => {
+      const local = fence.line.map(this.frame.toLocal);
+      this.addFence(fence, local, fenceList);
+      return { id: fence.id, line: local };
     });
+    let fenceMesh: Mesh | undefined;
+    if (fenceList.length) {
+      const geometry = buildHouseGeometries(fenceList).solid;
+      geometry.computeBoundingSphere();
+      fenceMesh = this.addMesh(new Mesh(geometry, this.houseMaterials.solid), `${name}-fences`);
+    }
     return {
       walls: walls.vertexCount ? this.addMesh(new Mesh(walls.geometry(), this.wallMaterial), `${name}-walls`) : undefined,
       roofs: roofs.vertexCount ? this.addMesh(new Mesh(roofs.geometry(), this.roofMaterial), `${name}-roofs`) : undefined,
       chimneys: this.boxes(extras, `${name}-chimneys`),
-      fences: this.boxes(fenceParts, `${name}-fences`),
+      fences: fenceMesh,
       ids: items.map(({ building }) => building.id),
       wallOwners: walls.owners,
       roofOwners: roofs.owners,
@@ -432,15 +509,21 @@ export class EditLayer {
     }
   }
 
-  /** Забор по линии: доски кусками (каждый — на своей высоте земли) и столбы. */
-  private addFence(id: string, line: readonly Vec2[], builder: MergedBuilder): void {
-    const color = new Color(FENCE_COLOR_HEX[hashString(id) % FENCE_COLOR_HEX.length]!);
-    const postColor = color.clone().multiplyScalar(0.7);
-    for (let i = 1; i < line.length; i++) {
-      const { pieces, posts } = fenceBoxes(line[i - 1]!, line[i]!, FENCE.street, true);
-      for (const box of pieces) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), color, id);
-      for (const box of posts) builder.addBox(box, this.heightAt(box.center[0], box.center[1]), postColor, id);
-    }
+  /** Свой забор — теми же деталями, что заборы участков: тип, высота, цвет; каждая часть — на своей земле. */
+  private addFence(fence: EditedFence, line: readonly Vec2[], out: HousePart[]): void {
+    const style = fence.style ?? 'boards';
+    const seed = hashString(fence.id);
+    const run: FenceRun = {
+      owners: [fence.id],
+      kind: 'street',
+      line: [...line],
+      cuts: [],
+      style,
+      color: fence.color ?? (fence.style ? FENCE_STYLES[style].colors[seed % FENCE_STYLES[style].colors.length]! : FENCE_COLOR_HEX[seed % FENCE_COLOR_HEX.length]!),
+      height: fence.height ?? FENCE_STYLES[style].height,
+      seed,
+    };
+    for (const part of fenceParts(run, false)) out.push(onGround(part, undefined, this.heightAt));
   }
 
   private addMesh(mesh: Mesh, name: string): Mesh {
@@ -515,11 +598,11 @@ export class EditLayer {
 
   /** Ручка под курсором: ближайшая, чей кружок на экране накрывает точку. */
   private handleAt(clientX: number, clientY: number): Handle | undefined {
-    if (!this.handleSpots.length) return undefined;
+    if (!this.handleSpots.length && !this.fenceSpots.length) return undefined;
     const rect = this.city.canvas.getBoundingClientRect();
     let best: Handle | undefined;
     let bestDistance = Number.POSITIVE_INFINITY;
-    for (const { handle, position, size } of this.handleSpots) {
+    for (const { handle, position, size } of [...this.handleSpots, ...this.fenceSpots]) {
       const p = this.projected.copy(position).project(this.city.camera);
       if (p.z < -1 || p.z > 1) continue; // за камерой или дальше дальней плоскости
       const x = rect.left + ((p.x + 1) / 2) * rect.width;
@@ -587,7 +670,9 @@ function discTexture({ size, fill, outline, ring }: HandleStyle): CanvasTexture 
   ctx.beginPath();
   ctx.arc(px / 2, px / 2, r, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = fill;
+  // Прозрачная заливка — кольцо: середину вырезаем.
+  if (fill === 'transparent') ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = fill === 'transparent' ? '#000' : fill;
   ctx.beginPath();
   ctx.arc(px / 2, px / 2, r * (1 - (2 * ring) / size), 0, Math.PI * 2);
   ctx.fill();

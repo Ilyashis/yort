@@ -56,6 +56,8 @@ export class CityScene {
   readonly target = new Vector3();
   private readonly composer: EffectComposer;
   private readonly ao: GTAOPass;
+  /** Слои, которые не участвуют в затенении углов (AO). */
+  private readonly noAo = new Set<Object3D>();
   private readonly illustration: ShaderPass;
   private readonly bloom: UnrealBloomPass;
   private readonly sky: SkySystem;
@@ -128,11 +130,14 @@ export class CityScene {
         const material = (object as { material?: Material | Material[] }).material;
         if (material && isOverlay(material)) overlays.push(object);
       });
-      for (const object of overlays) object.visible = false;
+      // Мелочь (деревья, трава, заборы, палисадники) в AO не идёт: это второй проход всей сцены — вдвое
+      // больше вызовов и треугольников, а затенение углов нужно домам и земле.
+      const skipped = [...this.noAo].filter((object) => object.visible);
+      for (const object of [...overlays, ...skipped]) object.visible = false;
       try {
         renderAo(...args);
       } finally {
-        for (const object of overlays) object.visible = true;
+        for (const object of [...overlays, ...skipped]) object.visible = true;
       }
     };
     this.composer.addPass(this.ao);
@@ -158,6 +163,12 @@ export class CityScene {
   }
 
   /** Перерисовать сцену в ближайшем кадре. */
+  /** Не учитывать объект (и всё в нём) в затенении углов (AO): мелочь, которая удваивает его стоимость. */
+  skipAo(object: Object3D): () => void {
+    this.noAo.add(object);
+    return () => this.noAo.delete(object);
+  }
+
   requestRender(): void {
     this.dirty = true;
   }

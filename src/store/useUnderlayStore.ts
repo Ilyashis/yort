@@ -106,15 +106,28 @@ export function alignHint(mode: UnderlayMode | undefined, align: AlignState): st
   return `${prefix}: кликните, где эта точка на карте (на доме — по углу крыши).${tail}`;
 }
 
+const PERSIST_MS = 400;
+
 const isTiff = (file: File) => /\.tiff?$/i.test(file.name) || file.type === 'image/tiff';
 
 export const useUnderlayStore = create<UnderlayState>()((set, get) => {
-  const persist = () => {
+  /**
+   * Сохранить подложку (снимок целиком, это мегабайты) — не чаще раза в PERSIST_MS: ползунки поворота и
+   * прозрачности дёргают её на каждом шаге. Пишется последнее состояние, записи не обгоняют друг друга.
+   */
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const write = () => {
+    timer = undefined;
     const { territoryId, image, placement, opacity, visible } = get();
     if (territoryId && image && placement) {
       void saveUnderlay(territoryId, { blob: image.blob, name: image.name, size: image.size, georef: image.georef, placement, opacity, visible });
     }
   };
+  const persist = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(write, PERSIST_MS);
+  };
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', () => timer !== undefined && (clearTimeout(timer), write()));
 
   /** Ортофото: читаем пиксели и привязку, снимок ложится по координатам файла. */
   const openGeoTiff = async (file: File, scene: UnderlayScene): Promise<FileResult & { image?: UnderlayImage; placement?: UnderlayPlacement }> => {

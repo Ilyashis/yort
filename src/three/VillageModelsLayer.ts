@@ -268,7 +268,10 @@ export class VillageModelsLayer {
         geometry.setAttribute('surveyRoof', new InstancedBufferAttribute(new Float32Array(count * 3).fill(-1), 3));
         geometry.setAttribute('surveyWall', new InstancedBufferAttribute(new Float32Array(count * 3).fill(-1), 3));
       }
-      out.push(this.addMesh(new InstancedMesh(geometry, material, count)));
+      const mesh = this.addMesh(new InstancedMesh(geometry, material, count));
+      // Стёкла — в проёмах стен: тени от них не видно, а это лишний вызов в каждом каскаде теней.
+      if (material === this.materials.glass) mesh.castShadow = false;
+      out.push(mesh);
     }
     return out;
   }

@@ -34,6 +34,7 @@ import {
   type WindowStyle,
 } from './houseParts';
 import { PUBLIC_MODELS } from './publicModels';
+import { SPORT_MODELS } from './sportModels';
 import {
   ACCENTS,
   BAND,
@@ -82,15 +83,19 @@ export type HouseModelId =
   | 'well'
   | 'shed'
   | 'garage'
-  | 'greenhouse';
+  | 'greenhouse'
+  | 'football'
+  | 'sportsground'
+  | 'playground';
 
 /** Разделы каталога: жилые дома, общественные здания, мелкие постройки (двор, улица). */
-export type HouseModelGroup = 'house' | 'public' | 'small';
+export type HouseModelGroup = 'house' | 'public' | 'small' | 'leisure';
 
 export const MODEL_GROUPS: { group: HouseModelGroup; label: string }[] = [
   { group: 'house', label: 'Жилые дома' },
   { group: 'public', label: 'Общественные' },
   { group: 'small', label: 'Двор и улица' },
+  { group: 'leisure', label: 'Спорт и отдых' },
 ];
 
 export interface HouseOptions {
@@ -934,7 +939,7 @@ const HOME_MODELS: HouseModel[] = [
 /** Весь каталог: жилые дома, общественные здания, мелкие постройки — по разделам. */
 export const HOUSE_MODELS: HouseModel[] = MODEL_GROUPS.flatMap(({ group }) =>
   // Юрта — в конце общественных (первой в разделе идёт школа).
-  [...HOME_MODELS.filter((m) => m.id !== 'yurt'), ...PUBLIC_MODELS, ...HOME_MODELS.filter((m) => m.id === 'yurt')].filter((m) => m.group === group),
+  [...HOME_MODELS.filter((m) => m.id !== 'yurt'), ...PUBLIC_MODELS, ...HOME_MODELS.filter((m) => m.id === 'yurt'), ...SPORT_MODELS].filter((m) => m.group === group),
 );
 
 export function findHouseModel(id: string): HouseModel | undefined {

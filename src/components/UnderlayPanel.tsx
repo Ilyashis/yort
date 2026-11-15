@@ -150,7 +150,7 @@ export function UnderlayPanel({ onClose }: { onClose: () => void }) {
             <button type="button" className="button" disabled={busy} onClick={() => fileInput.current?.click()}>
               Заменить
             </button>
-            <button type="button" className="button" onClick={() => store.remove()}>
+            <button type="button" className="button" onClick={() => window.confirm('Убрать подложку? Снимок удалится из этого браузера — вернуть его можно, только загрузив файл заново.') && store.remove()}>
               Убрать подложку
             </button>
           </div>
