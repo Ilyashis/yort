@@ -7,7 +7,7 @@ import {
   Clock,
   HalfFloatType,
   MathUtils,
-  PCFSoftShadowMap,
+  PCFShadowMap, PCFSoftShadowMap,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -32,6 +32,7 @@ import { SEASON } from './shaderHooks';
 import { createIllustrationPass } from './illustrationPass';
 import { NIGHT } from './nightUniforms';
 import { linearColor, moonDirection, SkySystem, sunDirection } from './sky';
+import { LITE } from '../config/device';
 
 /** high — с затенением в углах (AO) и контурами, normal — только тени и сглаживание. */
 export type GraphicsQuality = 'high' | 'normal';
@@ -85,12 +86,13 @@ export class CityScene {
     private readonly location: { lat: number; lon: number },
   ) {
     this.renderer = new WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Телефон: экран с плотностью 3× рисуем в 1,5× — разницы почти не видно, а пикселей вчетверо меньше.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, LITE ? 1.5 : 2));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.92;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.type = LITE ? PCFShadowMap : PCFSoftShadowMap;
     this.renderer.info.autoReset = false;
     this.renderer.domElement.className = 'city-canvas';
     container.appendChild(this.renderer.domElement);
@@ -100,11 +102,12 @@ export class CityScene {
     const sun = sunDirection(dateAt(DEFAULT_TIME), location.lat, location.lon);
 
     this.csm = new CSM({
-      maxFar: 3000,
-      cascades: 4,
+      // Телефон: два каскада вместо четырёх и ближе — каждый каскад заново рисует сцену.
+      maxFar: LITE ? 1200 : 3000,
+      cascades: LITE ? 2 : 4,
       mode: 'practical',
       parent: this.scene,
-      shadowMapSize: 2048,
+      shadowMapSize: LITE ? 1024 : 2048,
       lightDirection: sun.clone().negate(),
       camera: this.camera,
       lightIntensity: 2.6,

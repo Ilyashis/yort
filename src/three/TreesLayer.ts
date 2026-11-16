@@ -24,6 +24,7 @@ import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import type { GroundArea, GroundDelta } from './merged';
 import { hookMaterial } from './shaderHooks';
+import { LITE } from '../config/device';
 
 const UP = new Vector3(0, 1, 0);
 const ZERO = new Matrix4().makeScale(0, 0, 0);
@@ -34,7 +35,9 @@ const ZERO = new Matrix4().makeScale(0, 0, 0);
  */
 const TILE = 250;
 /** Тени отбрасывают куски ближе этого к камере, м: дальние тени в дымке не видны, а стоят дорого. */
-const SHADOW_REACH = 450;
+const SHADOW_REACH = LITE ? 250 : 450;
+/** Телефон: куски дальше этого не рисуем вовсе — вдали их и так съедает дымка, м. */
+const VIEW_REACH = LITE ? 2200 : Infinity;
 /** Пересчитать, кто отбрасывает тень, когда камера сдвинулась на столько, м. */
 const SHADOW_RECHECK = 25;
 
@@ -63,13 +66,22 @@ export class TreesLayer {
     heightAt: (x: number, y: number) => number,
     csm: CSM,
   ) {
-    const geometries: Record<TreeShape, BufferGeometry> = {
-      trunk: new CylinderGeometry(0.022, 0.03, 0.42, 6),
-      blob: new SphereGeometry(1, 9, 7),
-      cone: new ConeGeometry(1, 1, 9),
-      forestCrown: new SphereGeometry(1, 7, 5),
-      forestCone: new ConeGeometry(1, 1, 7),
-    };
+    // Телефон: кроны и стволы грубее — деревьев тысячи, это большая часть треугольников сцены.
+    const geometries: Record<TreeShape, BufferGeometry> = LITE
+      ? {
+          trunk: new CylinderGeometry(0.022, 0.03, 0.42, 4),
+          blob: new SphereGeometry(1, 7, 5),
+          cone: new ConeGeometry(1, 1, 7),
+          forestCrown: new SphereGeometry(1, 5, 4),
+          forestCone: new ConeGeometry(1, 1, 5),
+        }
+      : {
+          trunk: new CylinderGeometry(0.022, 0.03, 0.42, 6),
+          blob: new SphereGeometry(1, 9, 7),
+          cone: new ConeGeometry(1, 1, 9),
+          forestCrown: new SphereGeometry(1, 7, 5),
+          forestCone: new ConeGeometry(1, 1, 7),
+        };
     const colors = new Map<string, Color[]>();
     const shapeOf = new Map<string, TreeShape>();
     const palette = new Map<string, Color>();
@@ -159,14 +171,16 @@ export class TreesLayer {
     this.city.requestRender();
   }
 
-  /** Тень — только у кусков рядом с камерой. */
+  /** Тень — только у кусков рядом с камерой; на телефоне дальние куски не рисуются. */
   private updateShadows(): void {
     const camera = this.city.camera.position;
     if (camera.distanceTo(this.lastCheck) < SHADOW_RECHECK) return;
     this.lastCheck.copy(camera);
     for (const mesh of this.meshes.values()) {
       const sphere = mesh.boundingSphere;
-      mesh.castShadow = !sphere || camera.distanceTo(sphere.center) - sphere.radius < SHADOW_REACH;
+      const distance = sphere ? camera.distanceTo(sphere.center) - sphere.radius : 0;
+      mesh.castShadow = distance < SHADOW_REACH;
+      mesh.visible = distance < VIEW_REACH;
     }
   }
 

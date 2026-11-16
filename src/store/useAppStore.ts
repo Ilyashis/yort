@@ -51,6 +51,7 @@ import {
   type BuildResult,
 } from '../world/user/building';
 import type { LonLat, PlotAnalysis } from '../world/user/plot';
+import { LITE } from '../config/device';
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
 
@@ -313,7 +314,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   soundOn: readPref('sound', ['on', 'off'], 'on') === 'on',
   volumes: readVolumes(),
   viewMode: 'tilt',
-  graphicsQuality: readPref('graphics', ['high', 'normal'] as const, 'high'),
+  // На телефоне по умолчанию — без мягких теней в углах (дорого для мобильной видеокарты).
+  graphicsQuality: readPref('graphics', ['high', 'normal'] as const, LITE ? 'normal' : 'high'),
   timeOfDay: nowHours(),
   season: seasonNow(),
   timeFlowing: readPref('time-flow', ['on', 'off'] as const, 'off') === 'on',
@@ -435,7 +437,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ...(typeof view.villageModels === 'boolean' ? { villageModels: view.villageModels } : {}),
       ...(typeof view.grassOn === 'boolean' ? { grassOn: view.grassOn } : {}),
       ...(typeof view.timeFlowing === 'boolean' && !ownPref('time-flow') ? { timeFlowing: view.timeFlowing } : {}),
-      ...((view.graphicsQuality === 'high' || view.graphicsQuality === 'normal') && !ownPref('graphics') ? { graphicsQuality: view.graphicsQuality } : {}),
+      ...((view.graphicsQuality === 'high' || view.graphicsQuality === 'normal') && !ownPref('graphics') && !LITE ? { graphicsQuality: view.graphicsQuality } : {}),
       ...(typeof view.haze === 'boolean' && !ownPref('haze') ? { haze: view.haze } : {}),
       ...(typeof view.blur === 'boolean' && !ownPref('blur') ? { blur: view.blur } : {}),
       ...(typeof view.outlines === 'boolean' && !ownPref('outlines') ? { outlines: view.outlines } : {}),

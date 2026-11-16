@@ -3,11 +3,12 @@
 
 import { BufferAttribute, BufferGeometry, CanvasTexture, Points, PointsMaterial, SRGBColorSpace } from 'three';
 import type { CityScene } from './CityScene';
+import { LITE } from '../config/device';
 
 /** Коробка вокруг камеры, м: по горизонтали и по вертикали. */
 const BOX = 140;
 const HEIGHT = 70;
-const COUNT = 9000;
+const COUNT = LITE ? 3000 : 9000;
 /** Выше этого над землёй снегопад не показываем, м. */
 const MAX_ALTITUDE = 450;
 
