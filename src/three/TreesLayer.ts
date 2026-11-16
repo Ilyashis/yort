@@ -42,7 +42,6 @@ export const treeReach = (street: boolean): number => (street ? (LITE ? 800 : 15
 const SHADOW_RECHECK = 25;
 
 export class TreesLayer {
-  private readonly unskipAo: () => void;
   readonly group = new Group();
   /** Меши по ключу «форма:кусок». */
   private readonly meshes = new Map<string, InstancedMesh>();
@@ -139,7 +138,7 @@ export class TreesLayer {
       this.group.add(mesh);
     }
     city.scene.add(this.group);
-    this.unskipAo = city.skipAo(this.group);
+    // В мягкие тени (AO) деревья входят: без них затемнение у стен дома за кроной рисовалось поверх кроны.
     this.removeAnimator = city.addAnimator(() => {
       this.updateShadows();
       return false;
@@ -243,7 +242,6 @@ export class TreesLayer {
 
   destroy(): void {
     this.removeAnimator();
-    this.unskipAo();
     this.city.scene.remove(this.group);
     // Геометрия и материал — общие на форму: освобождаем по одному разу.
     const geometries = new Set<BufferGeometry>();

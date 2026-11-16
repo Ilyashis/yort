@@ -1010,7 +1010,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push(overview);
 
       // Звук: музыка и звуки города по месту, где сейчас камера или пешеход.
-      const soundscape = new Soundscape(new SoundZones(environment.ground, frame, village), () => {
+      const soundTrees = [...parkTrees, ...forestTrees].map(([lon, lat]) => frame.toLocal([lon, lat]));
+      const soundscape = new Soundscape(new SoundZones(environment.ground, frame, village, soundTrees), () => {
         const p = c.camera.position;
         return { point: [p.x, -p.z] as Vec2, altitude: p.y - localHeight(p.x, -p.z) };
       });

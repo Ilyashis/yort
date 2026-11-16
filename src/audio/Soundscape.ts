@@ -2,11 +2,13 @@ import type { Vec2 } from '../world/walk/localFrame';
 import { AudioEngine, type Volumes } from './AudioEngine';
 import { Ambience } from './ambience';
 import { EngineSound, type CarSound } from './engineSound';
-import { GenerativeMusic } from './music';
 import type { SoundZones } from './soundZones';
 
-/** Длина шага, м: при ходьбе и беге. */
-const STRIDE = { walk: 0.75, run: 1.6 } as const;
+/**
+ * Сколько метров проходим между звуками шагов. Пешеход в сцене идёт быстро (4 м/с, бегом 12), поэтому
+ * шаг длиннее настоящего: около двух шагов в секунду при ходьбе — как в жизни, а не дробный топот.
+ */
+const STRIDE = { walk: 1.9, run: 3.2 } as const;
 const UPDATE_MS = 250;
 
 export interface ListenerSample {
@@ -17,12 +19,11 @@ export interface ListenerSample {
 }
 
 /**
- * Звуковая картина сцены: музыка, звуки города по месту слушателя, шаги и щелчки интерфейса.
+ * Звуковая картина сцены: звуки места по положению слушателя (птицы, река рядом), шаги, машина, щелчки.
  * Сэмплирует камеру несколько раз в секунду — без перерисовок React.
  */
 export class Soundscape {
   private readonly engine = new AudioEngine();
-  private readonly music = new GenerativeMusic(this.engine);
   private readonly ambience = new Ambience(this.engine);
   private readonly car = new EngineSound(this.engine);
   private readonly timer: number;
@@ -32,10 +33,8 @@ export class Soundscape {
     private readonly zones: SoundZones,
     private readonly sample: () => ListenerSample | undefined,
   ) {
-    this.engine.onReady(() => {
-      this.music.start();
-      this.ambience.start();
-    });
+    // Фоновой музыки нет: в деревне слышны птицы и река рядом (музыка с шумом мешали).
+    this.engine.onReady(() => this.ambience.start());
     // Браузер разрешит звук только после жеста пользователя.
     window.addEventListener('pointerdown', this.unlock, true);
     window.addEventListener('keydown', this.unlock, true);
@@ -81,7 +80,6 @@ export class Soundscape {
     window.removeEventListener('pointerdown', this.unlock, true);
     window.removeEventListener('keydown', this.unlock, true);
     document.removeEventListener('click', this.onClick, true);
-    this.music.stop();
     this.ambience.stop();
     this.engine.destroy();
   }

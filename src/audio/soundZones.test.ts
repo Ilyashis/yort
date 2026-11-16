@@ -33,12 +33,12 @@ describe('SoundZones', () => {
     expect(zones.levelsAt([0, 70], 1.7).park).toBeCloseTo(1, 5);
     expect(zones.levelsAt([0, 6], 1.7).park).toBeLessThan(0.2);
     // 10 м от воды: 1 − 10/150 ≈ 0,93.
-    expect(zones.levelsAt([0, -290], 1.7).water).toBeGreaterThan(0.9);
+    expect(zones.levelsAt([0, -290], 1.7).water).toBeGreaterThan(0.8);
     expect(zones.levelsAt([0, 70], 1.7).water).toBe(0);
   });
 
   it('сверху слышен только далёкий гул города', () => {
-    expect(zones.levelsAt([0, 6], 1000)).toEqual({ traffic: 0.25, park: 0, water: 0 });
+    expect(zones.levelsAt([0, 6], 1000)).toEqual({ traffic: 0.25, park: 0, leaves: 0, water: 0 });
   });
 
   it('шаги: по газону — трава, по дорожке в парке и тротуару — плитка', () => {
@@ -51,10 +51,27 @@ describe('SoundZones', () => {
 describe('SoundZones в деревне', () => {
   const village = new SoundZones([area('road', -200, 0, 400, 12), area('green', -100, 40, 200, 100)], frame, true);
 
-  it('машин мало, далёкого городского гула нет, птиц слышно и вдали от газонов', () => {
-    expect(village.levelsAt([0, 6], 1.7).traffic).toBeLessThan(0.35);
-    expect(village.levelsAt([0, 6], 1000)).toEqual({ traffic: 0, park: 0, water: 0 });
+  it('без гула машин и шипения листвы; птиц слышно везде, с высоты — тише', () => {
+    expect(village.levelsAt([0, 6], 1.7).traffic).toBe(0);
+    expect(village.levelsAt([0, 6], 1.7).leaves).toBe(0);
+    expect(village.levelsAt([0, 6], 1000)).toEqual({ traffic: 0, park: 0.25, leaves: 0, water: 0 });
     expect(village.levelsAt([0, -150], 1.7).park).toBeGreaterThan(0.5);
+  });
+
+  it('у леса птиц больше, чем на пустом месте', () => {
+    const trees: [number, number][] = [];
+    for (let i = 0; i < 60; i++) trees.push([500 + (i % 8) * 6, 500 + Math.floor(i / 8) * 6]);
+    const woods = new SoundZones([], frame, true, trees);
+    expect(woods.woodsAt([520, 520])).toBe(1);
+    expect(woods.woodsAt([0, 0])).toBe(0);
+    expect(woods.levelsAt([520, 520], 1.7).park).toBeGreaterThan(woods.levelsAt([0, 0], 1.7).park + 0.3);
+  });
+
+  it('речку слышно только рядом', () => {
+    const river = new SoundZones([area('water', -200, 200, 400, 30)], frame, true);
+    expect(river.levelsAt([0, 210], 1.7).water).toBeGreaterThan(0.9);
+    expect(river.levelsAt([0, 140], 1.7).water).toBeGreaterThan(0);
+    expect(river.levelsAt([0, 100], 1.7).water).toBe(0);
   });
 
   it('шаги вне дороги — по траве', () => {

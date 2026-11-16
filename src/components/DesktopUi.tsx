@@ -90,8 +90,7 @@ function HudButton({
 
 const VOLUME_ROWS: { key: keyof Volumes; label: string }[] = [
   { key: 'master', label: 'Общая громкость' },
-  { key: 'music', label: 'Музыка' },
-  { key: 'ambience', label: 'Звуки: машины, птицы, вода' },
+  { key: 'ambience', label: 'Птицы и речка' },
   { key: 'sfx', label: 'Шаги и щелчки' },
 ];
 
