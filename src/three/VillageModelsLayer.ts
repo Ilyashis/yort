@@ -13,8 +13,10 @@
 //   house(id), rectLonLat(id), houses — какая модель у дома и где её прямоугольник;
 //   triangles, destroy().
 
-import { Color, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type BufferGeometry, type Intersection, type Material, type Object3D } from 'three';
+import { BufferAttribute, Color, Float16BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, Quaternion, Vector3, type BufferGeometry, type Intersection, type Material, type Object3D } from 'three';
 import type { CSM } from 'three/addons/csm/CSM.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { CAN_EDIT } from '../config/mode';
 import { FOOTING_DEPTH, siteOnSlope } from '../world/base/siting';
 import { modelPlacement, type LonLat } from '../world/edit/edits';
 import { findHouseModel } from '../world/village/houseModels';
@@ -23,7 +25,7 @@ import { fitPreset, type VillageHouse } from '../world/village/villagePlan';
 import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import { toThree } from './coords';
-import type { GroundArea, GroundDelta } from './merged';
+import { markRanges, type GroundArea, type GroundDelta } from './merged';
 import { buildHouseGeometries, createHouseMaterials, type HouseMaterials } from './houseMesh';
 
 /** Ближе этого к камере — полная модель, дальше — упрощённая, м (с запасом, чтобы не мигало). */
@@ -83,6 +85,12 @@ export class VillageModelsLayer {
   /** Виды, у которых поменялось, кто виден и кто вблизи: их экземпляры надо переложить. */
   private readonly dirty = new Set<Kind>();
   readonly triangles: { near: number; far: number };
+  /**
+   * На сайте упрощённые (дальние) дома всех видов склеены в две сетки — стены и стёкла: два вызова
+   * отрисовки вместо сотни. Ближние и спрятанные дома в склейке сведены в точку. У редактора — как раньше.
+   */
+  private readonly farMerged: FarMerged[] = [];
+  private farMaterials?: HouseMaterials;
 
   constructor(
     private readonly city: CityScene,
@@ -111,6 +119,8 @@ export class VillageModelsLayer {
       groups.set(key, list);
     }
 
+    const mergeFar = !CAN_EDIT;
+    const farParts: { solid: { owner: string; geometry: BufferGeometry }[]; glass: { owner: string; geometry: BufferGeometry }[] } = { solid: [], glass: [] };
     const foundationColors: string[] = [];
     let foundationCount = 0;
     const triangles = { near: 0, far: 0 };
@@ -118,9 +128,11 @@ export class VillageModelsLayer {
       const { house, size } = list[0]!;
       const plan = findHouseModel(house.model)!.plan({ seed: house.seed, width: size[0], depth: size[1] });
       const farPlan = findHouseModel(house.model)!.plan({ seed: house.seed, width: size[0], depth: size[1], far: true });
+      const farBuilt = mergeFar ? buildHouseGeometries(simplifyParts(farPlan.parts)) : undefined;
+      if (farBuilt) triangles.far += farBuilt.triangles * list.length;
       const kind: Kind = {
         near: this.instanced(plan.parts, list.length, (t) => (triangles.near += t * list.length)),
-        far: this.instanced(simplifyParts(farPlan.parts), list.length, (t) => (triangles.far += t * list.length)),
+        far: farBuilt ? [] : this.instanced(simplifyParts(farPlan.parts), list.length, (t) => (triangles.far += t * list.length)),
         entries: [],
       };
       this.kinds.push(kind);
@@ -147,11 +159,38 @@ export class VillageModelsLayer {
           mesh.setMatrixAt(slot, matrix);
           setRepaint(mesh, slot, entry);
         }
+        // Склейка: своя копия упрощённого дома, уже на месте и со своими цветами кровли и стен.
+        if (farBuilt) {
+          for (const [source, list2] of [
+            [farBuilt.solid, farParts.solid],
+            [farBuilt.glass, farParts.glass],
+          ] as const) {
+            if (!source.getAttribute('position').count) continue;
+            const copy = source.clone().applyMatrix4(matrix);
+            bakeRepaint(copy, entry);
+            list2.push({ owner: h.id, geometry: copy });
+          }
+        }
         // Фундамент под каждым цоколем (цвет — как у цоколя); на ровном он весь в земле, на склоне — виден.
         entry.foundations = foundationMatrices(matrix, plinths, floor - low);
         for (const p of plinths) foundationColors.push(p.color);
         foundationCount += plinths.length;
       });
+      if (farBuilt) {
+        farBuilt.solid.dispose();
+        farBuilt.glass.dispose();
+      }
+    }
+    if (mergeFar) {
+      this.farMaterials = createHouseMaterials(csm);
+      const solid = mergeOwned(farParts.solid, this.farMaterials.solid, 'village-far');
+      const glass = mergeOwned(farParts.glass, this.farMaterials.glass, 'village-far-glass');
+      if (glass) glass.mesh.castShadow = false;
+      for (const m of [solid, glass]) {
+        if (!m) continue;
+        this.farMerged.push(m);
+        this.group.add(m.mesh);
+      }
     }
     if (foundationCount) {
       const unit = buildHouseGeometries([{ type: 'box', center: [0, 0, 0], size: [1, 1, 1], color: '#ffffff', surface: 'plaster' }]).solid;
@@ -218,13 +257,14 @@ export class VillageModelsLayer {
   }
 
   get pickables(): Object3D[] {
-    return this.group.visible ? this.meshes : [];
+    return this.group.visible ? [...this.meshes, ...this.farMerged.map((m) => m.mesh)] : [];
   }
 
   /** id дома OSM по попаданию луча (или undefined). */
   buildingFromPick(hit: Intersection | undefined): string | undefined {
-    if (!hit || hit.instanceId == null || !this.group.visible) return undefined;
-    const id = this.owners.get(hit.object)?.[hit.instanceId];
+    if (!hit || !this.group.visible) return undefined;
+    const merged = this.farMerged.find((m) => m.mesh === hit.object);
+    const id = merged ? (hit.face ? merged.ownerAt(hit.face.a) : undefined) : hit.instanceId == null ? undefined : this.owners.get(hit.object)?.[hit.instanceId];
     return id && !this.hidden.has(id) ? id : undefined;
   }
 
@@ -248,7 +288,9 @@ export class VillageModelsLayer {
     this.city.scene.remove(this.group);
     for (const geometry of this.geometries) geometry.dispose();
     for (const mesh of this.meshes) mesh.dispose();
+    for (const m of this.farMerged) m.mesh.geometry.dispose();
     this.materials.dispose();
+    this.farMaterials?.dispose();
     this.city.requestRender();
   }
 
@@ -327,6 +369,8 @@ export class VillageModelsLayer {
             owners[i] = e.id;
           });
           mesh.count = list.length;
+          // Пустой меш не рисуем вовсе: иначе это лишний вызов отрисовки (и в каждом каскаде теней).
+          mesh.visible = list.length > 0;
           mesh.instanceMatrix.needsUpdate = true;
           for (const name of ['surveyRoof', 'surveyWall']) {
             const attribute = mesh.geometry.getAttribute(name);
@@ -336,6 +380,8 @@ export class VillageModelsLayer {
       }
     }
     this.dirty.clear();
+    // Склейка дальних домов: ближние (их рисует полная модель) и спрятанные — сведены в точку.
+    for (const m of this.farMerged) m.setHidden((id) => this.hidden.has(id) || !!this.entries.get(id)?.near);
     // Фундаменты — общим мешем: только у видимых домов.
     const mesh = this.foundationMesh;
     if (mesh) {
@@ -353,6 +399,7 @@ export class VillageModelsLayer {
         }
       }
       mesh.count = index;
+      mesh.visible = index > 0;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
@@ -374,4 +421,98 @@ function foundationMatrices(matrix: Matrix4, plinths: readonly BoxPart[], drop: 
   return plinths.map((p) =>
     matrix.clone().multiply(new Matrix4().compose(new Vector3(p.center[0], (bottom + 0.05) / 2, -p.center[1]), new Quaternion(), new Vector3(p.size[0], 0.05 - bottom, p.size[1]))),
   );
+}
+
+/** Цвета кровли и стен дома — прямо в цвета вершин копии (для склейки, где нет цветов на экземпляр). */
+function bakeRepaint(geometry: BufferGeometry, entry: Entry): void {
+  const paint = geometry.getAttribute('paint');
+  const color = geometry.getAttribute('color');
+  if (paint && color && (entry.roof[0] >= 0 || entry.wall[0] >= 0)) {
+    for (let i = 0; i < paint.count; i++) {
+      const role = paint.getX(i);
+      const own = role > 0.5 && role < 1.5 ? entry.roof : role > 1.5 ? entry.wall : KEEP;
+      if (own[0] < 0) continue;
+      const tone = paint.getY(i);
+      color.setXYZ(i, Math.min(1, own[0] * tone), Math.min(1, own[1] * tone), Math.min(1, own[2] * tone));
+    }
+  }
+  // В склейке цвета уже свои — признак «кровля или стены» не нужен.
+  if (paint) geometry.deleteAttribute('paint');
+  // Узор поверхности (код и координаты в осях дома, метры) — половинной точностью: дальние дома видны
+  // не ближе 140 м, разницы нет, а памяти вдвое меньше.
+  const surface = geometry.getAttribute('surface');
+  if (surface) {
+    const half = new Float16BufferAttribute(new Uint16Array(surface.count * surface.itemSize), surface.itemSize);
+    for (let i = 0; i < surface.count; i++) half.setXYZ(i, surface.getX(i), surface.getY(i), surface.getZ(i));
+    geometry.setAttribute('surface', half);
+  }
+}
+
+/**
+ * Склейка дальних домов: у каждого дома — свой диапазон вершин. Прячем дом, указывая во всех его
+ * треугольниках на одну вершину (индексы), — без второй копии координат, как у MergedMesh.
+ */
+class FarMerged {
+  private readonly hidden = new Set<string>();
+
+  constructor(
+    readonly mesh: Mesh,
+    private readonly ranges: ReadonlyMap<string, [number, number][]>,
+  ) {
+    const count = mesh.geometry.getAttribute('position').count;
+    const index = new Uint32Array(count);
+    for (let i = 0; i < count; i++) index[i] = i;
+    mesh.geometry.setIndex(new BufferAttribute(index, 1));
+  }
+
+  setHidden(hide: (owner: string) => boolean): void {
+    const attribute = this.mesh.geometry.getIndex()!;
+    const index = attribute.array as Uint32Array;
+    const touched: [number, number][] = [];
+    for (const [owner, ranges] of this.ranges) {
+      const want = hide(owner);
+      if (want === this.hidden.has(owner)) continue;
+      if (want) this.hidden.add(owner);
+      else this.hidden.delete(owner);
+      for (const [start, count] of ranges) {
+        for (let i = start; i < start + count; i++) index[i] = want ? start : i;
+        touched.push([start, count]);
+      }
+    }
+    if (touched.length) markRanges(attribute, touched);
+  }
+
+  /** Чья вершина — для выбора кликом. */
+  ownerAt(vertex: number): string | undefined {
+    for (const [owner, ranges] of this.ranges) for (const [start, count] of ranges) if (vertex >= start && vertex < start + count) return owner;
+    return undefined;
+  }
+}
+
+/** Склеить копии домов в одну сетку; у каждого дома — свой диапазон вершин (чтобы прятать и выбирать). */
+function mergeOwned(list: { owner: string; geometry: BufferGeometry }[], material: Material, name: string): FarMerged | undefined {
+  if (!list.length) return undefined;
+  const geometry = mergeGeometries(list.map((g) => g.geometry));
+  const ranges = new Map<string, [number, number][]>();
+  let start = 0;
+  for (const { owner, geometry: g } of list) {
+    const count = g.getAttribute('position').count;
+    const r = ranges.get(owner) ?? [];
+    r.push([start, count]);
+    ranges.set(owner, r);
+    start += count;
+    g.dispose();
+  }
+  if (!geometry) return undefined;
+  // Склейка теряет пометку «половинная точность» — вернуть, иначе видеокарта прочтёт числа как целые.
+  const surface = geometry.getAttribute('surface');
+  if (surface && !(surface instanceof Float16BufferAttribute)) {
+    geometry.setAttribute('surface', new Float16BufferAttribute(surface.array as Uint16Array, surface.itemSize));
+  }
+  geometry.computeBoundingSphere();
+  const mesh = new Mesh(geometry, material);
+  mesh.name = name;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return new FarMerged(mesh, ranges);
 }
