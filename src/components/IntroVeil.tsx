@@ -54,7 +54,11 @@ export function IntroVeil({ territory }: { territory: Territory }) {
   return (
     <div className={`intro intro-${phase}`} aria-hidden={phase !== 'loading'} role="status">
       <div className="intro-center">
-        <h1 className="intro-title-text">Bash Yort</h1>
+        <h1 className="intro-title-text">
+          Bash Yort
+          {/* Ранняя версия: многое ещё в работе. */}
+          <span className="intro-beta">бета</span>
+        </h1>
         {status === 'error' ? (
           <p className="intro-status">Не получилось загрузить: {error}</p>
         ) : (

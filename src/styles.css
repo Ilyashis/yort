@@ -3151,10 +3151,27 @@ input[type='checkbox'] {
 }
 
 .intro-title-text {
+  position: relative;
   margin: 0;
   font-size: clamp(30px, 5vw, 44px);
   font-weight: 800;
   letter-spacing: -0.01em;
+}
+
+/* Бейдж «бета» — у правого верхнего края надписи, как пометка, не сдвигает её с центра. */
+.intro-beta {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 2px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(245, 165, 36, 0.14);
+  color: #c47d00;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .intro-progress {
