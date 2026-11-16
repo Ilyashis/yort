@@ -242,6 +242,32 @@ export class SculptField {
     return out;
   }
 
+  /**
+   * Готовое поле для сайта (файл sculpt.json): участки сетки в base64 (Float32). key — подпись мазков и вида,
+   * по которым поле посчитано: сайт берёт его, только если подпись совпала, иначе считает мазки заново.
+   */
+  bake(key: string): BakedSculpt {
+    const tiles: [string, string][] = [];
+    for (const [k, tile] of this.tiles) {
+      if (tile.some((v) => v !== 0)) tiles.push([k, toBase64(new Uint8Array(tile.buffer, tile.byteOffset, tile.byteLength))]);
+    }
+    return { version: 1, key, step: SCULPT_STEP, tile: TILE, tiles };
+  }
+
+  /** Поле из готового файла; не тот формат — undefined. */
+  static fromBaked(baked: unknown, key: string): SculptField | undefined {
+    const b = baked as Partial<BakedSculpt> | null;
+    if (!b || b.version !== 1 || b.key !== key || b.step !== SCULPT_STEP || b.tile !== TILE || !Array.isArray(b.tiles)) return undefined;
+    const field = new SculptField();
+    for (const entry of b.tiles) {
+      if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string') return undefined;
+      const bytes = fromBase64(entry[1]);
+      if (bytes.byteLength !== TILE * TILE * 4) return undefined;
+      field.tiles.set(entry[0], new Float32Array(bytes.buffer, bytes.byteOffset, TILE * TILE));
+    }
+    return field;
+  }
+
   private node(i: number, j: number): number {
     const tile = this.tiles.get(`${Math.floor(i / TILE)},${Math.floor(j / TILE)}`);
     return tile ? tile[mod(i, TILE) + mod(j, TILE) * TILE]! : 0;
@@ -259,6 +285,42 @@ export class SculptField {
 }
 
 const mod = (a: number, n: number) => ((a % n) + n) % n;
+
+/** Готовое поле правок рельефа (файл sculpt.json). */
+export interface BakedSculpt {
+  version: 1;
+  key: string;
+  step: number;
+  tile: number;
+  tiles: [string, string][];
+}
+
+/**
+ * Подпись правок рельефа: мазки (их id и число касаний) и вид, от которого зависит земля под ними
+ * (перепады, съёмка с дрона). Поменялось что-то — готовое поле не подходит.
+ */
+export function sculptKey(strokes: readonly SculptStroke[], view: string): string {
+  let h = 2166136261;
+  const text = `${view}|${strokes.map((s) => `${s.id}:${s.dabs.length}:${s.area?.length ?? 0}`).join(',')}`;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `${strokes.length}-${(h >>> 0).toString(36)}`;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+function fromBase64(text: string): Uint8Array {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 function inside(x: number, y: number, ring: readonly Vec2[]): boolean {
   let c = false;

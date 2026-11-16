@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SculptField, changeAt, parseStroke, replayStrokes, type SculptStroke } from './sculpt';
+import { SculptField, changeAt, parseStroke, replayStrokes, sculptKey, type SculptStroke } from './sculpt';
 
 const flat = () => 100;
 /** Склон 5 % на восток с буграми ±0,4 м. */
@@ -157,5 +157,25 @@ describe('обводка области', () => {
         dabs: [[0, 0]],
       })?.radius,
     ).toBe(180);
+  });
+});
+
+describe('готовое поле правок рельефа (sculpt.json)', () => {
+  const flat = () => 100;
+  const stroke: SculptStroke = { id: 's1', mode: 'raise', radius: 6, strength: 1, dabs: [[0, 0], [3, 1]] };
+
+  it('после записи и чтения даёт те же высоты', () => {
+    const field = replayStrokes([stroke], (p) => [p[0], p[1]], flat);
+    const key = sculptKey([stroke], '1.2:osm');
+    const copy = SculptField.fromBaked(JSON.parse(JSON.stringify(field.bake(key))), key);
+    expect(copy).toBeDefined();
+    for (const [x, y] of [[0, 0], [2.5, 1.3], [-4, 2], [10, 10]] as const) expect(copy!.offsetAt(x, y)).toBeCloseTo(field.offsetAt(x, y), 6);
+  });
+
+  it('не берёт поле, посчитанное для других мазков или другого вида', () => {
+    const field = replayStrokes([stroke], (p) => [p[0], p[1]], flat);
+    const baked = JSON.parse(JSON.stringify(field.bake(sculptKey([stroke], '1.2:osm'))));
+    expect(SculptField.fromBaked(baked, sculptKey([stroke], '1:osm'))).toBeUndefined();
+    expect(SculptField.fromBaked(baked, sculptKey([{ ...stroke, dabs: [[0, 0]] }], '1.2:osm'))).toBeUndefined();
   });
 });

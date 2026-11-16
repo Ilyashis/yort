@@ -44,6 +44,10 @@ export function publishEdits() {
               await writeFile(join(folder, 'view.json'), JSON.stringify(body.view) + '\n');
               files.push('view.json');
             }
+            if (body.sculpt && typeof body.sculpt === 'object') {
+              await writeFile(join(folder, 'sculpt.json'), JSON.stringify(body.sculpt) + '\n');
+              files.push('sculpt.json');
+            }
             if (body.mapTrees && typeof body.mapTrees === 'object') {
               await writeFile(join(folder, 'map-trees.json'), JSON.stringify(body.mapTrees) + '\n');
               files.push('map-trees.json');

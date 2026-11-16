@@ -6,7 +6,7 @@ import { SoundZones } from '../audio/soundZones';
 import { LANDMARKS } from '../config/landmarks';
 import { territoryDataUrl, type Territory } from '../config/territory';
 import { isOnStreet, useAppStore } from '../store/useAppStore';
-import { CAN_EDIT, DEBUG, PUBLISH_URL, PUBLISHED_EDITS, PUBLISHED_MAP_TREES } from '../config/mode';
+import { CAN_EDIT, DEBUG, PUBLISH_URL, PUBLISHED_EDITS, PUBLISHED_MAP_TREES, PUBLISHED_SCULPT } from '../config/mode';
 import { fetchPublishedEdits, useEditStore } from '../store/useEditStore';
 import { useUnderlayStore } from '../store/useUnderlayStore';
 import { BuildingsLayer } from '../three/BuildingsLayer';
@@ -34,7 +34,7 @@ import { DriveController } from '../three/DriveController';
 import { flyToArea, flyToTerritory, focusOf, introLanding, setIntroView, startIntroFlight } from '../three/views';
 import { addStroke, centroidOf, replacedOsmIds, roadWidth, toFeature, wallHeightOf } from '../world/edit/edits';
 import { findHouseModel } from '../world/village/houseModels';
-import { SculptField, changeAt, changeRect, replayStrokes, type SculptChange, type SculptStroke } from '../world/base/sculpt';
+import { SculptField, changeAt, changeRect, replayStrokes, sculptKey, type SculptChange, type SculptStroke } from '../world/base/sculpt';
 import { loadEnvironment, polygonsOfGround, type Environment, type TreePoint } from '../world/base/environment';
 import { findStreetFrontBuildings, nearNamedStreet } from '../world/base/facades';
 import { BARE_GROUND_COLOR, VILLAGE_GROUND_COLOR } from '../world/base/groundStyle';
@@ -101,6 +101,23 @@ async function dataExists(territory: Territory, name: string): Promise<boolean> 
     return false;
   }
 }
+
+/** JSON-файл данных; нет файла или не JSON — undefined. */
+async function fetchJson(url: string): Promise<unknown> {
+  try {
+    const response = await fetchRetry(url);
+    if (!response.ok || !response.headers.get('content-type')?.includes('json')) return undefined;
+    return await response.json();
+  } catch {
+    return undefined;
+  }
+}
+
+/** От чего зависит земля под правками рельефа: перепады и съёмка с дрона (как в опубликованном виде). */
+const sculptView = () => {
+  const { reliefScale, surveyOn } = useAppStore.getState();
+  return `${reliefScale}:${surveyOn ? 'survey' : 'osm'}`;
+};
 
 /** Находки по съёмке с дрона (survey.json): цвета домов и новые постройки; нет файла — нет и находок. */
 async function loadSurvey(territory: Territory): Promise<SurveyFile | undefined> {
@@ -227,6 +244,16 @@ export function CityViewer({ territory }: { territory: Territory }) {
     let disposed = false;
     const owned: { destroy: () => void }[] = [];
     let city: CityScene | undefined;
+
+    /**
+     * Передышка между тяжёлыми шагами сборки: браузер успевает нарисовать кадр — полоса загрузки и полёт камеры
+     * идут плавно, а не замирают на секунды (на телефоне — особенно). true — сцену уже закрыли, дальше не строим.
+     */
+    const breathe = async (progress: number): Promise<boolean> => {
+      store.setLoadProgress(progress);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      return disposed;
+    };
 
     async function init() {
       store.setStatus('loading');
@@ -443,13 +470,19 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // Правки места (и мазки кисти рельефа) — до постройки слоёв: всё встаёт на уже поправленную землю.
       // Опубликованные правки (одни для всех) и у редактора — его черновик поверх них.
       store.setLoadProgress(0.5);
+      const bakedSculpt = CAN_EDIT ? Promise.resolve(undefined) : fetchJson(territoryDataUrl(territory, PUBLISHED_SCULPT));
       const publishedEdits = await fetchPublishedEdits(territoryDataUrl(territory, PUBLISHED_EDITS));
       if (disposed) return;
       store.setLoadProgress(0.6);
       useEditStore.getState().load(territory.id, publishedEdits);
       sculpt.strokes = useEditStore.getState().edits.terrain;
       // Без рельефа (файл не загрузился) правки кистью не применяем: выровненное по настоящей высоте встало бы столбами.
-      if (sculpt.strokes.length && heights.kind !== 'flat') sculpt.field = replayStrokes(sculpt.strokes, frame.toLocal, ground0);
+      // Сайт берёт готовое поле из sculpt.json (его пишет «Опубликовать»), если оно посчитано для тех же мазков
+      // и того же вида; иначе (и у редактора) — пересчёт мазков, это до секунды на загрузке.
+      if (sculpt.strokes.length && heights.kind !== 'flat') {
+        const baked = CAN_EDIT ? undefined : SculptField.fromBaked(await bakedSculpt, sculptKey(sculpt.strokes, sculptView()));
+        sculpt.field = baked ?? replayStrokes(sculpt.strokes, frame.toLocal, ground0);
+      }
       const sculpted = { heightAt: (lon: number, lat: number) => heights.heightAt(lon, lat) + sculpt.field.offsetAt(...frame.toLocal([lon, lat])) };
       // Оси дорог: асфальт — улицы, грунтовки — проезды (track); по ним — колеи, заплатки, лужи.
       const roadAxes = [
@@ -457,6 +490,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         ...environment.streets.paths.filter((p) => p.highway === 'track').map((p) => ({ coords: p.coords, width: p.width, kind: 'track' as const })),
       ];
       const ground = new GroundLayer(c, sculpted, frame, area, [...environment.ground, ...markings], gardens, bareGround, !village, c.csm, detailRegion, yardDirt, roadAxes);
+      if (await breathe(0.64)) return;
       owned.push(ground);
       // Карта деревни (render.webp + render.json с рамкой в lon/lat) поверх земли — по кнопке «Карта» в редакторе.
       // Картинка большая: грузится при первом включении.
@@ -519,6 +553,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const streetFront = village ? new Set<string>() : findStreetFrontBuildings(collection.features, environment.ground, frame);
 
       const buildings = new BuildingsLayer(c, collection, parts, frame, localHeight, village, streetFront, c.csm);
+      if (await breathe(0.67)) return;
       owned.push(buildings);
       // Школа и лицей из OSM — в своей форме, а на стене к улице — вход с крыльцом, вывеска и флаги.
       const publicTitles = new Map<string, string>();
@@ -549,6 +584,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
 
       if (DEBUG) Object.assign(window, { __localHeight: localHeight, __villageHouses: villageHouses, __estates: estates, __sculpt: sculpt });
       const villageModels = villageHouses.length ? new VillageModelsLayer(c, frame, localHeight, villageHouses, c.csm) : undefined;
+      if (await breathe(0.71)) return;
       if (villageModels) owned.push(villageModels);
       // Таблички с адресом — на домах-моделях, у которых участок с улицей и номером.
       const plates = parcelIndex
@@ -648,6 +684,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // Посёлок «моя версия»: заборы, ворота и мелочь дворов; постройки дворов — моделями (всегда, а не только
       // когда дома OSM нарисованы моделями).
       const estateLayer = estates ? new EstateLayer(c, localHeight, c.csm, estates) : undefined;
+      if (await breathe(0.75)) return;
       if (estateLayer) owned.push(estateLayer);
       const estateHouses: VillageHouse[] = (estates?.plots ?? []).flatMap((p) =>
         p.outbuildings.map((b) => ({
@@ -667,6 +704,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         });
 
       const trees = new TreesLayer(c, [...parkTrees, ...forestTrees], parkTrees.length, frame, localHeight, c.csm);
+      if (await breathe(0.79)) return;
       // Деревья по карте (снимку с дрона) — своим слоем: режим пышности меняют на временной панели, чтобы сравнить.
       const mapTrees: { layer?: TreesLayer; mode?: MapTreesMode; published?: { detailed: number; trees: TreePoint[] }; pixels?: Promise<{ rgba: Uint8ClampedArray; w: number; h: number; meta: { west: number; south: number; east: number; north: number } } | undefined>; blocked?: (x: number, y: number) => boolean } = {};
       /** Опубликованные деревья по карте: { detailed, trees: [lon, lat, высота][] }. */
@@ -870,7 +908,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         }),
       });
       ground.setLamps(furniture.lampSpots());
-      store.setLoadProgress(0.75);
+      store.setLoadProgress(0.82);
       const monuments = await LandmarksLayer.create(c, landmarks, frame, localHeight, c.csm);
       store.setLoadProgress(0.9);
       owned.push(monuments);
@@ -1119,6 +1157,8 @@ export function CityViewer({ territory }: { territory: Territory }) {
               territory: territory.id,
               edits: useEditStore.getState().edits,
               mapTrees: mapTrees.published,
+              // Готовое поле правок рельефа: сайту не нужно пересчитывать мазки при каждом открытии.
+              sculpt: sculpt.field.bake(sculptKey(useEditStore.getState().edits.terrain, sculptView())),
               // Вид, в котором редактор видит деревню (перепады, слои), — сайт покажет её так же.
               view: (({ reliefScale, surveyOn, villagePlan, villageModels, grassOn, timeOfDay, timeFlowing, graphicsQuality, haze, blur, outlines }) => ({
                 reliefScale,

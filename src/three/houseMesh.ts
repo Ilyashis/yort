@@ -82,8 +82,10 @@ class Buffers {
   geometry(extraName: string): BufferGeometry {
     const g = new BufferGeometry();
     g.setAttribute('position', new BufferAttribute(new Float32Array(this.position), 3));
-    g.setAttribute('normal', new BufferAttribute(new Float32Array(this.normal), 3));
-    g.setAttribute('color', new BufferAttribute(new Float32Array(this.color), 3));
+    // Нормали и цвета — байтами (видеокарта сама переводит в −1…1 и 0…1): в 4 раза меньше памяти, чем числами,
+    // а на глаз разницы нет. Заборов, домов и построек в деревне — миллионы вершин.
+    g.setAttribute('normal', new BufferAttribute(Int8Array.from(this.normal, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 127)), 3, true));
+    g.setAttribute('color', new BufferAttribute(Uint8Array.from(this.color, (v) => Math.round(Math.max(0, Math.min(1, v)) * 255)), 3, true));
     g.setAttribute(extraName, new BufferAttribute(new Float32Array(this.extra), this.extraSize));
     g.setAttribute('paint', new BufferAttribute(new Float32Array(this.paint), 2));
     g.computeBoundingSphere();

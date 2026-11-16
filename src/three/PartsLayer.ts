@@ -36,6 +36,8 @@ const NEAR = 170;
 /** Заранее (в свободное время браузера) собираем куски ближе этого, м. */
 const PREBUILD = NEAR * 2.2;
 const HYSTERESIS = 15;
+/** Собранный кусок дальше этого от камеры выгружается (память), при приближении соберётся снова, м. */
+const UNLOAD = PREBUILD * 1.6;
 const RECHECK = 6;
 
 interface Chunk {
@@ -57,6 +59,8 @@ export class PartsLayer {
   private readonly lastCheck = new Vector3(Infinity, 0, 0);
   private readonly removeAnimator: () => void;
   private idle?: number;
+  /** Последний buildNext что-то собрал. */
+  private lastBuilt = false;
 
   constructor(
     private readonly city: CityScene,
@@ -91,6 +95,7 @@ export class PartsLayer {
         best = chunk;
       }
     }
+    this.lastBuilt = !!best;
     if (!best) return false;
     best.built = true;
     best.mesh = this.merge(
@@ -116,8 +121,9 @@ export class PartsLayer {
     this.idle = ric((deadline) => {
       this.idle = undefined;
       if (!this.chunks.length) return;
-      if (deadline.timeRemaining() > 6) this.buildNext(PREBUILD, false);
-      if (this.chunks.some((c) => !c.built)) this.scheduleIdle();
+      // Собрали кусок — ищем следующий; рядом собирать нечего — ждём, пока камера сдвинется (updateLod),
+      // а не крутим проверку в каждом свободном кадре.
+      if (deadline.timeRemaining() > 6 ? this.buildNext(PREBUILD, false) || this.lastBuilt : true) this.scheduleIdle();
     });
   }
 
@@ -225,6 +231,12 @@ export class PartsLayer {
     let changed = false;
     for (const chunk of this.chunks) {
       const distance = Math.max(0, camera.distanceTo(chunk.center) - chunk.radius);
+      // Далеко ушли — подробный кусок выгружаем: его часть снова рисует дальняя сетка.
+      if (chunk.built && !chunk.near && distance > UNLOAD) {
+        this.disposeMesh(chunk.mesh);
+        chunk.mesh = undefined;
+        chunk.built = false;
+      }
       const near = chunk.near ? distance < NEAR + HYSTERESIS : distance < NEAR;
       if (near === chunk.near) continue;
       chunk.near = near;
@@ -232,7 +244,8 @@ export class PartsLayer {
       // Ещё не собранный кусок соберёт buildNext (по одному за кадр), пока — дальняя сетка.
       if (chunk.mesh) chunk.mesh.mesh.visible = near;
     }
-    if (changed) this.scheduleIdle();
+    // Камера сдвинулась — в свободное время собрать то, что теперь рядом.
+    this.scheduleIdle();
     if (changed) {
       this.applyFarHidden();
       this.city.requestRender();

@@ -11,6 +11,8 @@ export const PUBLISHED_EDITS = 'edits.json';
 export const PUBLISHED_MAP_TREES = 'map-trees.json';
 /** Опубликованный вид деревни: перепады рельефа и слои — как у редактора в момент публикации. */
 export const PUBLISHED_VIEW = 'view.json';
+/** Готовое поле правок рельефа кистью (чтобы сайт не пересчитывал мазки при открытии). */
+export const PUBLISHED_SCULPT = 'sculpt.json';
 /** Адрес, по которому локальный сервер разработки записывает опубликованное (в сборке его нет). */
 export const PUBLISH_URL = '/__citia/publish';
 
