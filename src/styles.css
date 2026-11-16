@@ -3126,8 +3126,7 @@ input[type='checkbox'] {
 
 
 /* ==========================================================================================
-   Заставка — в цветах сайта: тёмный фон, стеклянная полоса загрузки с оранжевой заливкой внизу.
-   С рельефом фон уходит — видно, как камера прилетает к деревне; после загрузки надписи тают.
+   Заставка: белый фон, по центру — «Bash Yort» и полоса загрузки. После загрузки всё плавно тает.
    ========================================================================================== */
 
 .intro {
@@ -3135,135 +3134,76 @@ input[type='checkbox'] {
   position: absolute;
   inset: 0;
   z-index: 40;
-  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
   pointer-events: auto;
-  font-family: ui-rounded, 'SF Pro Rounded', 'Nunito', 'Arial Rounded MT Bold', system-ui, sans-serif;
-  color: #eef1f5;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+  color: #1b1f27;
 }
 
-.intro-sky {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, #1c2431 0%, #0b0e13 78%);
-  transition: opacity 1.6s ease;
-}
-
-.intro-open .intro-sky {
-  opacity: 0;
-}
-
-/* Тёмная дымка за надписями — белое читается и над светлой сценой. */
-.intro-haze {
-  position: absolute;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-}
-
-.intro-haze-bottom {
-  bottom: 0;
-  height: 28%;
-  background: radial-gradient(ellipse 45% 80% at 50% 95%, rgba(8, 11, 16, 0.6) 0%, rgba(8, 11, 16, 0.28) 50%, transparent 78%);
-}
-
-.intro-foot {
-  position: absolute;
-  left: 50%;
-  bottom: max(6vh, 28px);
-  translate: -50% 0;
+.intro-center {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  width: min(86vw, 520px);
+  gap: 22px;
+  width: min(80vw, 360px);
 }
 
-.intro-icon {
-  width: 110px;
-  fill: none;
-  stroke: #eef1f5;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5));
-}
-
-.intro-icon circle,
-.intro-icon path:not(.intro-smoke):not(:first-child) {
-  fill: rgba(var(--accent-rgb), 0.35);
-}
-
-.intro-smoke {
-  animation: intro-smoke 2.4s ease-in-out infinite;
-}
-
-@keyframes intro-smoke {
-  0%,
-  100% {
-    opacity: 0.3;
-    transform: translateY(1px);
-  }
-  50% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
+.intro-title-text {
+  margin: 0;
+  font-size: clamp(30px, 5vw, 44px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 
 .intro-progress {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
 }
 
-/* Полоса — стекло, как панели сайта; заливка — акцентом с ореолом. */
 .intro-bar {
   flex: 1;
-  height: 14px;
-  padding: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 9px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03)), rgba(12, 16, 24, 0.56);
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  height: 6px;
+  border-radius: 3px;
+  background: #eceef2;
+  overflow: hidden;
 }
 
 .intro-bar b {
   display: block;
   height: 100%;
-  border-radius: 6px;
+  border-radius: 3px;
   background: linear-gradient(90deg, #f5a524, #ffc560);
-  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.75);
-  transition: width 0.2s linear;
 }
 
 .intro-percent,
 .intro-status {
-  min-width: 48px;
+  min-width: 40px;
   margin: 0;
-  font-size: clamp(16px, 1.8vw, 21px);
-  font-weight: 700;
-  color: #eef1f5;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+  font-size: 14px;
+  font-weight: 600;
+  color: #8a909b;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-/* После загрузки: камера долетает — надписи и дымка тают. */
+.intro-status {
+  text-align: center;
+}
+
+/* После загрузки: короткая пауза (камера долетает), и вся заставка плавно тает. */
 .intro-leaving {
   pointer-events: none;
-}
-
-.intro-leaving .intro-foot,
-.intro-leaving .intro-haze {
   opacity: 0;
-  transition: opacity 1.1s ease 1.2s;
+  transition: opacity 1.2s ease 0.4s;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .intro-smoke {
-    animation: none;
-  }
+.intro-leaving .intro-center {
+  transform: translateY(-6px);
+  transition: transform 1.4s ease 0.3s;
 }
 
 /* Справка редактора — левее кнопок справа и над режимами, с прокруткой. */
