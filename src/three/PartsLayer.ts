@@ -36,6 +36,13 @@ const NEAR = 170;
 /** Заранее (в свободное время браузера) собираем куски ближе этого, м. */
 const PREBUILD = NEAR * 2.2;
 const HYSTERESIS = 15;
+/**
+ * Дальняя сетка — квадратами по столько м: вне кадра и (на улице) дальше дымки квадраты не рисуются.
+ * Одной сеткой на всю деревню её рисовали бы целиком при любом взгляде.
+ */
+const FAR_CELL = 400;
+/** Заранее собираем куски вокруг точки на столько м впереди камеры — туда, куда смотрим (и едем). */
+const AHEAD = 70;
 /** Собранный кусок дальше этого от камеры выгружается (память), при приближении соберётся снова, м. */
 const UNLOAD = PREBUILD * 1.6;
 const RECHECK = 6;
@@ -54,11 +61,13 @@ export class PartsLayer {
   private readonly group = new Group();
   private readonly materials: HouseMaterials;
   private chunks: Chunk[] = [];
-  private far?: MergedMesh;
+  private far: MergedMesh[] = [];
   private hide: (owner: string) => boolean = () => false;
   private readonly lastCheck = new Vector3(Infinity, 0, 0);
   private readonly removeAnimator: () => void;
   private idle?: number;
+  /** Дальше этого квадраты дальней сетки не рисуются (на улице — за дымкой их всё равно не видно), м. */
+  private farReach = Infinity;
   /** Последний buildNext что-то собрал. */
   private lastBuilt = false;
 
@@ -84,7 +93,8 @@ export class PartsLayer {
    * должны быть подробными. true — собрали (нужен кадр).
    */
   private buildNext(reach: number, onlyNear: boolean): boolean {
-    const camera = this.city.camera.position;
+    // Заранее — вокруг точки впереди (по взгляду, по горизонтали): что впереди, соберётся раньше, чем то, что сзади.
+    const camera = onlyNear ? this.city.camera.position : this.ahead();
     let best: Chunk | undefined;
     let bestD = reach;
     for (const chunk of this.chunks) {
@@ -114,6 +124,14 @@ export class PartsLayer {
     return best.near;
   }
 
+  /** Точка в AHEAD м впереди камеры по горизонтали. */
+  private ahead(): Vector3 {
+    const camera = this.city.camera.position;
+    const forward = this.city.target.clone().sub(camera).setY(0);
+    if (forward.lengthSq() < 1e-6) return camera;
+    return forward.setLength(AHEAD).add(camera);
+  }
+
   /** В свободное время браузера — собрать куски вокруг камеры заранее, по одному. */
   private scheduleIdle(): void {
     const ric = (window as unknown as { requestIdleCallback?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number }).requestIdleCallback;
@@ -136,7 +154,7 @@ export class PartsLayer {
       list.push(site);
       cells.set(key, list);
     }
-    const farParts: { owner: string; geometry: BufferGeometry }[] = [];
+    const farParts = new Map<string, { owner: string; geometry: BufferGeometry }[]>();
     for (const list of cells.values()) {
       let minX = Infinity;
       let minY = Infinity;
@@ -149,7 +167,10 @@ export class PartsLayer {
         minY = Math.min(minY, s.center[1]);
         maxY = Math.max(maxY, s.center[1]);
         reach = Math.max(reach, s.radius ?? 12);
-        farParts.push({ owner: s.owner, geometry: this.geometry(s, true) });
+        const cell = `${Math.floor(s.center[0] / FAR_CELL)}:${Math.floor(s.center[1] / FAR_CELL)}`;
+        const parts = farParts.get(cell) ?? [];
+        parts.push({ owner: s.owner, geometry: this.geometry(s, true) });
+        farParts.set(cell, parts);
       }
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
@@ -161,11 +182,13 @@ export class PartsLayer {
         near: false,
       });
     }
-    this.far = this.merge(farParts, `${this.name}-far`);
-    // Вдали тени от тонких заборов и мелочи не видны, а в каждом каскаде теней сетку рисовать заново.
-    if (this.far) {
-      this.far.mesh.castShadow = false;
-      this.group.add(this.far.mesh);
+    for (const parts of farParts.values()) {
+      const far = this.merge(parts, `${this.name}-far`);
+      if (!far) continue;
+      // Вдали тени от тонких заборов и мелочи не видны, а в каждом каскаде теней сетку рисовать заново.
+      far.mesh.castShadow = false;
+      this.group.add(far.mesh);
+      this.far.push(far);
     }
     this.lastCheck.set(Infinity, 0, 0);
     this.applyHidden();
@@ -180,6 +203,13 @@ export class PartsLayer {
     this.city.requestRender();
   }
 
+  /** На улице дальняя сетка — только до reach м; в обзоре — вся (Infinity). */
+  setFarReach(reach: number): void {
+    this.farReach = reach;
+    this.lastCheck.set(Infinity, 0, 0);
+    this.city.requestRender();
+  }
+
   setVisible(visible: boolean): void {
     this.group.visible = visible;
     this.city.requestRender();
@@ -190,14 +220,14 @@ export class PartsLayer {
     const count = (m?: MergedMesh) => (m ? m.mesh.geometry.getAttribute('position').count / 3 : 0);
     return {
       near: this.chunks.reduce((s, c) => s + (c.near ? count(c.mesh) : 0), 0),
-      far: count(this.far),
+      far: this.far.reduce((s, m) => s + count(m), 0),
     };
   }
 
   /** Земля поменялась (кисть рельефа): детали в area — вместе с ней (ещё не собранные соберутся по новой земле). */
   shiftGround(delta: GroundDelta, area: GroundArea): void {
     for (const chunk of this.chunks) chunk.mesh?.shiftGround(delta, area);
-    this.far?.shiftGround(delta, area);
+    for (const far of this.far) far.shiftGround(delta, area);
   }
 
   destroy(): void {
@@ -211,9 +241,9 @@ export class PartsLayer {
 
   private clear(): void {
     for (const c of this.chunks) this.disposeMesh(c.mesh);
-    this.disposeMesh(this.far);
+    for (const far of this.far) this.disposeMesh(far);
     this.chunks = [];
-    this.far = undefined;
+    this.far = [];
   }
 
   private disposeMesh(m: MergedMesh | undefined): void {
@@ -226,7 +256,7 @@ export class PartsLayer {
   /** Ближние куски — подробно, их часть дальней сетки прячем. Проверяем, когда камера сдвинулась на RECHECK. */
   private updateLod(): void {
     const camera = this.city.camera.position;
-    if (!this.chunks.length || camera.distanceTo(this.lastCheck) < RECHECK) return;
+    if ((!this.chunks.length && !this.far.length) || camera.distanceTo(this.lastCheck) < RECHECK) return;
     this.lastCheck.copy(camera);
     let changed = false;
     for (const chunk of this.chunks) {
@@ -244,6 +274,10 @@ export class PartsLayer {
       // Ещё не собранный кусок соберёт buildNext (по одному за кадр), пока — дальняя сетка.
       if (chunk.mesh) chunk.mesh.mesh.visible = near;
     }
+    for (const far of this.far) {
+      const sphere = far.mesh.geometry.boundingSphere;
+      far.mesh.visible = !sphere || camera.distanceTo(sphere.center) - sphere.radius < this.farReach;
+    }
     // Камера сдвинулась — в свободное время собрать то, что теперь рядом.
     this.scheduleIdle();
     if (changed) {
@@ -260,7 +294,7 @@ export class PartsLayer {
   private applyFarHidden(): void {
     // Дальнюю сетку прячем только там, где подробная уже собрана.
     const near = new Set(this.chunks.filter((c) => c.near && c.built).flatMap((c) => c.sites.map((s) => s.owner)));
-    this.far?.setHidden((owner) => this.hide(owner) || near.has(owner));
+    for (const far of this.far) far.setHidden((owner) => this.hide(owner) || near.has(owner));
   }
 
   private geometry(site: PartsSite, far: boolean): BufferGeometry {

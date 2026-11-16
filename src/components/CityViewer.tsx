@@ -27,7 +27,7 @@ import { PlotTool } from '../three/PlotTool';
 import { UserBuildingsLayer } from '../three/UserBuildingsLayer';
 import { GarlandsLayer, type GarlandHouse } from '../three/GarlandsLayer';
 import { SnowfallLayer } from '../three/SnowfallLayer';
-import { TreesLayer } from '../three/TreesLayer';
+import { TreesLayer, treeReach } from '../three/TreesLayer';
 import { UnderlayLayer } from '../three/UnderlayLayer';
 import { WalkController } from '../three/WalkController';
 import { DriveController } from '../three/DriveController';
@@ -70,6 +70,9 @@ import { fetchRetry } from '../utils/fetchRetry';
 
 /** Камера при пересборке сцены (смена рельефа, съёмки, плана): тот же район открывается с того же места. */
 let keptView: { territory: string; position: Vector3; target: Vector3 } | undefined;
+
+/** Пешком и на машине дальняя сетка дворов (заборы, постройки) — только до этого расстояния, м. */
+const STREET_FAR_REACH = 900;
 
 /** Рельеф района: сетка DEM из terrain.json; нет файла — плоская земля. */
 async function loadHeights(territory: Territory, survey: boolean): Promise<{ heightAt: (lon: number, lat: number) => number; kind: TerrainKind; credit?: string; detail?: DetailHeights }> {
@@ -787,6 +790,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
           if (disposed || mapTrees.mode !== mode) return;
           if (!published) return store.setMapTreesCount(0);
           mapTrees.layer = new TreesLayer(c, published.trees, published.detailed, frame, localHeight, c.csm);
+          mapTrees.layer.setViewReach(treeReach(isOnStreet(useAppStore.getState().mode)));
           mapTrees.layer.setWinter(useAppStore.getState().season === 'winter');
           store.setMapTreesCount(published.trees.length);
           refreshObstacles();
@@ -815,6 +819,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         const detailed = spots.filter(([x, y]) => near?.has(x, y)).length;
         const points: TreePoint[] = ordered.map(([x, y, height]) => [...frame.toLonLat([x, y]), height]);
         mapTrees.layer = new TreesLayer(c, points, detailed, frame, localHeight, c.csm);
+        mapTrees.layer.setViewReach(treeReach(isOnStreet(useAppStore.getState().mode)));
         mapTrees.layer.setWinter(useAppStore.getState().season === 'winter');
         // Для «Опубликовать»: эти же деревья — в файл, зритель возьмёт их оттуда.
         mapTrees.published = { detailed, trees: points.map(([lon, lat, height]): TreePoint => [round7(lon), round7(lat), Math.round(height * 10) / 10]) };
@@ -1476,6 +1481,20 @@ export function CityViewer({ territory }: { territory: Territory }) {
       owned.push({ destroy: unsubscribe });
       buildings.setColorMode(useAppStore.getState().buildingColorMode);
       c.setQuality(useAppStore.getState().graphicsQuality);
+
+      // Пешком и на машине дальнее не рисуем: у земли его скрывает дымка, а кадр становится легче.
+      const applyStreetReach = () => {
+        const street = isOnStreet(useAppStore.getState().mode);
+        trees.setViewReach(treeReach(street));
+        mapTrees.layer?.setViewReach(treeReach(street));
+        estateLayer?.setFarReach(street ? STREET_FAR_REACH : Infinity);
+      };
+      applyStreetReach();
+      owned.push({
+        destroy: useAppStore.subscribe((state, prev) => {
+          if (isOnStreet(state.mode) !== isOnStreet(prev.mode)) applyStreetReach();
+        }),
+      });
 
       store.setStatus('ready');
       // Всё загружено — плавный пролёт к району (у деревни — к домам).

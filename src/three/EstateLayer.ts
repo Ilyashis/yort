@@ -74,6 +74,11 @@ export class EstateLayer {
   }
 
   /** Спрятать дворы участков plots (их заборы — если все хозяева забора спрятаны). */
+  /** На улице дальняя сетка дворов — только до reach м (дальше её прячет дымка); в обзоре — вся. */
+  setFarReach(reach: number): void {
+    this.layer.setFarReach(reach);
+  }
+
   setHidden(plots: ReadonlySet<string>): void {
     this.hiddenPlots = plots;
     this.applyHidden();

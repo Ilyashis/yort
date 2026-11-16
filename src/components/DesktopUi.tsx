@@ -146,8 +146,6 @@ function LookTab() {
   const setHaze = useAppStore((s) => s.setHaze);
   const blur = useAppStore((s) => s.blur);
   const setBlur = useAppStore((s) => s.setBlur);
-  const outlines = useAppStore((s) => s.outlines);
-  const setOutlines = useAppStore((s) => s.setOutlines);
   const carColor = useAppStore((s) => s.carColor);
   const setCarColor = useAppStore((s) => s.setCarColor);
   const high = quality === 'high';
@@ -156,7 +154,6 @@ function LookTab() {
       <OnOff label="Мягкие тени в углах" on={high} onChange={(on) => setQuality(on ? 'high' : 'normal')} />
       <OnOff label="Дымка вдали" on={haze} onChange={setHaze} />
       <OnOff label="Размытие вдали" on={blur} onChange={setBlur} disabled={!high} />
-      <OnOff label="Контуры, как на рисунке" on={outlines} onChange={setOutlines} disabled={!high} />
       <div className="m-row">
         <span>Цвет машины</span>
         <div className="car-colors m-car-colors" role="radiogroup" aria-label="Цвет машины">
@@ -175,7 +172,7 @@ function LookTab() {
           ))}
         </div>
       </div>
-      <p className="m-note">Мягкие тени нагружают видеокарту — на слабом компьютере выключите. Размытие и контуры работают вместе с ними.</p>
+      <p className="m-note">Мягкие тени нагружают видеокарту — на слабом компьютере выключите. Размытие работает вместе с ними.</p>
     </>
   );
 }

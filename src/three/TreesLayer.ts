@@ -36,8 +36,8 @@ const ZERO = new Matrix4().makeScale(0, 0, 0);
 const TILE = 250;
 /** Тени отбрасывают куски ближе этого к камере, м: дальние тени в дымке не видны, а стоят дорого. */
 const SHADOW_REACH = LITE ? 250 : 450;
-/** Телефон: куски дальше этого не рисуем вовсе — вдали их и так съедает дымка, м. */
-const VIEW_REACH = LITE ? 2200 : Infinity;
+/** Куски дальше этого не рисуем вовсе — вдали их и так съедает дымка, м: в обзоре (телефон) и на улице. */
+export const treeReach = (street: boolean): number => (street ? (LITE ? 800 : 1500) : LITE ? 2200 : Infinity);
 /** Пересчитать, кто отбрасывает тень, когда камера сдвинулась на столько, м. */
 const SHADOW_RECHECK = 25;
 
@@ -56,6 +56,7 @@ export class TreesLayer {
   private readonly removeAnimator: () => void;
   private readonly positions: LonLat[];
   private hidden: boolean[];
+  private viewReach = treeReach(false);
 
   constructor(
     private readonly city: CityScene,
@@ -171,6 +172,13 @@ export class TreesLayer {
     this.city.requestRender();
   }
 
+  /** Дальше этого куски не рисуются, м (на улице — ближе, чем в обзоре). */
+  setViewReach(reach: number): void {
+    this.viewReach = reach;
+    this.lastCheck.set(Infinity, 0, 0);
+    this.city.requestRender();
+  }
+
   /** Тень — только у кусков рядом с камерой; на телефоне дальние куски не рисуются. */
   private updateShadows(): void {
     const camera = this.city.camera.position;
@@ -180,7 +188,7 @@ export class TreesLayer {
       const sphere = mesh.boundingSphere;
       const distance = sphere ? camera.distanceTo(sphere.center) - sphere.radius : 0;
       mesh.castShadow = distance < SHADOW_REACH;
-      mesh.visible = distance < VIEW_REACH;
+      mesh.visible = distance < this.viewReach;
     }
   }
 
