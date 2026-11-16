@@ -11,7 +11,7 @@ export interface CarSound {
   throttle: number;
   /** Скорость, м/с (по модулю). */
   speed: number;
-  surface: Surface;
+  surface: Surface | 'snow';
 }
 
 interface Nodes {
@@ -50,9 +50,11 @@ export class EngineSound {
     n.filter.frequency.setTargetAtTime(220 + car.rpm * 800 + throttle * 450, now, GLIDE);
     n.motor.gain.setTargetAtTime(0.045 + car.rpm * 0.05 + throttle * 0.05, now, GLIDE);
     const grass = car.surface === 'grass';
+    const snow = car.surface === 'snow';
     const roll = Math.min(car.speed / 22, 1);
-    n.tyreFilter.frequency.setTargetAtTime((grass ? 260 : 520) + roll * 500, now, 0.1);
-    n.tyreGain.gain.setTargetAtTime(roll * (grass ? 0.16 : 0.09), now, 0.1);
+    // По снегу — выше и суше (хрустящий шорох), по траве — глуше, по асфальту — ровный шум.
+    n.tyreFilter.frequency.setTargetAtTime((snow ? 1500 : grass ? 260 : 520) + roll * (snow ? 900 : 500), now, 0.1);
+    n.tyreGain.gain.setTargetAtTime(roll * (snow ? 0.12 : grass ? 0.16 : 0.09), now, 0.1);
   }
 
   /** Удар о стену: сила 0..1. */

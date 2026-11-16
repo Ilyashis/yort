@@ -89,3 +89,26 @@ describe('SoundZones: ручей', () => {
     expect(zones.levelsAt([0, 150], 1.7).water).toBe(0);
   });
 });
+
+describe('SoundZones зимой', () => {
+  const trees: [number, number][] = [];
+  for (let i = 0; i < 60; i++) trees.push([500 + (i % 8) * 6, 500 + Math.floor(i / 8) * 6]);
+  const zones = new SoundZones([area('water', -200, 200, 400, 30)], frame, true, trees);
+
+  it('колокольчики только у ёлки, собаки — у домов, в лесу ветер тише и птиц больше', () => {
+    const tree: [number, number] = [0, 0];
+    expect(zones.winterAt([5, 0], 1.7, tree).bells).toBeGreaterThan(0.8);
+    expect(zones.winterAt([100, 0], 1.7, tree).bells).toBe(0);
+    expect(zones.winterAt([10, 0], 1.7, undefined, [[0, 0]]).village).toBeGreaterThan(0.9);
+    expect(zones.winterAt([10, 0], 1.7).village).toBe(0);
+    const woods = zones.winterAt([520, 520], 1.7);
+    const open = zones.winterAt([-600, -600], 1.7);
+    expect(woods.wind).toBeLessThan(open.wind);
+    expect(woods.birds).toBeGreaterThan(open.birds);
+  });
+
+  it('ручей подо льдом слышен только рядом', () => {
+    expect(zones.winterAt([0, 210], 1.7).water).toBeGreaterThan(0.6);
+    expect(zones.winterAt([0, 100], 1.7).water).toBe(0);
+  });
+});

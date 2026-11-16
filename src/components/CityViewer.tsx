@@ -13,7 +13,7 @@ import { BuildingsLayer } from '../three/BuildingsLayer';
 import { CityScene } from '../three/CityScene';
 import { DetailsLayer } from '../three/DetailsLayer';
 import { FurnitureLayer } from '../three/FurnitureLayer';
-import { TIME_FLOW_HOURS_PER_SECOND } from '../three/dayNight';
+import { sunElevationAt, TIME_FLOW_HOURS_PER_SECOND } from '../three/dayNight';
 import { AddressPlatesLayer, type AddressPlate } from '../three/AddressPlatesLayer';
 import { GrassLayer } from '../three/GrassLayer';
 import { PublicDetailsLayer, type PublicBuilding } from '../three/PublicDetailsLayer';
@@ -295,6 +295,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
       // Время суток — из стора; если «время идёт», сутки проходят за 6 минут.
       c.setTime(useAppStore.getState().timeOfDay);
       c.setHaze(useAppStore.getState().haze);
+      c.setShadows(useAppStore.getState().shadows);
       c.setBlur(useAppStore.getState().blur);
       c.setOutlines(useAppStore.getState().outlines);
       let sinceSync = 0;
@@ -1013,8 +1014,12 @@ export function CityViewer({ territory }: { territory: Territory }) {
       const soundTrees = [...parkTrees, ...forestTrees].map(([lon, lat]) => frame.toLocal([lon, lat]));
       const soundscape = new Soundscape(new SoundZones(environment.ground, frame, village, soundTrees), () => {
         const p = c.camera.position;
-        return { point: [p.x, -p.z] as Vec2, altitude: p.y - localHeight(p.x, -p.z) };
+        const { season, timeOfDay } = useAppStore.getState();
+        const night = sunElevationAt(timeOfDay, (south + north) / 2, (west + east) / 2) < -3;
+        return { point: [p.x, -p.z] as Vec2, altitude: p.y - localHeight(p.x, -p.z), winter: season === 'winter', night };
       });
+      // Зимой: колокольчики у ёлки, собаки — у домов.
+      soundscape.setWinterPlaces({ tree: treeSpot, houses: villageHouses.map((h) => h.rect[0]!) });
       soundscape.setEnabled(useAppStore.getState().soundOn);
       soundscape.setVolumes(useAppStore.getState().volumes);
       owned.push(soundscape);
@@ -1459,6 +1464,7 @@ export function CityViewer({ territory }: { territory: Territory }) {
         }
         if (state.outlines !== prev.outlines) c.setOutlines(state.outlines);
         if (state.haze !== prev.haze) c.setHaze(state.haze);
+        if (state.shadows !== prev.shadows) c.setShadows(state.shadows);
         if (state.blur !== prev.blur) c.setBlur(state.blur);
         if (state.carColor !== prev.carColor) drive.setColor(state.carColor);
         if (state.villageModels !== prev.villageModels) {

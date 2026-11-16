@@ -8,6 +8,12 @@ import {
   type Vec2,
 } from '../world/walk/localFrame';
 import type { AmbienceLevels, Surface } from './ambience';
+import type { WinterLevels } from './winter';
+
+/** Колокольчики у ёлки слышны в этом радиусе, м. */
+const BELLS_RANGE = 45;
+/** Собаки и жизнь деревни — у домов: на столько м от ближайшего дома слышно полностью, дальше тише. */
+const VILLAGE_LIFE_RANGE = 250;
 
 /** На каком расстоянии (м) слой затихает до нуля. */
 const RANGE = { traffic: 60, park: 35, water: 70, stream: 40 } as const;
@@ -83,6 +89,28 @@ export class SoundZones {
       park: park * street,
       leaves: park * street,
       water: water * street,
+    };
+  }
+
+  /**
+   * Зима: ветер (на открытом месте и сверху сильнее, в лесу тише), птицы (у деревьев), ручей подо льдом,
+   * колокольчики у ёлки (tree — где она стоит), собаки у домов (houses — дома, локальные метры).
+   */
+  winterAt(point: Vec2, altitude: number, tree?: Vec2, houses: readonly Vec2[] = []): WinterLevels {
+    const street = clamp01(1 - (altitude - 3) / STREET_LEVEL_FADE);
+    const woods = this.woodsAt(point);
+    const summer = this.levelsAt(point, altitude);
+    const bells = tree ? clamp01(1 - Math.hypot(point[0] - tree[0], point[1] - tree[1]) / BELLS_RANGE) * street : 0;
+    let nearestHouse = Infinity;
+    for (const [x, y] of houses) nearestHouse = Math.min(nearestHouse, Math.hypot(point[0] - x, point[1] - y));
+    const village = houses.length ? clamp01(1 - nearestHouse / VILLAGE_LIFE_RANGE) * 0.7 + 0.3 * street : 0;
+    return {
+      wind: clamp01(0.55 + 0.45 * (1 - street) - 0.35 * woods),
+      birds: Math.max(0.25, (0.35 + 0.65 * woods) * street),
+      // Подо льдом — только совсем рядом (квадрат делает Winter).
+      water: summer.water * 0.8,
+      bells,
+      village,
     };
   }
 

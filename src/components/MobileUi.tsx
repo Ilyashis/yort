@@ -333,6 +333,8 @@ function MoreSheet({ onClose, onAtmosphere }: { onClose: () => void; onAtmospher
   const setQuality = useAppStore((s) => s.setGraphicsQuality);
   const haze = useAppStore((s) => s.haze);
   const setHaze = useAppStore((s) => s.setHaze);
+  const shadows = useAppStore((s) => s.shadows);
+  const setShadows = useAppStore((s) => s.setShadows);
   const carColor = useAppStore((s) => s.carColor);
   const setCarColor = useAppStore((s) => s.setCarColor);
   const flyHome = useAppStore((s) => s.flyHome);
@@ -379,6 +381,17 @@ function MoreSheet({ onClose, onAtmosphere }: { onClose: () => void; onAtmospher
         </label>
       )}
       <div className="m-row">
+        <span>Тени</span>
+        <div className="m-seg m-seg-small" role="group" aria-label="Тени">
+          <button type="button" className={shadows ? '' : 'on'} onClick={() => setShadows(false)}>
+            Выкл
+          </button>
+          <button type="button" className={shadows ? 'on' : ''} onClick={() => setShadows(true)}>
+            Вкл
+          </button>
+        </div>
+      </div>
+      <div className="m-row">
         <span>Мягкие тени</span>
         <div className="m-seg m-seg-small" role="group" aria-label="Мягкие тени">
           <button type="button" className={quality === 'high' ? '' : 'on'} onClick={() => setQuality('normal')}>
@@ -417,7 +430,7 @@ function MoreSheet({ onClose, onAtmosphere }: { onClose: () => void; onAtmospher
           ))}
         </div>
       </div>
-      <p className="m-note">Мягкие тени красивее, но нагружают телефон — если тормозит, выключите.</p>
+      <p className="m-note">Тени и мягкие тени красивее, но нагружают телефон — если тормозит, выключите.</p>
     </BottomSheet>
   );
 }

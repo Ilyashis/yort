@@ -10,8 +10,11 @@ export type ShaderHook = (shader: WebGLProgramParametersWithUniforms, renderer: 
 /** Время года для всех материалов сцены: snow — 0 летом, 1 зимой (снег на земле и на всём, что смотрит вверх). */
 export const SEASON = { snow: { value: 0 } };
 
-/** Без снега: стёкла, вывески и таблички, машина, трава (зимой её нет), гирлянды. */
-const NO_SNOW = /^(village-glass|village-sign|address-plates|car-|grass|garland)/;
+/**
+ * Без снега: стёкла, вывески и таблички, машина, трава (зимой её нет), гирлянды. Лиственные кроны — тоже:
+ * у них свой плавный переход к белой макушке (TreesLayer), а общий снег по нормали красил их сплошь белым.
+ */
+const NO_SNOW = /^(village-glass|village-sign|address-plates|car-|grass|garland|tree-blob|tree-forestCrown)/;
 const SNOW_COLOR = 'vec3(0.86, 0.89, 0.94)';
 
 /**

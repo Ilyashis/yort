@@ -207,6 +207,7 @@ export class CityScene {
     for (const light of this.csm.lights) {
       light.intensity = byMoon ? lighting.moonIntensity : lighting.sunIntensity;
       light.color.copy(color);
+      light.castShadow = this.shadowsOn;
     }
     this.renderer.toneMappingExposure = lighting.exposure;
     NIGHT.windows.value = lighting.windows;
@@ -251,6 +252,20 @@ export class CityScene {
     this.illustration.uniforms['blurStrength']!.value = on && this.ao.enabled ? 1 : 0;
     this.requestRender();
   }
+
+  /**
+   * Тени от солнца и луны. Выключены — сцена не рисуется заново для каждого каскада теней: это самая
+   * тяжёлая часть кадра (на телефоне — вдвое легче).
+   */
+  setShadows(on: boolean): void {
+    if (on === this.shadowsOn) return;
+    this.shadowsOn = on;
+    for (const light of this.csm.lights) light.castShadow = on;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.requestRender();
+  }
+
+  private shadowsOn = true;
 
   setQuality(quality: GraphicsQuality): void {
     this.ao.enabled = quality === 'high';

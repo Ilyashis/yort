@@ -23,10 +23,29 @@ import type { LonLat } from '../world/user/plot';
 import type { LocalFrame } from '../world/walk/localFrame';
 import type { CityScene } from './CityScene';
 import type { GroundArea, GroundDelta } from './merged';
-import { hookMaterial } from './shaderHooks';
+import { hookMaterial, SEASON, type ShaderHook } from './shaderHooks';
 import { LITE } from '../config/device';
 
 const UP = new Vector3(0, 1, 0);
+
+/**
+ * Зимой лиственная крона — градиент: снизу сизые ветви в инее, кверху плавно белеет (снег лежит сверху).
+ * Вместо общего снега по нормали: тот ложится резкой шапкой, и крона выглядела сплошь белой.
+ */
+const frostHook: ShaderHook = (shader) => {
+  shader.uniforms['citiaFrost'] = SEASON.snow;
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float citiaFrost;')
+    .replace(
+      '#include <normal_fragment_maps>',
+      `#include <normal_fragment_maps>
+if (citiaFrost > 0.0) {
+  vec3 upFrost = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+  float up = dot(normal, upFrost);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.91, 0.95), citiaFrost * 0.85 * smoothstep(-0.3, 0.9, up));
+}`,
+    );
+};
 const ZERO = new Matrix4().makeScale(0, 0, 0);
 /**
  * Деревья — кусками по TILE м (на каждый кусок и форму — свой InstancedMesh): невидимые куски отсекаются
@@ -49,7 +68,7 @@ export class TreesLayer {
   /** У каждого дерева — его части: (ключ меша, номер экземпляра). */
   private readonly parts: [string, number][][] = [];
   private readonly lastCheck = new Vector3(Infinity, 0, 0);
-  /** Лиственные кроны: летние цвета экземпляров (зимой кроны серо-бурые, без листвы — с инеем сверху). */
+  /** Лиственные кроны: летние цвета экземпляров (зимой кроны белые — в снегу и инее). */
   private readonly summerColors = new Map<InstancedMesh, Float32Array>();
   private winter = false;
   private readonly removeAnimator: () => void;
@@ -122,7 +141,7 @@ export class TreesLayer {
       let material = materials.get(shape);
       if (!material) {
         material = new MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
-        hookMaterial(material, `tree-${shape}`, undefined, csm);
+        hookMaterial(material, `tree-${shape}`, shape === 'blob' || shape === 'forestCrown' ? frostHook : undefined, csm);
         materials.set(shape, material);
       }
       const mesh = new InstancedMesh(geometries[shape], material, list.length);
@@ -156,11 +175,12 @@ export class TreesLayer {
       if (winter) {
         this.summerColors.set(mesh, colors.slice());
         for (let i = 0; i < mesh.count; i++) {
-          // Ветви: серо-бурые, у каждого дерева свой оттенок.
-          const k = 0.75 + ((i * 2654435761) % 1000) / 1000 / 2;
-          colors[i * 3] = 0.24 * k;
-          colors[i * 3 + 1] = 0.21 * k;
-          colors[i * 3 + 2] = 0.19 * k;
+          // Крона под снегом: снизу приглушённо-зелёная (цвета линейные — под солнцем заметно светлее),
+          // у каждого дерева свой оттенок. Сверху её плавно заносит снегом (frostHook) — к белой макушке.
+          const k = 0.8 + ((i * 2654435761) % 1000) / 1000 / 2.5;
+          colors[i * 3] = 0.09 * k;
+          colors[i * 3 + 1] = 0.17 * k;
+          colors[i * 3 + 2] = 0.1 * k;
         }
       } else {
         const summer = this.summerColors.get(mesh);

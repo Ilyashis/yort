@@ -143,6 +143,8 @@ function LookTab() {
   const setQuality = useAppStore((s) => s.setGraphicsQuality);
   const haze = useAppStore((s) => s.haze);
   const setHaze = useAppStore((s) => s.setHaze);
+  const shadows = useAppStore((s) => s.shadows);
+  const setShadows = useAppStore((s) => s.setShadows);
   const blur = useAppStore((s) => s.blur);
   const setBlur = useAppStore((s) => s.setBlur);
   const carColor = useAppStore((s) => s.carColor);
@@ -150,6 +152,7 @@ function LookTab() {
   const high = quality === 'high';
   return (
     <>
+      <OnOff label="Тени" on={shadows} onChange={setShadows} />
       <OnOff label="Мягкие тени в углах" on={high} onChange={(on) => setQuality(on ? 'high' : 'normal')} />
       <OnOff label="Дымка вдали" on={haze} onChange={setHaze} />
       <OnOff label="Размытие вдали" on={blur} onChange={setBlur} disabled={!high} />
@@ -171,7 +174,7 @@ function LookTab() {
           ))}
         </div>
       </div>
-      <p className="m-note">Мягкие тени нагружают видеокарту — на слабом компьютере выключите. Размытие работает вместе с ними.</p>
+      <p className="m-note">Тени и мягкие тени — самое тяжёлое для видеокарты: если тормозит, выключите их. Размытие работает вместе с ними.</p>
     </>
   );
 }

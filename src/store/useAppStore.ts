@@ -199,6 +199,9 @@ interface AppState {
   villagePlan: boolean;
   /** Дымка вдали и мягкое размытие дали (запоминаются в браузере). */
   haze: boolean;
+  /** Тени от солнца и луны: выключить — заметно легче для видеокарты (запоминается в браузере). */
+  shadows: boolean;
+  setShadows: (on: boolean) => void;
   blur: boolean;
   /** Контуры, как на рисунке. */
   outlines: boolean;
@@ -322,6 +325,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   villageModels: !CAN_EDIT || readPref('village-models', ['on', 'off'] as const, 'on') === 'on',
   villagePlan: !CAN_EDIT || readPref('village-plan', ['on', 'off'] as const, 'on') === 'on',
   haze: readPref('haze', ['on', 'off'] as const, 'on') === 'on',
+  shadows: readPref('shadows', ['on', 'off'] as const, 'on') === 'on',
   blur: readPref('blur', ['on', 'off'] as const, 'off') === 'on',
   outlines: readPref('outlines', ['on', 'off'] as const, 'off') === 'on',
   surveyOn: !CAN_EDIT || readPref('survey', ['on', 'off'] as const, 'on') === 'on',
@@ -416,6 +420,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setHaze: (haze) => {
     writePref('haze', haze ? 'on' : 'off');
     set({ haze });
+  },
+  setShadows: (shadows) => {
+    writePref('shadows', shadows ? 'on' : 'off');
+    set({ shadows });
   },
   setBlur: (blur) => {
     writePref('blur', blur ? 'on' : 'off');

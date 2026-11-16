@@ -3,6 +3,7 @@ import { AudioEngine, type Volumes } from './AudioEngine';
 import { Ambience } from './ambience';
 import { EngineSound, type CarSound } from './engineSound';
 import type { SoundZones } from './soundZones';
+import { WinterSounds } from './winter';
 
 /**
  * Сколько метров проходим между звуками шагов. Пешеход в сцене идёт быстро (4 м/с, бегом 12), поэтому
@@ -16,6 +17,16 @@ export interface ListenerSample {
   point: Vec2;
   /** Высота над землёй, м. */
   altitude: number;
+  /** Зима: свои звуки (ветер, синицы и вороны, ручей подо льдом, хруст снега). */
+  winter?: boolean;
+  /** Ночь: тише. */
+  night?: boolean;
+}
+
+/** Где ёлка и дома (локальные метры) — для колокольчиков и собак зимой. */
+export interface WinterPlaces {
+  tree?: Vec2;
+  houses: readonly Vec2[];
 }
 
 /**
@@ -26,6 +37,8 @@ export class Soundscape {
   private readonly engine = new AudioEngine();
   private readonly ambience = new Ambience(this.engine);
   private readonly car = new EngineSound(this.engine);
+  private readonly winter = new WinterSounds(this.engine);
+  private winterPlaces: WinterPlaces = { houses: [] };
   private readonly timer: number;
   private stepDistance = 0;
 
@@ -56,12 +69,18 @@ export class Soundscape {
     const stride = running ? STRIDE.run : STRIDE.walk;
     if (this.stepDistance < stride) return;
     this.stepDistance %= stride;
-    this.ambience.footstep(this.zones.surfaceAt(point), running);
+    if (this.winter.isActive) this.winter.footstep(running);
+    else this.ambience.footstep(this.zones.surfaceAt(point), running);
   }
 
-  /** Машина: мотор и шины (undefined — заглушить). */
+  /** Машина: мотор и шины (undefined — заглушить). Зимой шины — по снегу. */
   drove(car: CarSound | undefined): void {
-    this.car.update(car);
+    this.car.update(car && this.winter.isActive ? { ...car, surface: 'snow' } : car);
+  }
+
+  /** Где ёлка и дома — для зимних колокольчиков и собак. */
+  setWinterPlaces(places: WinterPlaces): void {
+    this.winterPlaces = places;
   }
 
   /** Машина ударилась: сила 0..1. */
@@ -81,6 +100,7 @@ export class Soundscape {
     window.removeEventListener('keydown', this.unlock, true);
     document.removeEventListener('click', this.onClick, true);
     this.ambience.stop();
+    this.winter.stop();
     this.engine.destroy();
   }
 
@@ -93,6 +113,15 @@ export class Soundscape {
   private update(): void {
     if (!this.engine.isRunning) return;
     const listener = this.sample();
-    if (listener) this.ambience.setLevels(this.zones.levelsAt(listener.point, listener.altitude));
+    if (!listener) return;
+    const winter = !!listener.winter;
+    this.winter.setActive(winter);
+    if (winter) {
+      // Зимой летние слои молчат: ни летних птиц, ни журчания.
+      this.ambience.setLevels({ traffic: 0, park: 0, leaves: 0, water: 0 });
+      this.winter.setLevels(this.zones.winterAt(listener.point, listener.altitude, this.winterPlaces.tree, this.winterPlaces.houses), !!listener.night);
+    } else {
+      this.ambience.setLevels(this.zones.levelsAt(listener.point, listener.altitude));
+    }
   }
 }
