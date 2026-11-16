@@ -1,4 +1,4 @@
-// Заставка: белый фон, по центру — надпись «Bash Yort» и под ней полоса загрузки с процентами. Пока она видна,
+// Заставка: белый фон, по центру — надпись «Bash Yort» и под ней полоса загрузки. Пока она видна,
 // камера за ней прилетает к виду вдоль главной улицы. Всё загрузилось — заставка целиком плавно тает,
 // и под ней уже готовая деревня.
 
@@ -66,7 +66,6 @@ export function IntroVeil({ territory }: { territory: Territory }) {
             <div className="intro-bar" role="progressbar" aria-label={`Загрузка: ${territory.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
               <b style={{ width: `${Math.max(2, percent)}%` }} />
             </div>
-            <span className="intro-percent">{percent}%</span>
           </div>
         )}
       </div>
