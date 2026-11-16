@@ -1,5 +1,5 @@
 // Зимние звуки деревни (синтез, без файлов): мягкий ветер порывами, редкие синицы и вороны, ручей подо льдом —
-// редкие глухие капли, изредка собака лает вдалеке, у ёлки — тихий перезвон колокольчиков, хруст снега под ногами.
+// редкие глухие капли, изредка собака лает вдалеке, у ёлки — тихий перезвон колокольчиков.
 // Ночью тише: ветер слабее, птиц нет, собака — реже.
 
 import type { AudioEngine } from './AudioEngine';
@@ -60,47 +60,6 @@ export class WinterSounds {
   stop(): void {
     if (this.timer !== undefined) window.clearInterval(this.timer);
     this.timer = undefined;
-  }
-
-  /** Хруст снега под ногой: сухой треск из нескольких коротких щелчков. */
-  footstep(running: boolean): void {
-    const ctx = this.engine.ctx;
-    if (!ctx || ctx.state !== 'running') return;
-    const at = ctx.currentTime;
-    const crackles = 5 + Math.floor(Math.random() * 4);
-    const length = 0.12 + Math.random() * 0.05;
-    for (let i = 0; i < crackles; i++) {
-      const t = at + (i / crackles) * length + Math.random() * 0.012;
-      const source = ctx.createBufferSource();
-      source.buffer = this.engine.noise;
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.value = 2200 + Math.random() * 2600;
-      filter.Q.value = 2.5;
-      const envelope = ctx.createGain();
-      // Сжимание снега: громче к середине шага.
-      const shape = Math.sin(Math.PI * ((i + 0.5) / crackles));
-      const level = (0.05 + Math.random() * 0.05) * shape * (running ? 1.25 : 1);
-      envelope.gain.setValueAtTime(0, t);
-      envelope.gain.linearRampToValueAtTime(level, t + 0.002);
-      envelope.gain.exponentialRampToValueAtTime(0.0001, t + 0.018 + Math.random() * 0.02);
-      source.connect(filter).connect(envelope).connect(this.engine.sfx);
-      source.start(t, Math.random() * 1.5);
-      source.stop(t + 0.05);
-    }
-    // Глухая «подложка» шага — мягкий низ.
-    const thud = ctx.createBufferSource();
-    thud.buffer = this.engine.noise;
-    const low = ctx.createBiquadFilter();
-    low.type = 'lowpass';
-    low.frequency.value = 500;
-    const body = ctx.createGain();
-    body.gain.setValueAtTime(0, at);
-    body.gain.linearRampToValueAtTime(0.05, at + 0.01);
-    body.gain.exponentialRampToValueAtTime(0.0001, at + length);
-    thud.connect(low).connect(body).connect(this.engine.sfx);
-    thud.start(at, Math.random() * 1.5);
-    thud.stop(at + length + 0.02);
   }
 
   private start(ctx: AudioContext): void {

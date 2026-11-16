@@ -16,7 +16,7 @@ export type Surface = 'pavement' | 'grass';
 const BABBLE_MS = 100;
 
 /**
- * Звуки места: пение птиц, журчание реки вблизи, шаги, щелчки интерфейса; в городе ещё гул машин и листва.
+ * Звуки места: пение птиц, журчание реки вблизи, щелчки интерфейса; в городе ещё гул машин и листва.
  * Громкость слоёв задаёт soundscape по месту, где сейчас камера или пешеход.
  */
 export class Ambience {
@@ -55,28 +55,6 @@ export class Ambience {
   setLevels(levels: AmbienceLevels): void {
     this.levels = levels;
     this.apply(0.6);
-  }
-
-  /** Шаг: короткий щелчок шума; по траве — глуше, по плитке — суше и звонче. */
-  footstep(surface: Surface, running: boolean): void {
-    const ctx = this.engine.ctx;
-    if (!ctx || ctx.state !== 'running') return;
-    const at = ctx.currentTime;
-    const source = ctx.createBufferSource();
-    source.buffer = this.engine.noise;
-    const filter = ctx.createBiquadFilter();
-    filter.type = surface === 'grass' ? 'lowpass' : 'bandpass';
-    filter.frequency.value = (surface === 'grass' ? 380 : 900) * (0.9 + Math.random() * 0.2);
-    filter.Q.value = surface === 'grass' ? 0.7 : 1.1;
-    const envelope = ctx.createGain();
-    // Шаги — тихо, фоном: они не должны перекрывать птиц и ручей.
-    const level = (surface === 'grass' ? 0.07 : 0.1) * (running ? 1.3 : 1);
-    envelope.gain.setValueAtTime(0, at);
-    envelope.gain.linearRampToValueAtTime(level, at + 0.004);
-    envelope.gain.exponentialRampToValueAtTime(0.0001, at + (surface === 'grass' ? 0.16 : 0.09));
-    source.connect(filter).connect(envelope).connect(this.engine.sfx);
-    source.start(at, Math.random() * 1.5);
-    source.stop(at + 0.2);
   }
 
   /** Тихий щелчок интерфейса. */

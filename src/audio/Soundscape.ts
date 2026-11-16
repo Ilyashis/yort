@@ -5,11 +5,6 @@ import { EngineSound, type CarSound } from './engineSound';
 import type { SoundZones } from './soundZones';
 import { WinterSounds } from './winter';
 
-/**
- * Сколько метров проходим между звуками шагов. Пешеход в сцене идёт быстро (4 м/с, бегом 12), поэтому
- * шаг длиннее настоящего: около двух шагов в секунду при ходьбе — как в жизни, а не дробный топот.
- */
-const STRIDE = { walk: 1.9, run: 3.2 } as const;
 const UPDATE_MS = 250;
 
 export interface ListenerSample {
@@ -17,7 +12,7 @@ export interface ListenerSample {
   point: Vec2;
   /** Высота над землёй, м. */
   altitude: number;
-  /** Зима: свои звуки (ветер, синицы и вороны, ручей подо льдом, хруст снега). */
+  /** Зима: свои звуки (ветер, синицы и вороны, ручей подо льдом). */
   winter?: boolean;
   /** Ночь: тише. */
   night?: boolean;
@@ -30,7 +25,7 @@ export interface WinterPlaces {
 }
 
 /**
- * Звуковая картина сцены: звуки места по положению слушателя (птицы, река рядом), шаги, машина, щелчки.
+ * Звуковая картина сцены: звуки места по положению слушателя (птицы, река рядом), машина, щелчки. Шагов нет.
  * Сэмплирует камеру несколько раз в секунду — без перерисовок React.
  */
 export class Soundscape {
@@ -40,7 +35,6 @@ export class Soundscape {
   private readonly winter = new WinterSounds(this.engine);
   private winterPlaces: WinterPlaces = { houses: [] };
   private readonly timer: number;
-  private stepDistance = 0;
 
   constructor(
     private readonly zones: SoundZones,
@@ -61,16 +55,6 @@ export class Soundscape {
 
   setVolumes(volumes: Volumes): void {
     this.engine.setVolumes(volumes);
-  }
-
-  /** Пешеход прошёл distance метров — пора ли «шагнуть». */
-  walked(distance: number, running: boolean, point: Vec2): void {
-    this.stepDistance += distance;
-    const stride = running ? STRIDE.run : STRIDE.walk;
-    if (this.stepDistance < stride) return;
-    this.stepDistance %= stride;
-    if (this.winter.isActive) this.winter.footstep(running);
-    else this.ambience.footstep(this.zones.surfaceAt(point), running);
   }
 
   /** Машина: мотор и шины (undefined — заглушить). Зимой шины — по снегу. */

@@ -49,7 +49,7 @@ export function InfoPanel() {
     <aside className={`panel info-panel${collapsed ? ' info-panel-collapsed' : ''}`}>
       <header>
         <div className="brand">
-          AI UFA <span className="badge">прототип</span>
+          Bash Yort <span className="badge">редактор</span>
           <button
             type="button"
             className="collapse-button"

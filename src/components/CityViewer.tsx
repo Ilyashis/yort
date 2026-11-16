@@ -1024,12 +1024,11 @@ export function CityViewer({ territory }: { territory: Territory }) {
       soundscape.setVolumes(useAppStore.getState().volumes);
       owned.push(soundscape);
 
-      // Прогулка: столкновения со зданиями и памятниками, названия улиц, шаги.
+      // Прогулка: столкновения со зданиями и памятниками, названия улиц.
       const streetIndex = new StreetIndex(environment.ground, frame);
       const walk = new WalkController(c, frame, collider, streetIndex, localHeight, {
         onExit: () => store.setMode('explore'),
         onStreet: (street) => store.setWalkStreet(street),
-        onMove: (distance, running, position) => soundscape.walked(distance, running, position),
         onMouseLock: (locked) => store.setWalkMouseLocked(locked),
       });
       owned.push(walk);

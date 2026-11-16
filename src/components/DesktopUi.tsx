@@ -91,7 +91,7 @@ function HudButton({
 const VOLUME_ROWS: { key: keyof Volumes; label: string }[] = [
   { key: 'master', label: 'Общая громкость' },
   { key: 'ambience', label: 'Птицы и речка' },
-  { key: 'sfx', label: 'Шаги и щелчки' },
+  { key: 'sfx', label: 'Машина и щелчки' },
 ];
 
 function OnOff({ label, on, onChange, disabled }: { label: string; on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
@@ -550,7 +550,7 @@ export function DesktopUi() {
                   <ChevronDown />
                 </label>
               )}
-              <span className="d-brand">AI UFA</span>
+              <span className="d-brand">Bash Yort</span>
             </div>
           )}
           <div className="d-top-right">

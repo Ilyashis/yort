@@ -183,7 +183,7 @@ function overview(): void {
 const panel = document.createElement('aside');
 panel.className = 'panel houses-panel';
 panel.innerHTML = `
-  <div class="houses-brand">AI UFA · мастерская</div>
+  <div class="houses-brand">Bash Yort · мастерская</div>
   <h1>Башкирская деревня</h1>
   <p class="muted">Модели для деревни: жилые дома, школа, музей, клуб, контора, пожарная часть, больница, магазины, остановка, колодец, гараж.
   Мышь — вращать, колесо — ближе, ← → — соседнее здание. В редакторе их ставят вместо домов OSM или новыми.</p>

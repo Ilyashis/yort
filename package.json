@@ -2,7 +2,7 @@
   "name": "citia",
   "private": true,
   "version": "0.1.0",
-  "description": "AI UFA — прототип цифровой копии Уфы (three.js + OSM)",
+  "description": "Bash Yort — цифровая копия башкирской деревни (three.js + OSM)",
   "type": "module",
   "scripts": {
     "dev": "vite",
