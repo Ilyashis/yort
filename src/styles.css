@@ -2442,7 +2442,7 @@ input[type='checkbox'] {
 }
 
 /* Карточка дома на телефоне — над переключателем режимов. */
-.app:has(.m-ui) .building-card {
+.app:has(.m-ui:not(.d-ui)) .building-card {
   top: auto;
   left: 12px;
   right: 12px;
@@ -2452,7 +2452,7 @@ input[type='checkbox'] {
 }
 
 /* Атрибуция — одной строкой у самого низа, под кнопками. */
-.app:has(.m-ui) .city-credits {
+.app:has(.m-ui:not(.d-ui)) .city-credits {
   left: 8px;
   right: 8px;
   bottom: 1px;
@@ -3264,4 +3264,12 @@ input[type='checkbox'] {
   .intro-smoke {
     animation: none;
   }
+}
+
+/* Справка редактора — левее кнопок справа и над режимами, с прокруткой. */
+.app:has(.d-ui) .help-panel {
+  right: 92px;
+  bottom: 84px;
+  max-height: calc(100% - 180px);
+  overflow-y: auto;
 }
